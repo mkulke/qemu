@@ -48,6 +48,7 @@ tests = {
   'test-qapi-util': [],
   'test-interval-tree': [],
   'test-fifo': [],
+  'test-mshv-mem': ['../../accel/mshv/mem-util.c'],
 }
 
 if have_system or have_tools

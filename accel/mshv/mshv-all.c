@@ -1,7 +1,11 @@
+#include "hw/hyperv/linux-mshv.h"
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
 #include "qemu/module.h"
+
+#include "hw/hyperv/hvhdk.h"
+#include "hw/hyperv/linux-mshv.h"
 
 #include "exec/address-spaces.h"
 #include "hw/i386/x86.h"
@@ -13,6 +17,8 @@
 #include "sysemu/mshv.h"
 #include "sysemu/reset.h" //register reset
 #include "trace.h"
+#include <stdint.h>
+#include <sys/ioctl.h>
 
 #define TYPE_MSHV_ACCEL ACCEL_CLASS_NAME("mshv")
 
@@ -21,6 +27,33 @@ DECLARE_INSTANCE_CHECKER(MshvState, MSHV_STATE, TYPE_MSHV_ACCEL)
 bool mshv_allowed;
 
 MshvState *mshv_state;
+
+static GHashTable *vm_db;
+static QemuMutex vm_db_mutex;
+
+// return /dev/mshv fd
+int init_vm_db_mgns(void) {
+	trace_mgns_init_vm_db();
+
+    vm_db = g_hash_table_new(g_direct_hash, g_direct_equal);
+    qemu_mutex_init(&vm_db_mutex);
+
+    // Open /dev/mshv device (hypervisor initialization)
+    int mshv_fd = open("/dev/mshv", O_RDWR | O_CLOEXEC);
+    if (mshv_fd < 0) {
+        perror("[mshv] Failed to open /dev/mshv");
+        return -errno;
+    }
+	return mshv_fd;
+}
+
+void update_vm_db_mgns(int vm_fd, MshvVmMgns *vm) {
+	trace_mgns_update_vm_db(vm_fd);
+
+	qemu_mutex_lock(&vm_db_mutex);
+	g_hash_table_insert(vm_db, GINT_TO_POINTER(vm_fd), vm);
+	qemu_mutex_unlock(&vm_db_mutex);
+}
 
 static int do_mshv_set_memory(const MshvMemoryRegion *mshv_mr, bool add)
 {
@@ -231,10 +264,24 @@ static int mshv_init(MachineState *ms)
     mshv_new();
     s->vm = 0;
 
+	int mshv_fd = init_vm_db_mgns();
+
     // TODO: object_property_find(OBJECT(current_machine), "mshv-type")
     vm_type = 0;
     do {
-        s->vm = mshv_create_vm_with_type(vm_type);
+		// this creates an internal entry in the VM_DB hash table as a side
+		// effect, we can make the fn return the PerVMInfo struct instead and
+		// store it ourselves
+		int vm_fd = create_vm_with_type_mgns(vm_type, mshv_fd);
+		mgns_create_half_initialized_vm(vm_fd, mshv_fd);
+		s->vm = vm_fd;
+        /* s->vm = mshv_create_vm_with_type(vm_type); */
+
+        /* int ret = create_vm_with_type_mgns(vm_type); */
+		/* if (ret < 0) { */
+			/* return ret; */
+		/* } */
+
     } while (!s->vm);
 
     mshv_vm_resume(s->vm);
@@ -254,6 +301,7 @@ static int mshv_init(MachineState *ms)
     mshv_memory_listener_register(s, &s->memory_listener, &address_space_memory,
                                   0, "mshv-memory");
     memory_listener_register(&mshv_io_listener, &address_space_io);
+
     return 0;
 }
 
@@ -361,6 +409,198 @@ static int mshv_init_vcpu(CPUState *cpu)
     cpu->vcpu_dirty = false;
 
     return 0;
+}
+
+const struct mshv_create_partition *create_partition_args_mgns(void) {
+	struct mshv_create_partition *args;
+
+	args = g_new0(struct mshv_create_partition, 1);
+	if (!args) {
+		perror("[mshv] Failed to allocate memory for partition args");
+		return NULL;
+	}
+
+
+	// Initialize pt_flags with the desired features
+	uint64_t pt_flags = (1ULL << MSHV_PT_BIT_LAPIC) |
+						(1ULL << MSHV_PT_BIT_X2APIC) |
+						(1ULL << MSHV_PT_BIT_GPA_SUPER_PAGES);
+
+	// Set default isolation type
+	uint64_t pt_isolation = MSHV_PT_ISOLATION_NONE;
+
+	args->pt_flags = pt_flags;
+	args->pt_isolation = pt_isolation;
+
+	return args;
+}
+
+int hvcall_set_partition_property_mgns(int mshv_fd, const struct mshv_root_hvcall *args) {
+	int ret = 0;
+
+	// print all fields of args
+	printf("args->code: %d\n", args->code);
+	printf("args->in_sz: %d\n", args->in_sz);
+	printf("args->in_ptr: %llu\n", args->in_ptr);
+	
+	ret = hvcall_mgns(mshv_fd, args);
+	if (ret < 0) {
+		perror("[mshv] Failed to set partition property");
+		return -errno;
+	}
+	return ret;
+}
+
+// TODO: currently only for set_partition_property
+const struct mshv_root_hvcall *create_root_hvcall_args_mgns(void) {
+	HvInputSetPartitionPropertyMgns *input;
+	input = g_new0(struct HvInputSetPartitionPropertyMgns, 1);
+	if (!input) {
+		perror("[mshv] Failed to allocate memory for root hvcall args");
+		return NULL;
+	}
+	input->property_code = HV_PARTITION_PROPERTY_SYNTHETIC_PROC_FEATURES;
+
+	union hv_partition_synthetic_processor_features features;
+    // Zero out the union to ensure all fields are initialized to 0
+    memset(&features, 0, sizeof(features));
+
+    // Access the bitfield and set the desired features
+	features.hypervisor_present = 1;
+	features.hv1 = 1;
+	features.access_partition_reference_counter = 1;
+	features.access_synic_regs = 1;
+	features.access_synthetic_timer_regs = 1;
+	features.access_partition_reference_tsc = 1;
+	features.access_frequency_regs = 1;
+	features.access_intr_ctrl_regs = 1;
+	features.access_vp_index = 1;
+	features.access_hypercall_regs = 1;
+	features.access_guest_idle_reg = 1;
+	features.tb_flush_hypercalls = 1;
+	features.synthetic_cluster_ipi = 1;
+	features.direct_synthetic_timers = 1;
+
+	input->property_value = features.as_uint64[0];
+	
+	// DEBUG
+	uint64_t payload = mgns_get_hvcall_payload();
+	uint64_t mgns = features.as_uint64[0];
+	printf("mgns hvcall payload: %lu mgns: %lu\n", payload, mgns);
+	// DEBUG
+
+	struct mshv_root_hvcall *args;
+	args = g_new0(struct mshv_root_hvcall, 1);
+	if (!args) {
+		perror("[mshv] Failed to allocate memory for root hvcall args");
+		return NULL;
+	}
+	args->code = HVCALL_SET_PARTITION_PROPERTY;
+	args->in_sz = sizeof(*input);
+	args->in_ptr = (uint64_t)input;
+
+	// print all fields of args
+	printf("mgns args->code: %d\n", args->code);
+	printf("mgns args->in_sz: %d\n", args->in_sz);
+
+	return args;
+}
+
+int hvcall_mgns(int mshv_fd, const struct mshv_root_hvcall *args) {
+	int ret = 0;
+	ret = ioctl(mshv_fd, MSHV_ROOT_HVCALL, args);
+	if (ret < 0) {
+		perror("[mshv] Failed to perform hvcall");
+		return -errno;
+	}
+	return ret;
+}
+
+int create_vm_with_args_mgns(int mshv_fd, const struct mshv_create_partition *args) {
+	int ret;
+	if (!args) {
+		perror("[mshv] Invalid partition args");
+		return -EINVAL;
+	}
+
+	ret = ioctl(mshv_fd, MSHV_CREATE_PARTITION, args);
+	if (ret < 0) {
+		perror("[mshv] Failed to create partition");
+		return -errno;
+	}
+	return ret;
+}
+
+int initialize_vm_mgns(int vm_fd) {
+	int ret = ioctl(vm_fd, MSHV_INITIALIZE_PARTITION);
+	if (ret < 0) {
+		perror("[mshv] Failed to initialize partition");
+		return -errno;
+	}
+	return 0;
+}
+
+int create_vm_with_type_mgns(uint64_t vm_type, int mshv_fd) {
+    MshvVmMgns *vm;
+	int vm_fd;
+
+	// return error if vm_type is not 0
+	if (vm_type != 0) {
+		perror("[mgns] Invalid VM type");
+		return -EINVAL;
+	}
+
+    // Allocate and initialize MshvVm structure
+	vm = g_new0(MshvVmMgns, 1);
+    if (!vm) {
+        perror("[mgns] Failed to allocate memory for VM");
+        close(mshv_fd);
+        return -ENOMEM;
+    }
+    vm->fd = mshv_fd;
+    vm->vm_type = vm_type;
+
+	// Create partition
+	const struct mshv_create_partition *partition_args = create_partition_args_mgns();
+	if (!partition_args) {
+		perror("[mgns] Failed to create partition args");
+		close(mshv_fd);
+		return -errno;
+	}
+
+	int ret = create_vm_with_args_mgns(mshv_fd, partition_args);
+	if (ret < 0) {
+		perror("[mgns] Failed to create VM");
+		close(mshv_fd);
+		return -errno;
+	}
+	g_free((void*) partition_args);
+	vm_fd = ret;
+
+	printf("[mgns] Partition created w/ fd %d\n", vm_fd);
+
+	const struct mshv_root_hvcall *property_args = create_root_hvcall_args_mgns();
+	ret = hvcall_set_partition_property_mgns(vm_fd, property_args);
+	if (ret < 0) {
+		perror("[mgns] Failed to set partition properties");
+		return -errno;
+	}
+	g_free((void*) partition_args);
+
+	printf("[mgns] Partition properties set for fd %d\n", vm_fd);
+
+	ret = initialize_vm_mgns(vm_fd);
+	if (ret < 0) {
+		perror("[mshv] Failed to initialize partition");
+		return -errno;
+	}
+
+	printf("[mgns] Partition half-initialized for fd %d\n", vm_fd);
+
+    // Store VM in a global hash table (similar to VM_DB in Rust)
+	update_vm_db_mgns(vm_fd, vm);
+
+    return vm_fd;
 }
 
 static int mshv_destroy_vcpu(CPUState *cpu)

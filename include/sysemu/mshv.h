@@ -2,7 +2,10 @@
 #define QEMU_MSHV_INT_H
 
 #include "exec/memory.h"
+#include "hw/hyperv/hv-balloon.h"
 #include "hw/hyperv/hyperv-proto.h"
+#include "hw/hyperv/linux-mshv.h"
+#include "hw/hyperv/hvhdk.h"
 #include "qapi/qapi-types-common.h"
 #include "qemu/accel.h"
 #include "qemu/log.h"
@@ -67,11 +70,37 @@ struct AccelCPUState {
   int cpufd;
 };
 
+typedef struct MshvVcpuMgns {
+    int fd;                     		// vCPU file descriptor
+    uint8_t vp_index;           		// Virtual processor index
+
+    struct CpuIdEntry *cpuid;   		// CPUID entries, dynamically allocated must be freed by caller
+    size_t cpuid_count;
+
+    struct MsrEntry *msrs;      		// MSR entries, dynamically allocated must be freed by caller
+    size_t msr_count;
+
+    const struct MshvOps *mshv_ops;  	// Pointer to VM operations callbacks
+    int vm_fd;                  		// VM file descriptor
+} MshvVcpuMgns;
+
+typedef struct MshvVmMgns {
+    int fd;                     // VM file descriptor
+    uint64_t vm_type;           // Type of VM: 0 (normal), 1 (SNP)
+    // Add more fields as needed for future functionality
+} MshvVmMgns;
+
+typedef struct MshvCreatePartitionArgsMgns {
+	uint64_t pt_flags;
+	uint64_t pt_isolation;
+} MshvCreatePartitionArgsMgns;
+
 #define mshv_vcpufd(cpu) (cpu->accel->cpufd)
 
 int mshv_arch_put_registers(MshvState *s, CPUState *cpu);
 
 int mshv_arch_get_registers(MshvState *s, CPUState *cpu);
+
 
 #else //! CONFIG_MSHV_IS_POSSIBLE
 #define mshv_enabled() false
@@ -82,6 +111,45 @@ int mshv_arch_get_registers(MshvState *s, CPUState *cpu);
 #define mshv_msi_via_irqfd_enabled() false
 #endif
 
+enum hv_partition_property_code_mgns {
+	/* Privilege properties */
+    HV_PARTITION_PROPERTY_PRIVILEGE_FLAGS				= 0x00010000,
+    HV_PARTITION_PROPERTY_SYNTHETIC_PROC_FEATURES		= 0x00010001,
+    HV_PARTITION_PROPERTY_TIME_FREEZE				    = 0x00030003,
+    HV_PARTITION_PROPERTY_UNIMPLEMENTED_MSR_ACTION		= 0x00050017,
+};
+
+enum hv_unimplemented_msr_action_mgns {
+	HV_UNIMPLEMENTED_MSR_ACTION_FAULT = 0,
+	HV_UNIMPLEMENTED_MSR_ACTION_IGNORE_WRITE_READ_ZERO = 1,
+	HV_UNIMPLEMENTED_MSR_ACTION_COUNT = 2,
+};
+
+
+/* Declare the various hypercall operations. */
+/* HV_CALL_CODE */
+#define HVCALL_GET_PARTITION_PROPERTY		0x0044
+#define HVCALL_SET_PARTITION_PROPERTY		0x0045
+
+typedef struct HvInputSetPartitionPropertyMgns {
+	uint64_t partition_id;
+	uint32_t property_code;
+	uint32_t padding;
+	uint64_t property_value;
+} HvInputSetPartitionPropertyMgns;
+
+int init_vm_db_mgns(void);
+void update_vm_db_mgns(int vm_fd, MshvVmMgns *vm);
+int create_vm_with_type_mgns(uint64_t vm_type, int mshv_fd);
+const struct mshv_create_partition *create_partition_args_mgns(void);
+int create_vm_with_args_mgns(int mshv_fd, const struct mshv_create_partition *args);
+const struct mshv_root_hvcall *create_synthetic_proc_features_args_mgns(void);
+const struct mshv_root_hvcall *create_unimplemented_msr_action_args_mgns(void);
+const struct mshv_root_hvcall *create_time_freeze_args_mgns(void);
+int hvcall_set_partition_property_mgns(int mshv_fd, const struct mshv_root_hvcall *args);
+int hvcall_mgns(int mshv_fd, const struct mshv_root_hvcall *args);
+int initialize_vm_mgns(int vm_fd);
+
 int mshv_irqchip_add_msi_route(int vector, PCIDevice *dev);
 int mshv_irqchip_update_msi_route(int virq, MSIMessage msg, PCIDevice *dev);
 void mshv_irqchip_commit_routes(void);
@@ -89,5 +157,75 @@ void mshv_irqchip_release_virq(int virq);
 int mshv_irqchip_add_irqfd_notifier_gsi(EventNotifier *n, EventNotifier *rn,
                                         int virq);
 int mshv_irqchip_remove_irqfd_notifier_gsi(EventNotifier *n, int virq);
+
+/* taken from github.com/rust-vmm/mshv-ioctls/src/ioctls/system.rs */
+static const uint32_t mgns_msr_list[] = {
+    IA32_MSR_TSC,
+    IA32_MSR_EFER,
+    IA32_MSR_KERNEL_GS_BASE,
+    IA32_MSR_APIC_BASE,
+    IA32_MSR_PAT,
+    IA32_MSR_SYSENTER_CS,
+    IA32_MSR_SYSENTER_ESP,
+    IA32_MSR_SYSENTER_EIP,
+    IA32_MSR_STAR,
+    IA32_MSR_LSTAR,
+    IA32_MSR_CSTAR,
+    IA32_MSR_SFMASK,
+    IA32_MSR_MTRR_DEF_TYPE,
+    IA32_MSR_MTRR_PHYSBASE0,
+    IA32_MSR_MTRR_PHYSMASK0,
+    IA32_MSR_MTRR_PHYSBASE1,
+    IA32_MSR_MTRR_PHYSMASK1,
+    IA32_MSR_MTRR_PHYSBASE2,
+    IA32_MSR_MTRR_PHYSMASK2,
+    IA32_MSR_MTRR_PHYSBASE3,
+    IA32_MSR_MTRR_PHYSMASK3,
+    IA32_MSR_MTRR_PHYSBASE4,
+    IA32_MSR_MTRR_PHYSMASK4,
+    IA32_MSR_MTRR_PHYSBASE5,
+    IA32_MSR_MTRR_PHYSMASK5,
+    IA32_MSR_MTRR_PHYSBASE6,
+    IA32_MSR_MTRR_PHYSMASK6,
+    IA32_MSR_MTRR_PHYSBASE7,
+    IA32_MSR_MTRR_PHYSMASK7,
+    IA32_MSR_MTRR_FIX64K_00000,
+    IA32_MSR_MTRR_FIX16K_80000,
+    IA32_MSR_MTRR_FIX16K_A0000,
+    IA32_MSR_MTRR_FIX4K_C0000,
+    IA32_MSR_MTRR_FIX4K_C8000,
+    IA32_MSR_MTRR_FIX4K_D0000,
+    IA32_MSR_MTRR_FIX4K_D8000,
+    IA32_MSR_MTRR_FIX4K_E0000,
+    IA32_MSR_MTRR_FIX4K_E8000,
+    IA32_MSR_MTRR_FIX4K_F0000,
+    IA32_MSR_MTRR_FIX4K_F8000,
+    IA32_MSR_TSC_AUX,
+    IA32_MSR_DEBUG_CTL,
+	HV_X64_MSR_GUEST_OS_ID,
+	HV_X64_MSR_SINT0,
+	HV_X64_MSR_SINT1,
+	HV_X64_MSR_SINT2,
+	HV_X64_MSR_SINT3,
+	HV_X64_MSR_SINT4,
+	HV_X64_MSR_SINT5,
+	HV_X64_MSR_SINT6,
+	HV_X64_MSR_SINT7,
+	HV_X64_MSR_SINT8,
+	HV_X64_MSR_SINT9,
+	HV_X64_MSR_SINT10,
+	HV_X64_MSR_SINT11,
+	HV_X64_MSR_SINT12,
+	HV_X64_MSR_SINT13,
+	HV_X64_MSR_SINT14,
+	HV_X64_MSR_SINT15,
+	HV_X64_MSR_SCONTROL,
+	HV_X64_MSR_SIEFP,
+	HV_X64_MSR_SIMP,
+	HV_X64_MSR_REFERENCE_TSC,
+	HV_X64_MSR_EOM,
+};
+
+#define mgns_MSR_LIST_SIZE (sizeof(mgns_msr_list) / sizeof(mgns_msr_list[0]))
 
 #endif

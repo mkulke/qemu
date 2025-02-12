@@ -8,3 +8,7 @@ mshv_mem_ioeventfd_add(uint64_t addr, uint32_t size, uint32_t data) "addr %lx si
 mshv_mem_ioeventfd_del(uint64_t addr, uint32_t size, uint32_t data) "addr %lx size %d data %x"
 mshv_shutdown(uint32_t cpu) "cpu %d"
 
+# mgns
+mgns_init_vm_db(void) "init vm db"
+mgns_update_vm_db(int fd) "update vm db entry for fd %d"
+mgns_hvcall_args(const char* hvcall, uint16_t code, uint16_t in_sz) "built args for '%s' code: %d in_sz: %d"

@@ -334,3 +334,7 @@ endif
 
 print-%:
 	@echo '$*=$($*)'
+
+scp: all
+	scp qemu-system-x86_64 cloud@172.22.0.5:/opt/qemu-mshv/bin/qemu-system-x86_64-mgns
+	scp ~/dev/mshv-c/local/lib/libmshv.so cloud@172.22.0.5:lib/libmshv.so

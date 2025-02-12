@@ -273,7 +273,7 @@ static int mshv_init(MachineState *ms)
 		// effect, we can make the fn return the PerVMInfo struct instead and
 		// store it ourselves
 		int vm_fd = create_vm_with_type_mgns(vm_type, mshv_fd);
-		mgns_create_half_initialized_vm(vm_fd, mshv_fd);
+		mgns_create_mshvc_vm(vm_fd, mgns_msr_list, mgns_MSR_LIST_SIZE);
 		s->vm = vm_fd;
         /* s->vm = mshv_create_vm_with_type(vm_type); */
 
@@ -451,8 +451,56 @@ int hvcall_set_partition_property_mgns(int mshv_fd, const struct mshv_root_hvcal
 	return ret;
 }
 
-// TODO: currently only for set_partition_property
-const struct mshv_root_hvcall *create_root_hvcall_args_mgns(void) {
+const struct mshv_root_hvcall *create_unimplemented_msr_action_args_mgns(void) {
+	HvInputSetPartitionPropertyMgns *input;
+	input = g_new0(struct HvInputSetPartitionPropertyMgns, 1);
+	if (!input) {
+		perror("[mshv] Failed to allocate memory for root hvcall args");
+		return NULL;
+	}
+	input->property_code = HV_PARTITION_PROPERTY_UNIMPLEMENTED_MSR_ACTION;
+	input->property_value = HV_UNIMPLEMENTED_MSR_ACTION_IGNORE_WRITE_READ_ZERO;
+
+	struct mshv_root_hvcall *args;
+	args = g_new0(struct mshv_root_hvcall, 1);
+	if (!args) {
+		perror("[mshv] Failed to allocate memory for root hvcall args");
+		return NULL;
+	}
+	args->code = HVCALL_SET_PARTITION_PROPERTY;
+	args->in_sz = sizeof(*input);
+	args->in_ptr = (uint64_t)input;
+
+    trace_mgns_hvcall_args("unimplemented_msr_action", args->code, args->in_sz);
+	return args;
+}
+
+const struct mshv_root_hvcall *create_time_freeze_args_mgns(void) {
+	HvInputSetPartitionPropertyMgns *input;
+	input = g_new0(struct HvInputSetPartitionPropertyMgns, 1);
+	if (!input) {
+		perror("[mshv] Failed to allocate memory for root hvcall args");
+		return NULL;
+	}
+	input->property_code = HV_PARTITION_PROPERTY_TIME_FREEZE;
+	input->property_value = 0;
+
+	struct mshv_root_hvcall *args;
+	args = g_new0(struct mshv_root_hvcall, 1);
+	if (!args) {
+		perror("[mshv] Failed to allocate memory for root hvcall args");
+		return NULL;
+	}
+	args->code = HVCALL_SET_PARTITION_PROPERTY;
+	args->in_sz = sizeof(*input);
+	args->in_ptr = (uint64_t)input;
+
+    trace_mgns_hvcall_args("time_freeze", args->code, args->in_sz);
+
+	return args;
+}
+
+const struct mshv_root_hvcall *create_synthetic_proc_features_args_mgns(void) {
 	HvInputSetPartitionPropertyMgns *input;
 	input = g_new0(struct HvInputSetPartitionPropertyMgns, 1);
 	if (!input) {
@@ -499,9 +547,7 @@ const struct mshv_root_hvcall *create_root_hvcall_args_mgns(void) {
 	args->in_sz = sizeof(*input);
 	args->in_ptr = (uint64_t)input;
 
-	// print all fields of args
-	printf("mgns args->code: %d\n", args->code);
-	printf("mgns args->in_sz: %d\n", args->in_sz);
+    trace_mgns_hvcall_args("synthetic_proc_features", args->code, args->in_sz);
 
 	return args;
 }
@@ -579,21 +625,46 @@ int create_vm_with_type_mgns(uint64_t vm_type, int mshv_fd) {
 
 	printf("[mgns] Partition created w/ fd %d\n", vm_fd);
 
-	const struct mshv_root_hvcall *property_args = create_root_hvcall_args_mgns();
-	ret = hvcall_set_partition_property_mgns(vm_fd, property_args);
+	const struct mshv_root_hvcall *synthetic_proc_features_args = create_synthetic_proc_features_args_mgns();
+	ret = hvcall_set_partition_property_mgns(vm_fd, synthetic_proc_features_args);
 	if (ret < 0) {
 		perror("[mgns] Failed to set partition properties");
 		return -errno;
 	}
-	g_free((void*) partition_args);
+	g_free((void*) synthetic_proc_features_args->in_ptr);
+	g_free((void*) synthetic_proc_features_args);
 
 	printf("[mgns] Partition properties set for fd %d\n", vm_fd);
 
 	ret = initialize_vm_mgns(vm_fd);
 	if (ret < 0) {
-		perror("[mshv] Failed to initialize partition");
+		perror("[mgns] Failed to initialize partition");
 		return -errno;
 	}
+
+	// Default Microsoft Hypervisor behavior for unimplemented MSR is to
+	// send a fault to the guest if it tries to access it. It is possible
+	// to override this behavior with a more suitable option i.e., ignore
+	// writes from the guest and return zero in attempt to read unimplemented
+	// MSR.
+	const struct mshv_root_hvcall *unimplemented_msr_action_args = create_unimplemented_msr_action_args_mgns();
+	ret = hvcall_set_partition_property_mgns(vm_fd, unimplemented_msr_action_args);
+	if (ret < 0) {
+		perror("[mgns] Failed to set partition properties");
+		return -errno;
+	}
+	g_free((void*) unimplemented_msr_action_args->in_ptr);
+	g_free((void*) unimplemented_msr_action_args);
+
+	// Always create a frozen partition
+	const struct mshv_root_hvcall *time_freeze_args = create_time_freeze_args_mgns();
+	ret = hvcall_set_partition_property_mgns(vm_fd, time_freeze_args);
+	if (ret < 0) {
+		perror("[mgns] Failed to set partition properties");
+		return -errno;
+	}
+	g_free((void*) time_freeze_args->in_ptr);
+	g_free((void*) time_freeze_args);
 
 	printf("[mgns] Partition half-initialized for fd %d\n", vm_fd);
 

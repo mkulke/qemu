@@ -47,7 +47,8 @@ int init_vm_db_mgns(void) {
 	return mshv_fd;
 }
 
-void update_vm_db_mgns(int vm_fd, MshvVmMgns *vm) {
+void update_vm_db_mgns(int vm_fd, MshvVmMgns *vm)
+{
 	trace_mgns_update_vm_db(vm_fd);
 
 	qemu_mutex_lock(&vm_db_mutex);
@@ -167,6 +168,84 @@ static void mshv_region_del(MemoryListener *listener,
     memory_region_unref(section->mr);
 }
 
+static inline void dump_mshv_user_ioeventfd_mgns(const struct mshv_user_ioeventfd *ioevent)
+{
+    printf("mshv_user_ioeventfd:\n");
+    printf("  fd: %d\n", ioevent->fd);
+    printf("  addr: %llu\n", ioevent->addr);
+    printf("  datamatch: %llu\n", ioevent->datamatch);
+    printf("  len: %u\n", ioevent->len);
+    printf("  flags: %u\n", ioevent->flags);
+    printf("  rsvd: %u %u %u %u\n",
+           ioevent->rsvd[0], ioevent->rsvd[1],
+           ioevent->rsvd[2], ioevent->rsvd[3]);
+}
+
+/* flags: determine whether to de/assign */
+static int ioeventfd_mgns(int vm_fd,
+						  int event_fd,
+						  uint64_t addr,
+						  DatamatchMgns dm,
+						  uint32_t flags)
+{
+	int ret = 0;
+	struct mshv_user_ioeventfd args = {0};
+	args.fd = event_fd;
+	args.addr = addr;
+	args.flags = flags;
+
+	if (dm.tag == DATAMATCH_NONE) {
+		args.datamatch = 0;
+	} else {
+		flags |= BIT(MSHV_IOEVENTFD_BIT_DATAMATCH);
+		args.flags = flags;
+		if (dm.tag == DATAMATCH_U64) {
+			args.len = sizeof(uint64_t);
+			args.datamatch = dm.value.u64;
+		} else {
+			args.len = sizeof(uint32_t);
+			args.datamatch = dm.value.u32;
+		}
+	}
+
+	/* dump_mshv_user_ioeventfd_mgns(&args); */
+
+	ret = ioctl(vm_fd, MSHV_IOEVENTFD, &args);
+	return ret;
+}
+
+int unregister_ioevent_mgns(int vm_fd,
+						    int event_fd,
+						    uint64_t mmio_addr)
+{
+	uint32_t flags = 0;
+	flags |= BIT(MSHV_IOEVENTFD_BIT_DEASSIGN);
+	DatamatchMgns dm = {0};
+	dm.tag = DATAMATCH_NONE;
+	return ioeventfd_mgns(vm_fd, event_fd, mmio_addr, dm, flags);
+}
+
+int register_ioevent_mgns(int vm_fd,
+						  int event_fd,
+						  uint64_t mmio_addr,
+						  uint64_t val,
+						  bool is_64bit,
+						  bool is_datamatch)
+{
+	uint32_t flags = 0;
+	DatamatchMgns dm = {0};
+	if (!is_datamatch) {
+		dm.tag = DATAMATCH_NONE;
+	} else if (is_64bit) {
+		dm.tag = DATAMATCH_U64;
+		dm.value.u64 = val;
+	} else {
+		dm.tag = DATAMATCH_U32;
+		dm.value.u32 = val;
+	}
+	return ioeventfd_mgns(vm_fd, event_fd, mmio_addr, dm, flags);
+}
+
 static void mshv_mem_ioeventfd_add(MemoryListener *listener,
                                    MemoryRegionSection *section,
                                    bool match_data, uint64_t data,
@@ -174,14 +253,14 @@ static void mshv_mem_ioeventfd_add(MemoryListener *listener,
 {
     int fd = event_notifier_get_fd(e);
     int r;
+	// TODO: mgns does this really matter if we 0 out the ioctl arg anyway?
     bool is_64 = int128_get64(section->size) == 8;
-    bool is_mmio = true;
+	uint64_t addr = section->offset_within_address_space & 0xffffffff;
 
     trace_mshv_mem_ioeventfd_add(section->offset_within_address_space,
                                  int128_get64(section->size), data);
-    r = mshv_register_ioevent(mshv_state->vm, fd, is_mmio,
-                              section->offset_within_address_space & 0xffffffff,
-                              data, is_64, match_data);
+	r = register_ioevent_mgns(mshv_state->vm, fd, addr, data, is_64,
+				              match_data);
 
     if (r < 0) {
         mshv_err("%s: error adding ioeventfd: %s (%d)\n", __func__,
@@ -200,10 +279,8 @@ static void mshv_mem_ioeventfd_del(MemoryListener *listener,
 
     trace_mshv_mem_ioeventfd_del(section->offset_within_address_space,
                                  int128_get64(section->size), data);
-    r = mshv_unregister_ioevent(mshv_state->vm, fd, true,
-                                section->offset_within_address_space &
-                                    0xffffffff);
-
+	uint64_t addr = section->offset_within_address_space & 0xffffffff;
+    r = unregister_ioevent_mgns(mshv_state->vm, fd, addr);
     if (r < 0) {
         mshv_err("%s: error adding ioeventfd: %s (%d)\n", __func__,
                  strerror(-r), -r);
@@ -275,16 +352,9 @@ static int mshv_init(MachineState *ms)
 		int vm_fd = create_vm_with_type_mgns(vm_type, mshv_fd);
 		mgns_create_mshvc_vm(vm_fd, mgns_msr_list, mgns_MSR_LIST_SIZE);
 		s->vm = vm_fd;
-        /* s->vm = mshv_create_vm_with_type(vm_type); */
-
-        /* int ret = create_vm_with_type_mgns(vm_type); */
-		/* if (ret < 0) { */
-			/* return ret; */
-		/* } */
-
     } while (!s->vm);
 
-    mshv_vm_resume(s->vm);
+	resume_vm_mgns(s->vm);
 
     // MAX number of address spaces:
     // address_space_memory
@@ -451,6 +521,8 @@ int hvcall_set_partition_property_mgns(int mshv_fd, const struct mshv_root_hvcal
 	return ret;
 }
 
+/* const struct mshv_root */
+
 const struct mshv_root_hvcall *create_unimplemented_msr_action_args_mgns(void) {
 	HvInputSetPartitionPropertyMgns *input;
 	input = g_new0(struct HvInputSetPartitionPropertyMgns, 1);
@@ -475,7 +547,13 @@ const struct mshv_root_hvcall *create_unimplemented_msr_action_args_mgns(void) {
 	return args;
 }
 
-const struct mshv_root_hvcall *create_time_freeze_args_mgns(void) {
+/* freeze 1 to pause, 0 to resume */
+const struct mshv_root_hvcall *create_time_freeze_args_mgns(uint8_t freeze) {
+	if (freeze != 0 && freeze != 1) {
+		perror("[mshv] Invalid time freeze value");
+		return NULL;
+	}
+
 	HvInputSetPartitionPropertyMgns *input;
 	input = g_new0(struct HvInputSetPartitionPropertyMgns, 1);
 	if (!input) {
@@ -483,7 +561,7 @@ const struct mshv_root_hvcall *create_time_freeze_args_mgns(void) {
 		return NULL;
 	}
 	input->property_code = HV_PARTITION_PROPERTY_TIME_FREEZE;
-	input->property_value = 0;
+	input->property_value = freeze;
 
 	struct mshv_root_hvcall *args;
 	args = g_new0(struct mshv_root_hvcall, 1);
@@ -634,7 +712,13 @@ int create_vm_with_type_mgns(uint64_t vm_type, int mshv_fd) {
 	g_free((void*) synthetic_proc_features_args->in_ptr);
 	g_free((void*) synthetic_proc_features_args);
 
-	printf("[mgns] Partition properties set for fd %d\n", vm_fd);
+	/* ret = set_synthetic_proc_features_mgns(vm_fd); */
+	/* if (ret < 0) { */
+	/* 	perror("[mgns] Failed to set synthetic proc features"); */
+	/* 	return -errno; */
+	/* } */
+
+	printf("[mgns] Synthetic proc features set for fd %d\n", vm_fd);
 
 	ret = initialize_vm_mgns(vm_fd);
 	if (ret < 0) {
@@ -657,14 +741,7 @@ int create_vm_with_type_mgns(uint64_t vm_type, int mshv_fd) {
 	g_free((void*) unimplemented_msr_action_args);
 
 	// Always create a frozen partition
-	const struct mshv_root_hvcall *time_freeze_args = create_time_freeze_args_mgns();
-	ret = hvcall_set_partition_property_mgns(vm_fd, time_freeze_args);
-	if (ret < 0) {
-		perror("[mgns] Failed to set partition properties");
-		return -errno;
-	}
-	g_free((void*) time_freeze_args->in_ptr);
-	g_free((void*) time_freeze_args);
+	pause_vm_mgns(vm_fd);
 
 	printf("[mgns] Partition half-initialized for fd %d\n", vm_fd);
 
@@ -672,6 +749,77 @@ int create_vm_with_type_mgns(uint64_t vm_type, int mshv_fd) {
 	update_vm_db_mgns(vm_fd, vm);
 
     return vm_fd;
+}
+
+int set_synthetic_proc_features_mgns(int vm_fd) {
+	int ret;
+	const struct mshv_root_hvcall *args = create_synthetic_proc_features_args_mgns();
+	ret = hvcall_set_partition_property_mgns(vm_fd, args);
+	if (!args) {
+		perror("[mgns] Failed to create synthetic proc features args");
+		ret = -errno;
+		goto cleanup;
+	}
+	if (ret < 0) {
+		perror("[mgns] Failed to set partition properties");
+		return -errno;
+	}
+	ret = 0;
+
+cleanup:
+	if (args) {
+		g_free((void*) args->in_ptr);
+		g_free((void*) args);
+	}
+	return ret;
+}
+
+int pause_vm_mgns(int vm_fd) {
+	int ret;
+	const struct mshv_root_hvcall *args = create_time_freeze_args_mgns(1);
+	if (!args) {
+		perror("[mgns] Failed to create time freeze args");
+		ret = -errno;
+		goto cleanup;
+	}
+	ret = hvcall_set_partition_property_mgns(vm_fd, args);
+	if (ret < 0) {
+		perror("[mgns] Failed to pause partition");
+		ret = -errno;
+		goto cleanup;
+	}
+	ret = 0;
+
+cleanup:
+	if (args) {
+		g_free((void*) args->in_ptr);
+		g_free((void*) args);
+	}
+	return ret;
+}
+
+int resume_vm_mgns(int vm_fd) {
+	int ret;
+	const struct mshv_root_hvcall *args = create_time_freeze_args_mgns(0);
+	if (!args) {
+		perror("[mgns] Failed to create time freeze args");
+		ret = -errno;
+		goto cleanup;
+	}
+	ret = hvcall_set_partition_property_mgns(vm_fd, args);
+	if (ret < 0) {
+		perror("[mgns] Failed to resume partition");
+		ret = -errno;
+		goto cleanup;
+	}
+	ret = 0;
+
+cleanup:
+	if (args) {
+		g_free((void*) args->in_ptr);
+		g_free((void*) args);
+	}
+	return ret;
 }
 
 static int mshv_destroy_vcpu(CPUState *cpu)

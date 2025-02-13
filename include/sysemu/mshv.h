@@ -138,6 +138,20 @@ typedef struct HvInputSetPartitionPropertyMgns {
 	uint64_t property_value;
 } HvInputSetPartitionPropertyMgns;
 
+typedef enum {
+    DATAMATCH_NONE,
+    DATAMATCH_U32,
+    DATAMATCH_U64,
+} DatamatchTagMgns;
+
+typedef struct {
+    DatamatchTagMgns tag;
+    union {
+        uint32_t u32;
+        uint64_t u64;
+    } value;
+} DatamatchMgns;
+
 int init_vm_db_mgns(void);
 void update_vm_db_mgns(int vm_fd, MshvVmMgns *vm);
 int create_vm_with_type_mgns(uint64_t vm_type, int mshv_fd);
@@ -145,10 +159,15 @@ const struct mshv_create_partition *create_partition_args_mgns(void);
 int create_vm_with_args_mgns(int mshv_fd, const struct mshv_create_partition *args);
 const struct mshv_root_hvcall *create_synthetic_proc_features_args_mgns(void);
 const struct mshv_root_hvcall *create_unimplemented_msr_action_args_mgns(void);
-const struct mshv_root_hvcall *create_time_freeze_args_mgns(void);
+const struct mshv_root_hvcall *create_time_freeze_args_mgns(uint8_t freeze);
 int hvcall_set_partition_property_mgns(int mshv_fd, const struct mshv_root_hvcall *args);
 int hvcall_mgns(int mshv_fd, const struct mshv_root_hvcall *args);
 int initialize_vm_mgns(int vm_fd);
+int pause_vm_mgns(int vm_fd);
+int resume_vm_mgns(int vm_fd);
+int set_synthetic_proc_features_mgns(int vm_fd);
+int register_ioevent_mgns(int vm_fd, int event_fd, uint64_t mmio_addr, uint64_t val, bool is_64bit, bool is_datamatch);
+int unregister_ioevent_mgns(int vm_fd, int event_fd, uint64_t mmio_addr);
 
 int mshv_irqchip_add_msi_route(int vector, PCIDevice *dev);
 int mshv_irqchip_update_msi_route(int virq, MSIMessage msg, PCIDevice *dev);

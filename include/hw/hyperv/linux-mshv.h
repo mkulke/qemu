@@ -35,6 +35,23 @@ enum {
 	MSHV_PT_ISOLATION_COUNT,
 };
 
+enum {
+	MSHV_IOEVENTFD_BIT_DATAMATCH,
+	MSHV_IOEVENTFD_BIT_PIO,
+	MSHV_IOEVENTFD_BIT_DEASSIGN,
+	MSHV_IOEVENTFD_BIT_COUNT,
+};
+#define MSHV_IOEVENTFD_FLAGS_MASK	((1 << MSHV_IOEVENTFD_BIT_COUNT) - 1)
+
+struct mshv_user_ioeventfd {
+	__u64 datamatch;
+	__u64 addr;	   /* legal pio/mmio address */
+	__u32 len;	   /* 1, 2, 4, or 8 bytes    */
+	__s32 fd;
+	__u32 flags;
+	__u8  rsvd[4];
+};
+
 /**
  * struct mshv_create_partition - arguments for MSHV_CREATE_PARTITION
  * @pt_flags: Bitmask of 1 << MSHV_PT_BIT_*
@@ -56,6 +73,7 @@ struct mshv_create_partition {
 
 /* Partition fds created with MSHV_CREATE_PARTITION */
 #define MSHV_INITIALIZE_PARTITION	_IO(MSHV_IOCTL, 0x00)
+#define MSHV_IOEVENTFD			    _IOW(MSHV_IOCTL, 0x04, struct mshv_user_ioeventfd)
 
 /**
  * struct mshv_root_hvcall - arguments for MSHV_ROOT_HVCALL

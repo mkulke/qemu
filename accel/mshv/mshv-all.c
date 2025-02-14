@@ -253,17 +253,22 @@ static void mshv_mem_ioeventfd_add(MemoryListener *listener,
 {
     int fd = event_notifier_get_fd(e);
     int r;
-	// TODO: mgns does this really matter if we 0 out the ioctl arg anyway?
+	/* TODO: mgns does this really matter if we 0 out the ioctl 
+	 * arg anyway?
+	 */
     bool is_64 = int128_get64(section->size) == 8;
-	uint64_t addr = section->offset_within_address_space & 0xffffffff;
+	uint64_t addr = section->offset_within_address_space
+							 & 0xffffffff;
 
-    trace_mshv_mem_ioeventfd_add(section->offset_within_address_space,
-                                 int128_get64(section->size), data);
-	r = register_ioevent_mgns(mshv_state->vm, fd, addr, data, is_64,
-				              match_data);
+    trace_mshv_mem_ioeventfd_add(addr,
+                                 int128_get64(section->size),
+								 data);
+	r = register_ioevent_mgns(mshv_state->vm, fd, addr, data,
+							  is_64, match_data);
 
     if (r < 0) {
-        mshv_err("%s: error adding ioeventfd: %s (%d)\n", __func__,
+        mshv_err("%s: error adding ioeventfd: %s (%d)\n",
+				 __func__,
                  strerror(-r), -r);
         abort();
     }
@@ -703,20 +708,11 @@ int create_vm_with_type_mgns(uint64_t vm_type, int mshv_fd) {
 
 	printf("[mgns] Partition created w/ fd %d\n", vm_fd);
 
-	const struct mshv_root_hvcall *synthetic_proc_features_args = create_synthetic_proc_features_args_mgns();
-	ret = hvcall_set_partition_property_mgns(vm_fd, synthetic_proc_features_args);
+	ret = set_synthetic_proc_features_mgns(vm_fd);
 	if (ret < 0) {
-		perror("[mgns] Failed to set partition properties");
+		perror("[mgns] Failed to set synthetic proc features");
 		return -errno;
 	}
-	g_free((void*) synthetic_proc_features_args->in_ptr);
-	g_free((void*) synthetic_proc_features_args);
-
-	/* ret = set_synthetic_proc_features_mgns(vm_fd); */
-	/* if (ret < 0) { */
-	/* 	perror("[mgns] Failed to set synthetic proc features"); */
-	/* 	return -errno; */
-	/* } */
 
 	printf("[mgns] Synthetic proc features set for fd %d\n", vm_fd);
 

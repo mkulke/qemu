@@ -536,34 +536,33 @@ int hvcall_set_partition_property_mgns(int mshv_fd, const struct mshv_root_hvcal
 	return ret;
 }
 
-/* freeze 1 to pause, 0 to resume */
-const struct mshv_root_hvcall *create_time_freeze_args_mgns(uint8_t freeze) {
-	if (freeze != 0 && freeze != 1) {
-		perror("[mshv] Invalid time freeze value");
-		return NULL;
-	}
+/* const struct mshv_root_hvcall *create_time_freeze_args_mgns(uint8_t freeze) { */
+/* 	if (freeze != 0 && freeze != 1) { */
+/* 		perror("[mshv] Invalid time freeze value"); */
+/* 		return NULL; */
+/* 	} */
 
-	struct hv_input_set_partition_property *in;
-	in = g_new0(struct hv_input_set_partition_property, 1);
-	if (!in) {
-		perror("[mshv] Failed to allocate memory for root hvcall args");
-		return NULL;
-	}
-	in->property_code = HV_PARTITION_PROPERTY_TIME_FREEZE;
-	in->property_value = freeze;
+/* 	struct hv_input_set_partition_property *in; */
+/* 	in = g_new0(struct hv_input_set_partition_property, 1); */
+/* 	if (!in) { */
+/* 		perror("[mshv] Failed to allocate memory for root hvcall args"); */
+/* 		return NULL; */
+/* 	} */
+/* 	in->property_code = HV_PARTITION_PROPERTY_TIME_FREEZE; */
+/* 	in->property_value = freeze; */
 
-	struct mshv_root_hvcall *args;
-	args = g_new0(struct mshv_root_hvcall, 1);
-	if (!args) {
-		perror("[mshv] Failed to allocate memory for root hvcall args");
-		return NULL;
-	}
-	args->code = HVCALL_SET_PARTITION_PROPERTY;
-	args->in_sz = sizeof(*in);
-	args->in_ptr = (uint64_t)in;
+/* 	struct mshv_root_hvcall *args; */
+/* 	args = g_new0(struct mshv_root_hvcall, 1); */
+/* 	if (!args) { */
+/* 		perror("[mshv] Failed to allocate memory for root hvcall args"); */
+/* 		return NULL; */
+/* 	} */
+/* 	args->code = HVCALL_SET_PARTITION_PROPERTY; */
+/* 	args->in_sz = sizeof(*in); */
+/* 	args->in_ptr = (uint64_t)in; */
 
-	return args;
-}
+/* 	return args; */
+/* } */
 
 int hvcall_mgns(int mshv_fd, const struct mshv_root_hvcall *args) {
 	int ret = 0;
@@ -699,28 +698,31 @@ int set_synthetic_proc_features_mgns(int vm_fd) {
 	return 0;
 }
 
+/* freeze 1 to pause, 0 to resume */
 static inline int set_time_freeze_mgns(int vm_fd, int freeze) {
 	int ret;
-	const struct mshv_root_hvcall *args = create_time_freeze_args_mgns(freeze);
-	if (!args) {
-		perror("[mgns] Failed to create time freeze args");
-		ret = -errno;
-		goto cleanup;
+
+	if (freeze != 0 && freeze != 1) {
+		perror("[mshv] Invalid time freeze value");
+		return -1;
 	}
-	ret = hvcall_set_partition_property_mgns(vm_fd, args);
+
+	struct hv_input_set_partition_property in = {0};
+	in.property_code = HV_PARTITION_PROPERTY_TIME_FREEZE;
+	in.property_value = freeze;
+
+	struct mshv_root_hvcall args = {0};
+	args.code = HVCALL_SET_PARTITION_PROPERTY;
+	args.in_sz = sizeof(in);
+	args.in_ptr = (uint64_t)&in;
+
+	ret = hvcall_set_partition_property_mgns(vm_fd, &args);
 	if (ret < 0) {
 		perror("[mgns] Failed to set time freeze");
-		ret = -errno;
-		goto cleanup;
+		return -errno;
 	}
-	ret = 0;
 
-cleanup:
-	if (args) {
-		g_free((void*) args->in_ptr);
-		g_free((void*) args);
-	}
-	return ret;
+	return 0;
 }
 
 int pause_vm_mgns(int vm_fd) {

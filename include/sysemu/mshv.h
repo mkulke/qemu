@@ -166,6 +166,7 @@ int initialize_vm_mgns(int vm_fd);
 int pause_vm_mgns(int vm_fd);
 int resume_vm_mgns(int vm_fd);
 int set_synthetic_proc_features_mgns(int vm_fd);
+int set_unimplemented_msr_action_mgns(int vm_fd);
 int register_ioevent_mgns(int vm_fd, int event_fd, uint64_t mmio_addr, uint64_t val, bool is_64bit, bool is_datamatch);
 int unregister_ioevent_mgns(int vm_fd, int event_fd, uint64_t mmio_addr);
 

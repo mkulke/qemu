@@ -726,15 +726,10 @@ int create_vm_with_type_mgns(uint64_t vm_type, int mshv_fd) {
 	// send a fault to the guest if it tries to access it. It is possible
 	// to override this behavior with a more suitable option i.e., ignore
 	// writes from the guest and return zero in attempt to read unimplemented
-	// MSR.
-	const struct mshv_root_hvcall *unimplemented_msr_action_args = create_unimplemented_msr_action_args_mgns();
-	ret = hvcall_set_partition_property_mgns(vm_fd, unimplemented_msr_action_args);
+	ret = set_unimplemented_msr_action_mgns(vm_fd);
 	if (ret < 0) {
-		perror("[mgns] Failed to set partition properties");
 		return -errno;
 	}
-	g_free((void*) unimplemented_msr_action_args->in_ptr);
-	g_free((void*) unimplemented_msr_action_args);
 
 	// Always create a frozen partition
 	pause_vm_mgns(vm_fd);
@@ -747,17 +742,40 @@ int create_vm_with_type_mgns(uint64_t vm_type, int mshv_fd) {
     return vm_fd;
 }
 
+int set_unimplemented_msr_action_mgns(int vm_fd) {
+	int ret;
+	const struct mshv_root_hvcall *args = create_unimplemented_msr_action_args_mgns();
+	if (!args) {
+		perror("[mgns] Failed to create unimplemented MSR action args");
+		ret = -errno;
+		goto cleanup;
+	}
+	ret = hvcall_set_partition_property_mgns(vm_fd, args);
+	if (ret < 0) {
+		perror("[mgns] Failed to set unimplemented MSR action");
+		return -errno;
+	}
+	ret = 0;
+
+cleanup:
+	if (args) {
+		g_free((void*) args->in_ptr);
+		g_free((void*) args);
+	}
+	return ret;
+}
+
 int set_synthetic_proc_features_mgns(int vm_fd) {
 	int ret;
 	const struct mshv_root_hvcall *args = create_synthetic_proc_features_args_mgns();
-	ret = hvcall_set_partition_property_mgns(vm_fd, args);
 	if (!args) {
 		perror("[mgns] Failed to create synthetic proc features args");
 		ret = -errno;
 		goto cleanup;
 	}
+	ret = hvcall_set_partition_property_mgns(vm_fd, args);
 	if (ret < 0) {
-		perror("[mgns] Failed to set partition properties");
+		perror("[mgns] Failed to set synthethic proc features");
 		return -errno;
 	}
 	ret = 0;

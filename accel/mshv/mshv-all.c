@@ -489,6 +489,7 @@ static int mshv_init_vcpu(CPUState *cpu)
 /* returns vm_fd on success, -errno on failure */
 int create_partition_mgns(int mshv_fd)
 {
+	int ret;
 	struct mshv_create_partition args = {0};
 
 	// Initialize pt_flags with the desired features
@@ -502,13 +503,21 @@ int create_partition_mgns(int mshv_fd)
 	args.pt_flags = pt_flags;
 	args.pt_isolation = pt_isolation;
 
-	int ret = create_vm_with_args_mgns(mshv_fd, &args);
+	ret = ioctl(mshv_fd, MSHV_CREATE_PARTITION, &args);
 	if (ret < 0) {
-		perror("[mgns] Failed to create partiton");
+		perror("[mshv] Failed to create partition");
 		return -errno;
 	}
-	// ret is vm_fd
 	return ret;
+}
+
+int initialize_vm_mgns(int vm_fd) {
+	int ret = ioctl(vm_fd, MSHV_INITIALIZE_PARTITION);
+	if (ret < 0) {
+		perror("[mshv] Failed to initialize partition");
+		return -errno;
+	}
+	return 0;
 }
 
 int hvcall_set_partition_property_mgns(int mshv_fd, const struct mshv_root_hvcall *args) {
@@ -564,30 +573,6 @@ int hvcall_mgns(int mshv_fd, const struct mshv_root_hvcall *args) {
 		return -errno;
 	}
 	return ret;
-}
-
-int create_vm_with_args_mgns(int mshv_fd, const struct mshv_create_partition *args) {
-	int ret;
-	if (!args) {
-		perror("[mshv] Invalid partition args");
-		return -EINVAL;
-	}
-
-	ret = ioctl(mshv_fd, MSHV_CREATE_PARTITION, args);
-	if (ret < 0) {
-		perror("[mshv] Failed to create partition");
-		return -errno;
-	}
-	return ret;
-}
-
-int initialize_vm_mgns(int vm_fd) {
-	int ret = ioctl(vm_fd, MSHV_INITIALIZE_PARTITION);
-	if (ret < 0) {
-		perror("[mshv] Failed to initialize partition");
-		return -errno;
-	}
-	return 0;
 }
 
 int create_vm_with_type_mgns(uint64_t vm_type, int mshv_fd) {

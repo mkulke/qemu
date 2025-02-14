@@ -486,15 +486,10 @@ static int mshv_init_vcpu(CPUState *cpu)
     return 0;
 }
 
-const struct mshv_create_partition *create_partition_args_mgns(void) {
-	struct mshv_create_partition *args;
-
-	args = g_new0(struct mshv_create_partition, 1);
-	if (!args) {
-		perror("[mshv] Failed to allocate memory for partition args");
-		return NULL;
-	}
-
+/* returns vm_fd on success, -errno on failure */
+int create_partition_mgns(int mshv_fd)
+{
+	struct mshv_create_partition args = {0};
 
 	// Initialize pt_flags with the desired features
 	uint64_t pt_flags = (1ULL << MSHV_PT_BIT_LAPIC) |
@@ -504,10 +499,16 @@ const struct mshv_create_partition *create_partition_args_mgns(void) {
 	// Set default isolation type
 	uint64_t pt_isolation = MSHV_PT_ISOLATION_NONE;
 
-	args->pt_flags = pt_flags;
-	args->pt_isolation = pt_isolation;
+	args.pt_flags = pt_flags;
+	args.pt_isolation = pt_isolation;
 
-	return args;
+	int ret = create_vm_with_args_mgns(mshv_fd, &args);
+	if (ret < 0) {
+		perror("[mgns] Failed to create partiton");
+		return -errno;
+	}
+	// ret is vm_fd
+	return ret;
 }
 
 int hvcall_set_partition_property_mgns(int mshv_fd, const struct mshv_root_hvcall *args) {
@@ -524,32 +525,6 @@ int hvcall_set_partition_property_mgns(int mshv_fd, const struct mshv_root_hvcal
 		return -errno;
 	}
 	return ret;
-}
-
-/* const struct mshv_root */
-
-const struct mshv_root_hvcall *create_unimplemented_msr_action_args_mgns(void) {
-	HvInputSetPartitionPropertyMgns *input;
-	input = g_new0(struct HvInputSetPartitionPropertyMgns, 1);
-	if (!input) {
-		perror("[mshv] Failed to allocate memory for root hvcall args");
-		return NULL;
-	}
-	input->property_code = HV_PARTITION_PROPERTY_UNIMPLEMENTED_MSR_ACTION;
-	input->property_value = HV_UNIMPLEMENTED_MSR_ACTION_IGNORE_WRITE_READ_ZERO;
-
-	struct mshv_root_hvcall *args;
-	args = g_new0(struct mshv_root_hvcall, 1);
-	if (!args) {
-		perror("[mshv] Failed to allocate memory for root hvcall args");
-		return NULL;
-	}
-	args->code = HVCALL_SET_PARTITION_PROPERTY;
-	args->in_sz = sizeof(*input);
-	args->in_ptr = (uint64_t)input;
-
-    trace_mgns_hvcall_args("unimplemented_msr_action", args->code, args->in_sz);
-	return args;
 }
 
 /* freeze 1 to pause, 0 to resume */
@@ -673,13 +648,13 @@ int create_vm_with_type_mgns(uint64_t vm_type, int mshv_fd) {
     MshvVmMgns *vm;
 	int vm_fd;
 
-	// return error if vm_type is not 0
+	/* return error if vm_type is not 0 */
 	if (vm_type != 0) {
 		perror("[mgns] Invalid VM type");
 		return -EINVAL;
 	}
 
-    // Allocate and initialize MshvVm structure
+    /* Allocate and initialize MshvVm structure */
 	vm = g_new0(MshvVmMgns, 1);
     if (!vm) {
         perror("[mgns] Failed to allocate memory for VM");
@@ -689,80 +664,67 @@ int create_vm_with_type_mgns(uint64_t vm_type, int mshv_fd) {
     vm->fd = mshv_fd;
     vm->vm_type = vm_type;
 
-	// Create partition
-	const struct mshv_create_partition *partition_args = create_partition_args_mgns();
-	if (!partition_args) {
-		perror("[mgns] Failed to create partition args");
-		close(mshv_fd);
-		return -errno;
-	}
-
-	int ret = create_vm_with_args_mgns(mshv_fd, partition_args);
+	/* Create partition */
+	int ret = create_partition_mgns(mshv_fd);
 	if (ret < 0) {
-		perror("[mgns] Failed to create VM");
 		close(mshv_fd);
 		return -errno;
 	}
-	g_free((void*) partition_args);
 	vm_fd = ret;
-
 	printf("[mgns] Partition created w/ fd %d\n", vm_fd);
 
+	/* Set synthetic proc features */
 	ret = set_synthetic_proc_features_mgns(vm_fd);
 	if (ret < 0) {
-		perror("[mgns] Failed to set synthetic proc features");
 		return -errno;
 	}
-
 	printf("[mgns] Synthetic proc features set for fd %d\n", vm_fd);
 
+	/* Initialize partition */
 	ret = initialize_vm_mgns(vm_fd);
 	if (ret < 0) {
 		perror("[mgns] Failed to initialize partition");
 		return -errno;
 	}
 
-	// Default Microsoft Hypervisor behavior for unimplemented MSR is to
-	// send a fault to the guest if it tries to access it. It is possible
-	// to override this behavior with a more suitable option i.e., ignore
-	// writes from the guest and return zero in attempt to read unimplemented
 	ret = set_unimplemented_msr_action_mgns(vm_fd);
 	if (ret < 0) {
 		return -errno;
 	}
 
-	// Always create a frozen partition
+	/* Always create a frozen partition */
 	pause_vm_mgns(vm_fd);
-
 	printf("[mgns] Partition half-initialized for fd %d\n", vm_fd);
 
-    // Store VM in a global hash table (similar to VM_DB in Rust)
+    /* Store VM in a global hash table (similar to VM_DB in Rust) */
 	update_vm_db_mgns(vm_fd, vm);
 
     return vm_fd;
 }
 
+/* Default Microsoft Hypervisor behavior for unimplemented MSR is to  send a 
+ * fault to the guest if it tries to access it. It is possible to override 
+ * this behavior with a more suitable option i.e., ignore writes from the guest
+ * and return zero in attempt to read unimplemented */
 int set_unimplemented_msr_action_mgns(int vm_fd) {
-	int ret;
-	const struct mshv_root_hvcall *args = create_unimplemented_msr_action_args_mgns();
-	if (!args) {
-		perror("[mgns] Failed to create unimplemented MSR action args");
-		ret = -errno;
-		goto cleanup;
-	}
-	ret = hvcall_set_partition_property_mgns(vm_fd, args);
-	if (ret < 0) {
-		perror("[mgns] Failed to set unimplemented MSR action");
-		return -errno;
-	}
-	ret = 0;
+    HvInputSetPartitionPropertyMgns in = {0};
+    struct mshv_root_hvcall args = {0};
 
-cleanup:
-	if (args) {
-		g_free((void*) args->in_ptr);
-		g_free((void*) args);
-	}
-	return ret;
+    in.property_code  = HV_PARTITION_PROPERTY_UNIMPLEMENTED_MSR_ACTION;
+    in.property_value = HV_UNIMPLEMENTED_MSR_ACTION_IGNORE_WRITE_READ_ZERO;
+
+    args.code   = HVCALL_SET_PARTITION_PROPERTY;
+    args.in_sz  = sizeof(in);
+    args.in_ptr = (uint64_t)&in;
+
+	trace_mgns_hvcall_args("unimplemented_msr_action", args.code, args.in_sz); 
+
+	int ret = hvcall_set_partition_property_mgns(vm_fd, &args);
+    if (ret < 0) {
+        perror("[mgns] Failed to set unimplemented MSR action");
+        return -errno;
+    }
+    return 0;
 }
 
 int set_synthetic_proc_features_mgns(int vm_fd) {

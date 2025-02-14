@@ -155,10 +155,9 @@ typedef struct {
 int init_vm_db_mgns(void);
 void update_vm_db_mgns(int vm_fd, MshvVmMgns *vm);
 int create_vm_with_type_mgns(uint64_t vm_type, int mshv_fd);
-const struct mshv_create_partition *create_partition_args_mgns(void);
+int create_partition_mgns(int mshv_fd);
 int create_vm_with_args_mgns(int mshv_fd, const struct mshv_create_partition *args);
 const struct mshv_root_hvcall *create_synthetic_proc_features_args_mgns(void);
-const struct mshv_root_hvcall *create_unimplemented_msr_action_args_mgns(void);
 const struct mshv_root_hvcall *create_time_freeze_args_mgns(uint8_t freeze);
 int hvcall_set_partition_property_mgns(int mshv_fd, const struct mshv_root_hvcall *args);
 int hvcall_mgns(int mshv_fd, const struct mshv_root_hvcall *args);

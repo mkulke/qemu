@@ -131,13 +131,6 @@ enum hv_unimplemented_msr_action_mgns {
 #define HVCALL_GET_PARTITION_PROPERTY		0x0044
 #define HVCALL_SET_PARTITION_PROPERTY		0x0045
 
-typedef struct HvInputSetPartitionPropertyMgns {
-	uint64_t partition_id;
-	uint32_t property_code;
-	uint32_t padding;
-	uint64_t property_value;
-} HvInputSetPartitionPropertyMgns;
-
 typedef enum {
     DATAMATCH_NONE,
     DATAMATCH_U32,
@@ -157,7 +150,6 @@ void update_vm_db_mgns(int vm_fd, MshvVmMgns *vm);
 int create_vm_with_type_mgns(uint64_t vm_type, int mshv_fd);
 int create_partition_mgns(int mshv_fd);
 int create_vm_with_args_mgns(int mshv_fd, const struct mshv_create_partition *args);
-const struct mshv_root_hvcall *create_synthetic_proc_features_args_mgns(void);
 const struct mshv_root_hvcall *create_time_freeze_args_mgns(uint8_t freeze);
 int hvcall_set_partition_property_mgns(int mshv_fd, const struct mshv_root_hvcall *args);
 int hvcall_mgns(int mshv_fd, const struct mshv_root_hvcall *args);

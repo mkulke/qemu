@@ -534,14 +534,14 @@ const struct mshv_root_hvcall *create_time_freeze_args_mgns(uint8_t freeze) {
 		return NULL;
 	}
 
-	HvInputSetPartitionPropertyMgns *input;
-	input = g_new0(struct HvInputSetPartitionPropertyMgns, 1);
-	if (!input) {
+	struct hv_input_set_partition_property *in;
+	in = g_new0(struct hv_input_set_partition_property, 1);
+	if (!in) {
 		perror("[mshv] Failed to allocate memory for root hvcall args");
 		return NULL;
 	}
-	input->property_code = HV_PARTITION_PROPERTY_TIME_FREEZE;
-	input->property_value = freeze;
+	in->property_code = HV_PARTITION_PROPERTY_TIME_FREEZE;
+	in->property_value = freeze;
 
 	struct mshv_root_hvcall *args;
 	args = g_new0(struct mshv_root_hvcall, 1);
@@ -550,62 +550,8 @@ const struct mshv_root_hvcall *create_time_freeze_args_mgns(uint8_t freeze) {
 		return NULL;
 	}
 	args->code = HVCALL_SET_PARTITION_PROPERTY;
-	args->in_sz = sizeof(*input);
-	args->in_ptr = (uint64_t)input;
-
-    trace_mgns_hvcall_args("time_freeze", args->code, args->in_sz);
-
-	return args;
-}
-
-const struct mshv_root_hvcall *create_synthetic_proc_features_args_mgns(void) {
-	HvInputSetPartitionPropertyMgns *input;
-	input = g_new0(struct HvInputSetPartitionPropertyMgns, 1);
-	if (!input) {
-		perror("[mshv] Failed to allocate memory for root hvcall args");
-		return NULL;
-	}
-	input->property_code = HV_PARTITION_PROPERTY_SYNTHETIC_PROC_FEATURES;
-
-	union hv_partition_synthetic_processor_features features;
-    // Zero out the union to ensure all fields are initialized to 0
-    memset(&features, 0, sizeof(features));
-
-    // Access the bitfield and set the desired features
-	features.hypervisor_present = 1;
-	features.hv1 = 1;
-	features.access_partition_reference_counter = 1;
-	features.access_synic_regs = 1;
-	features.access_synthetic_timer_regs = 1;
-	features.access_partition_reference_tsc = 1;
-	features.access_frequency_regs = 1;
-	features.access_intr_ctrl_regs = 1;
-	features.access_vp_index = 1;
-	features.access_hypercall_regs = 1;
-	features.access_guest_idle_reg = 1;
-	features.tb_flush_hypercalls = 1;
-	features.synthetic_cluster_ipi = 1;
-	features.direct_synthetic_timers = 1;
-
-	input->property_value = features.as_uint64[0];
-	
-	// DEBUG
-	uint64_t payload = mgns_get_hvcall_payload();
-	uint64_t mgns = features.as_uint64[0];
-	printf("mgns hvcall payload: %lu mgns: %lu\n", payload, mgns);
-	// DEBUG
-
-	struct mshv_root_hvcall *args;
-	args = g_new0(struct mshv_root_hvcall, 1);
-	if (!args) {
-		perror("[mshv] Failed to allocate memory for root hvcall args");
-		return NULL;
-	}
-	args->code = HVCALL_SET_PARTITION_PROPERTY;
-	args->in_sz = sizeof(*input);
-	args->in_ptr = (uint64_t)input;
-
-    trace_mgns_hvcall_args("synthetic_proc_features", args->code, args->in_sz);
+	args->in_sz = sizeof(*in);
+	args->in_ptr = (uint64_t)in;
 
 	return args;
 }
@@ -707,7 +653,7 @@ int create_vm_with_type_mgns(uint64_t vm_type, int mshv_fd) {
  * this behavior with a more suitable option i.e., ignore writes from the guest
  * and return zero in attempt to read unimplemented */
 int set_unimplemented_msr_action_mgns(int vm_fd) {
-    HvInputSetPartitionPropertyMgns in = {0};
+    struct hv_input_set_partition_property in = {0};
     struct mshv_root_hvcall args = {0};
 
     in.property_code  = HV_PARTITION_PROPERTY_UNIMPLEMENTED_MSR_ACTION;
@@ -729,16 +675,58 @@ int set_unimplemented_msr_action_mgns(int vm_fd) {
 
 int set_synthetic_proc_features_mgns(int vm_fd) {
 	int ret;
-	const struct mshv_root_hvcall *args = create_synthetic_proc_features_args_mgns();
+
+	struct hv_input_set_partition_property in = {0};
+
+	union hv_partition_synthetic_processor_features features = {0};
+
+    // Access the bitfield and set the desired features
+	features.hypervisor_present = 1;
+	features.hv1 = 1;
+	features.access_partition_reference_counter = 1;
+	features.access_synic_regs = 1;
+	features.access_synthetic_timer_regs = 1;
+	features.access_partition_reference_tsc = 1;
+	features.access_frequency_regs = 1;
+	features.access_intr_ctrl_regs = 1;
+	features.access_vp_index = 1;
+	features.access_hypercall_regs = 1;
+	features.access_guest_idle_reg = 1;
+	features.tb_flush_hypercalls = 1;
+	features.synthetic_cluster_ipi = 1;
+	features.direct_synthetic_timers = 1;
+
+	in.property_code = HV_PARTITION_PROPERTY_SYNTHETIC_PROC_FEATURES;
+	in.property_value = features.as_uint64[0];
+	
+	struct mshv_root_hvcall args = {0};
+	args.code = HVCALL_SET_PARTITION_PROPERTY;
+	args.in_sz = sizeof(in);
+	args.in_ptr = (uint64_t)&in;
+
+    trace_mgns_hvcall_args("synthetic_proc_features", args.code, args.in_sz);
+
+	ret = hvcall_set_partition_property_mgns(vm_fd, &args);
+	if (ret < 0) {
+		perror("[mgns] Failed to set synthethic proc features");
+		return -errno;
+	}
+	return 0;
+}
+
+static inline int set_time_freeze_mgns(int vm_fd, int freeze) {
+	int ret;
+	const struct mshv_root_hvcall *args = create_time_freeze_args_mgns(freeze);
 	if (!args) {
-		perror("[mgns] Failed to create synthetic proc features args");
+		perror("[mgns] Failed to create time freeze args");
 		ret = -errno;
 		goto cleanup;
 	}
 	ret = hvcall_set_partition_property_mgns(vm_fd, args);
 	if (ret < 0) {
-		perror("[mgns] Failed to set synthethic proc features");
-		return -errno;
+		perror("[mgns] Failed to set time freeze");
+		ret = -errno;
+		goto cleanup;
 	}
 	ret = 0;
 
@@ -752,50 +740,27 @@ cleanup:
 
 int pause_vm_mgns(int vm_fd) {
 	int ret;
-	const struct mshv_root_hvcall *args = create_time_freeze_args_mgns(1);
-	if (!args) {
-		perror("[mgns] Failed to create time freeze args");
-		ret = -errno;
-		goto cleanup;
-	}
-	ret = hvcall_set_partition_property_mgns(vm_fd, args);
+
+	ret = set_time_freeze_mgns(vm_fd, 1);
 	if (ret < 0) {
 		perror("[mgns] Failed to pause partition");
 		ret = -errno;
-		goto cleanup;
 	}
-	ret = 0;
 
-cleanup:
-	if (args) {
-		g_free((void*) args->in_ptr);
-		g_free((void*) args);
-	}
-	return ret;
+	return 0;
 }
 
+
 int resume_vm_mgns(int vm_fd) {
-	int ret;
-	const struct mshv_root_hvcall *args = create_time_freeze_args_mgns(0);
-	if (!args) {
-		perror("[mgns] Failed to create time freeze args");
-		ret = -errno;
-		goto cleanup;
-	}
-	ret = hvcall_set_partition_property_mgns(vm_fd, args);
+	int ret; 
+
+	ret = set_time_freeze_mgns(vm_fd, 0);
 	if (ret < 0) {
 		perror("[mgns] Failed to resume partition");
 		ret = -errno;
-		goto cleanup;
 	}
-	ret = 0;
 
-cleanup:
-	if (args) {
-		g_free((void*) args->in_ptr);
-		g_free((void*) args);
-	}
-	return ret;
+	return 0;
 }
 
 static int mshv_destroy_vcpu(CPUState *cpu)

@@ -3,6 +3,13 @@
 
 #define HV_PARTITION_SYNTHETIC_PROCESSOR_FEATURES_BANKS 1
 
+struct hv_input_set_partition_property {
+	__u64 partition_id;
+	__u32 property_code; /* enum hv_partition_property_code */
+	__u32 padding;
+	__u64 property_value;
+};
+
 union hv_partition_synthetic_processor_features {
 	__u64 as_uint64[HV_PARTITION_SYNTHETIC_PROCESSOR_FEATURES_BANKS];
 

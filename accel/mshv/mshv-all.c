@@ -28,15 +28,18 @@ bool mshv_allowed;
 
 MshvState *mshv_state;
 
-static GHashTable *vm_db;
-static QemuMutex vm_db_mutex;
+static GHashTable *vm_db_mgns;
+static QemuMutex vm_db_mutex_mgns;
+
+static GHashTable *cpu_db_mgns;
+static QemuMutex cpu_db_mutex_mgns;
 
 // return /dev/mshv fd
 int init_vm_db_mgns(void) {
 	trace_mgns_init_vm_db();
 
-    vm_db = g_hash_table_new(g_direct_hash, g_direct_equal);
-    qemu_mutex_init(&vm_db_mutex);
+    vm_db_mgns = g_hash_table_new(g_direct_hash, g_direct_equal);
+    qemu_mutex_init(&vm_db_mutex_mgns);
 
     // Open /dev/mshv device (hypervisor initialization)
     int mshv_fd = open("/dev/mshv", O_RDWR | O_CLOEXEC);
@@ -51,9 +54,31 @@ void update_vm_db_mgns(int vm_fd, MshvVmMgns *vm)
 {
 	trace_mgns_update_vm_db(vm_fd);
 
-	qemu_mutex_lock(&vm_db_mutex);
-	g_hash_table_insert(vm_db, GINT_TO_POINTER(vm_fd), vm);
-	qemu_mutex_unlock(&vm_db_mutex);
+	qemu_mutex_lock(&vm_db_mutex_mgns);
+	g_hash_table_insert(vm_db_mgns, GINT_TO_POINTER(vm_fd), vm);
+	qemu_mutex_unlock(&vm_db_mutex_mgns);
+}
+
+MshvVmMgns *get_vm_from_db_mgns(int vm_fd)
+{
+	trace_mgns_get_vm_from_db(vm_fd);
+
+    MshvVmMgns *vm = NULL;
+
+    qemu_mutex_lock(&vm_db_mutex_mgns);
+    vm = g_hash_table_lookup(vm_db_mgns, GINT_TO_POINTER(vm_fd));
+    qemu_mutex_unlock(&vm_db_mutex_mgns);
+
+    return vm;
+}
+
+void update_cpu_db_mgns(int vm_fd, MshvVmMgns *vm)
+{
+	trace_mgns_update_vm_db(vm_fd);
+
+	qemu_mutex_lock(&cpu_db_mutex_mgns);
+	g_hash_table_insert(cpu_db_mgns, GINT_TO_POINTER(vm_fd), vm);
+	qemu_mutex_unlock(&cpu_db_mutex_mgns);
 }
 
 static int do_mshv_set_memory(const MshvMemoryRegion *mshv_mr, bool add)
@@ -168,7 +193,7 @@ static void mshv_region_del(MemoryListener *listener,
     memory_region_unref(section->mr);
 }
 
-static inline void dump_mshv_user_ioeventfd_mgns(const struct mshv_user_ioeventfd *ioevent)
+void dump_user_ioeventfd_mgns(const struct mshv_user_ioeventfd *ioevent)
 {
     printf("mshv_user_ioeventfd:\n");
     printf("  fd: %d\n", ioevent->fd);
@@ -346,7 +371,9 @@ static int mshv_init(MachineState *ms)
     mshv_new();
     s->vm = 0;
 
+	// TODO: the naming of below fn is off
 	int mshv_fd = init_vm_db_mgns();
+	init_msicontrol_mgns();
 
     // TODO: object_property_find(OBJECT(current_machine), "mshv-type")
     vm_type = 0;
@@ -470,6 +497,23 @@ static int pio_write_fn(uint64_t port, const uint8_t *data, uintptr_t size,
 }
 
 static int mshv_init_vcpu(CPUState *cpu)
+{
+    MshvOps mshv_ops = {
+        .guest_mem_write_fn = guest_mem_write_fn,
+        .guest_mem_read_fn = guest_mem_read_fn,
+        .mmio_read_fn = mmio_read_fn,
+        .mmio_write_fn = mmio_write_fn,
+        .pio_read_fn = pio_read_fn,
+        .pio_write_fn = pio_write_fn,
+    };
+    cpu->accel = g_new0(AccelCPUState, 1);
+    mshv_vcpufd(cpu) = mshv_new_vcpu(mshv_state->vm, cpu->cpu_index, &mshv_ops);
+    cpu->vcpu_dirty = false;
+
+    return 0;
+}
+
+int init_vcpu_mgns(CPUState *cpu)
 {
     MshvOps mshv_ops = {
         .guest_mem_write_fn = guest_mem_write_fn,

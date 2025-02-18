@@ -134,10 +134,11 @@ enum hv_unimplemented_msr_action_mgns {
 };
 
 
-/* Declare the various hypercall operations. */
+/* Declare the various hypercall operations. from hvgdk_mini.h */
 /* HV_CALL_CODE */
 #define HVCALL_GET_PARTITION_PROPERTY		0x0044
 #define HVCALL_SET_PARTITION_PROPERTY		0x0045
+#define HVCALL_ASSERT_VIRTUAL_INTERRUPT		0x0094
 
 typedef enum {
     DATAMATCH_NONE,
@@ -159,8 +160,12 @@ int remove_msi_routing_mgns(uint32_t gsi);
 int add_msi_routing_mgns(uint64_t addr, uint32_t data);
 int commit_msi_routing_table_mgns(int vm_fd);
 int irqfd_mgns(int vm_fd, int fd, int resample_fd, uint32_t gsi, uint32_t flags);
+int request_interrupt_mgns(int vm_fd, uint32_t interrupt_type, uint32_t vector,
+						   uint32_t vp_index, bool logical_destination_mode,
+						   bool level_triggered);
 int register_irqfd_mgns(int vm_fd, int event_fd, uint32_t gsi);
-int register_irqfd_with_resample_mgns(int vm_fd, int event_fd, int resample_fd, uint32_t gsi);
+int register_irqfd_with_resample_mgns(int vm_fd, int event_fd, int resample_fd,
+									  uint32_t gsi);
 int unregister_irqfd_mgns(int vm_fd, int event_fd, uint32_t gsi);
 
 int init_vm_db_mgns(void);
@@ -170,7 +175,6 @@ MshvVmMgns *get_vm_from_db_mgns(int vm_fd);
 void update_cpu_db_mgns(int vm_fd, MshvVmMgns *vm);
 int create_vm_with_type_mgns(uint64_t vm_type, int mshv_fd);
 int create_partition_mgns(int mshv_fd);
-int hvcall_set_partition_property_mgns(int mshv_fd, const struct mshv_root_hvcall *args);
 int hvcall_mgns(int mshv_fd, const struct mshv_root_hvcall *args);
 int initialize_vm_mgns(int vm_fd);
 int pause_vm_mgns(int vm_fd);

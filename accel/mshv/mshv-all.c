@@ -278,7 +278,7 @@ static void mshv_mem_ioeventfd_add(MemoryListener *listener,
 {
     int fd = event_notifier_get_fd(e);
     int r;
-	/* TODO: mgns does this really matter if we 0 out the ioctl 
+	/* TODO: mgns does this really matter if we 0 out the ioctl
 	 * arg anyway?
 	 */
     bool is_64 = int128_get64(section->size) == 8;
@@ -564,22 +564,6 @@ int initialize_vm_mgns(int vm_fd) {
 	return 0;
 }
 
-int hvcall_set_partition_property_mgns(int mshv_fd, const struct mshv_root_hvcall *args) {
-	int ret = 0;
-
-	// print all fields of args
-	printf("args->code: %d\n", args->code);
-	printf("args->in_sz: %d\n", args->in_sz);
-	printf("args->in_ptr: %llu\n", args->in_ptr);
-	
-	ret = hvcall_mgns(mshv_fd, args);
-	if (ret < 0) {
-		perror("[mshv] Failed to set partition property");
-		return -errno;
-	}
-	return ret;
-}
-
 /* const struct mshv_root_hvcall *create_time_freeze_args_mgns(uint8_t freeze) { */
 /* 	if (freeze != 0 && freeze != 1) { */
 /* 		perror("[mshv] Invalid time freeze value"); */
@@ -610,6 +594,11 @@ int hvcall_set_partition_property_mgns(int mshv_fd, const struct mshv_root_hvcal
 
 int hvcall_mgns(int mshv_fd, const struct mshv_root_hvcall *args) {
 	int ret = 0;
+
+	/* printf("args->code: %d\n", args->code); */
+	/* printf("args->in_sz: %d\n", args->in_sz); */
+	/* printf("args->in_ptr: %llu\n", args->in_ptr); */
+
 	ret = ioctl(mshv_fd, MSHV_ROOT_HVCALL, args);
 	if (ret < 0) {
 		perror("[mshv] Failed to perform hvcall");
@@ -676,8 +665,8 @@ int create_vm_with_type_mgns(uint64_t vm_type, int mshv_fd) {
     return vm_fd;
 }
 
-/* Default Microsoft Hypervisor behavior for unimplemented MSR is to  send a 
- * fault to the guest if it tries to access it. It is possible to override 
+/* Default Microsoft Hypervisor behavior for unimplemented MSR is to  send a
+ * fault to the guest if it tries to access it. It is possible to override
  * this behavior with a more suitable option i.e., ignore writes from the guest
  * and return zero in attempt to read unimplemented */
 int set_unimplemented_msr_action_mgns(int vm_fd) {
@@ -691,9 +680,9 @@ int set_unimplemented_msr_action_mgns(int vm_fd) {
     args.in_sz  = sizeof(in);
     args.in_ptr = (uint64_t)&in;
 
-	trace_mgns_hvcall_args("unimplemented_msr_action", args.code, args.in_sz); 
+	trace_mgns_hvcall_args("unimplemented_msr_action", args.code, args.in_sz);
 
-	int ret = hvcall_set_partition_property_mgns(vm_fd, &args);
+	int ret = hvcall_mgns(vm_fd, &args);
     if (ret < 0) {
         perror("[mgns] Failed to set unimplemented MSR action");
         return -errno;
@@ -726,7 +715,7 @@ int set_synthetic_proc_features_mgns(int vm_fd) {
 
 	in.property_code = HV_PARTITION_PROPERTY_SYNTHETIC_PROC_FEATURES;
 	in.property_value = features.as_uint64[0];
-	
+
 	struct mshv_root_hvcall args = {0};
 	args.code = HVCALL_SET_PARTITION_PROPERTY;
 	args.in_sz = sizeof(in);
@@ -734,7 +723,7 @@ int set_synthetic_proc_features_mgns(int vm_fd) {
 
     trace_mgns_hvcall_args("synthetic_proc_features", args.code, args.in_sz);
 
-	ret = hvcall_set_partition_property_mgns(vm_fd, &args);
+	ret = hvcall_mgns(vm_fd, &args);
 	if (ret < 0) {
 		perror("[mgns] Failed to set synthethic proc features");
 		return -errno;
@@ -760,7 +749,7 @@ static inline int set_time_freeze_mgns(int vm_fd, int freeze) {
 	args.in_sz = sizeof(in);
 	args.in_ptr = (uint64_t)&in;
 
-	ret = hvcall_set_partition_property_mgns(vm_fd, &args);
+	ret = hvcall_mgns(vm_fd, &args);
 	if (ret < 0) {
 		perror("[mgns] Failed to set time freeze");
 		return -errno;

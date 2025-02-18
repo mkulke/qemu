@@ -91,7 +91,7 @@ int add_msi_routing_mgns(uint64_t addr, uint32_t data)
 	return gsi;
 }
 
-int enable_msi_routing_mgns(int vm_fd)
+int commit_msi_routing_table_mgns(int vm_fd)
 {
 	guint len;
 	int i, ret;
@@ -99,8 +99,6 @@ int enable_msi_routing_mgns(int vm_fd)
 	struct mshv_user_irq_table *table;
 	GHashTableIter iter;
 	gpointer key, value;
-
-	trace_mgns_enable_msi_routing(vm_fd);
 
 	WITH_QEMU_LOCK_GUARD(&msi_control_mutex_mgns) {
 		if (!msi_control_mgns->updated) {
@@ -121,6 +119,8 @@ int enable_msi_routing_mgns(int vm_fd)
 			table->entries[i] = *entry;
 			i++;
 		}
+
+		trace_mgns_commit_msi_routing_table(vm_fd, len);
 
 		ret = ioctl(vm_fd, MSHV_SET_MSI_ROUTING, table);
 		g_free(table);
@@ -243,7 +243,7 @@ int mshv_irqchip_update_msi_route(int virq, MSIMessage msg, PCIDevice *dev)
 
 void mshv_irqchip_commit_routes(void)
 {
-	enable_msi_routing_mgns(mshv_state->vm);
+	commit_msi_routing_table_mgns(mshv_state->vm);
 }
 
 static int mshv_irqchip_update_irqfd_notifier_gsi(MshvState *s,

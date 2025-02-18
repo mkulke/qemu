@@ -157,7 +157,7 @@ void init_msicontrol_mgns(void);
 int set_msi_routing_mgns(uint32_t gsi, uint64_t addr, uint32_t data);
 int remove_msi_routing_mgns(uint32_t gsi);
 int add_msi_routing_mgns(uint64_t addr, uint32_t data);
-int enable_msi_routing_mgns(int vm_fd);
+int commit_msi_routing_table_mgns(int vm_fd);
 int irqfd_mgns(int vm_fd, int fd, int resample_fd, uint32_t gsi, uint32_t flags);
 int register_irqfd_mgns(int vm_fd, int event_fd, uint32_t gsi);
 int register_irqfd_with_resample_mgns(int vm_fd, int event_fd, int resample_fd, uint32_t gsi);

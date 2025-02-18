@@ -43,6 +43,33 @@ enum {
 };
 #define MSHV_IOEVENTFD_FLAGS_MASK	((1 << MSHV_IOEVENTFD_BIT_COUNT) - 1)
 
+union hv_interrupt_control {
+	__u64 as_uint64;
+	struct {
+		__u32 interrupt_type; /* enum hv_interrupt type */
+		__u32 level_triggered : 1;
+		__u32 logical_dest_mode : 1;
+		__u32 rsvd : 30;
+	};
+};
+
+struct hv_input_assert_virtual_interrupt {
+	__u64 partition_id;
+	union hv_interrupt_control control;
+	__u64 dest_addr; /* cpu's apic id */
+	__u32 vector;
+	__u8 target_vtl;
+	__u8 rsvd_z0;
+	__u16 rsvd_z1;
+};
+
+struct mshv_assert_interrupt {
+	union hv_interrupt_control control;
+	__u64 dest_addr;
+	__u32 vector;
+	__u32 rsvd;
+};
+
 struct mshv_user_ioeventfd {
 	__u64 datamatch;
 	__u64 addr;	   /* legal pio/mmio address */
@@ -103,6 +130,8 @@ struct mshv_create_partition {
 #define MSHV_IRQFD					_IOW(MSHV_IOCTL, 0x03, struct mshv_user_irqfd)
 #define MSHV_IOEVENTFD			    _IOW(MSHV_IOCTL, 0x04, struct mshv_user_ioeventfd)
 #define MSHV_SET_MSI_ROUTING		_IOW(MSHV_IOCTL, 0x05, struct mshv_user_irq_table)
+// TODO: replace with MSHV_ROOT_HVCALL#ASSERT_VIRTUAL_INTERRUPT
+#define MSHV_ASSERT_INTERRUPT		_IOW(MSHV_IOCTL, 0xF1, struct mshv_assert_interrupt)
 
 /**
  * struct mshv_root_hvcall - arguments for MSHV_ROOT_HVCALL

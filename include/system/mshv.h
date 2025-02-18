@@ -29,6 +29,8 @@ typedef struct hyperv_message hv_message;
 
 #define MSHV_USE_KERNEL_GSI_IRQFD 1
 
+#define MSHV_MAX_MSI_ROUTES 4096
+
 #define mshv_err(FMT, ...)                                                     \
   do {                                                                         \
     fprintf(stderr, FMT, ##__VA_ARGS__);                                       \
@@ -49,6 +51,7 @@ typedef struct hyperv_message hv_message;
 extern bool mshv_allowed;
 #define mshv_enabled() (mshv_allowed)
 
+
 typedef struct MshvMemoryListener {
   MemoryListener listener;
   int as_id;
@@ -68,6 +71,11 @@ extern MshvState *mshv_state;
 
 struct AccelCPUState {
   int cpufd;
+};
+
+struct MsiControlMgns {
+	bool updated;
+	GHashTable *gsi_routes;
 };
 
 typedef struct MshvVcpuMgns {
@@ -145,8 +153,21 @@ typedef struct {
     } value;
 } DatamatchMgns;
 
+void init_msicontrol_mgns(void);
+int set_msi_routing_mgns(uint32_t gsi, uint64_t addr, uint32_t data);
+int remove_msi_routing_mgns(uint32_t gsi);
+int add_msi_routing_mgns(uint64_t addr, uint32_t data);
+int enable_msi_routing_mgns(int vm_fd);
+int irqfd_mgns(int vm_fd, int fd, int resample_fd, uint32_t gsi, uint32_t flags);
+int register_irqfd_mgns(int vm_fd, int event_fd, uint32_t gsi);
+int register_irqfd_with_resample_mgns(int vm_fd, int event_fd, int resample_fd, uint32_t gsi);
+int unregister_irqfd_mgns(int vm_fd, int event_fd, uint32_t gsi);
+
 int init_vm_db_mgns(void);
 void update_vm_db_mgns(int vm_fd, MshvVmMgns *vm);
+MshvVmMgns *get_vm_from_db_mgns(int vm_fd);
+// dead fn
+void update_cpu_db_mgns(int vm_fd, MshvVmMgns *vm);
 int create_vm_with_type_mgns(uint64_t vm_type, int mshv_fd);
 int create_partition_mgns(int mshv_fd);
 int hvcall_set_partition_property_mgns(int mshv_fd, const struct mshv_root_hvcall *args);
@@ -158,6 +179,8 @@ int set_synthetic_proc_features_mgns(int vm_fd);
 int set_unimplemented_msr_action_mgns(int vm_fd);
 int register_ioevent_mgns(int vm_fd, int event_fd, uint64_t mmio_addr, uint64_t val, bool is_64bit, bool is_datamatch);
 int unregister_ioevent_mgns(int vm_fd, int event_fd, uint64_t mmio_addr);
+void dump_user_ioeventfd_mgns(const struct mshv_user_ioeventfd *ioevent);
+int init_vcpu_mgns(CPUState *cpu);
 
 int mshv_irqchip_add_msi_route(int vector, PCIDevice *dev);
 int mshv_irqchip_update_msi_route(int virq, MSIMessage msg, PCIDevice *dev);

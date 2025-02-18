@@ -52,6 +52,33 @@ struct mshv_user_ioeventfd {
 	__u8  rsvd[4];
 };
 
+struct mshv_user_irq_entry {
+	__u32 gsi;
+	__u32 address_lo;
+	__u32 address_hi;
+	__u32 data;
+};
+
+struct mshv_user_irq_table {
+	__u32 nr;
+	__u32 rsvd; /* MBZ */
+	struct mshv_user_irq_entry entries[0];
+};
+
+enum {
+	MSHV_IRQFD_BIT_DEASSIGN,
+	MSHV_IRQFD_BIT_RESAMPLE,
+	MSHV_IRQFD_BIT_COUNT,
+};
+#define MSHV_IRQFD_FLAGS_MASK	((1 << MSHV_IRQFD_BIT_COUNT) - 1)
+
+struct mshv_user_irqfd {
+	__s32 fd;
+	__s32 resamplefd;
+	__u32 gsi;
+	__u32 flags;
+};
+
 /**
  * struct mshv_create_partition - arguments for MSHV_CREATE_PARTITION
  * @pt_flags: Bitmask of 1 << MSHV_PT_BIT_*
@@ -73,7 +100,9 @@ struct mshv_create_partition {
 
 /* Partition fds created with MSHV_CREATE_PARTITION */
 #define MSHV_INITIALIZE_PARTITION	_IO(MSHV_IOCTL, 0x00)
+#define MSHV_IRQFD					_IOW(MSHV_IOCTL, 0x03, struct mshv_user_irqfd)
 #define MSHV_IOEVENTFD			    _IOW(MSHV_IOCTL, 0x04, struct mshv_user_ioeventfd)
+#define MSHV_SET_MSI_ROUTING		_IOW(MSHV_IOCTL, 0x05, struct mshv_user_irq_table)
 
 /**
  * struct mshv_root_hvcall - arguments for MSHV_ROOT_HVCALL

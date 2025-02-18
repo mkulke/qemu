@@ -8,7 +8,7 @@
 
 static struct MsiControlMgns *msi_control_mgns;
 static QemuMutex msi_control_mutex_mgns;
-gint global_counter_mgns = 0;
+/* gint global_counter_mgns = 0; */
 
 void init_msicontrol_mgns(void) {
     qemu_mutex_init(&msi_control_mutex_mgns);
@@ -260,45 +260,10 @@ int request_interrupt_mgns(int vm_fd, uint32_t interrupt_type, uint32_t vector,
 		.rsvd = 0,
 	};
 
-
 	struct hv_input_assert_virtual_interrupt arg = {0};
 	arg.control = control;
 	arg.dest_addr = (uint64_t)vp_index;
 	arg.vector = vector;
-
-/* 		__u64 partition_id; */
-/* 		union hv_interrupt_control control; */
-/* 		__u64 dest_addr; /1* cpu's apic id *1/ */
-/* 		__u32 vector; */
-/* 		__u8 target_vtl; */
-/* 		__u8 rsvd_z0; */
-/* 		__u16 rsvd_z1; */
-/* 	}; */
-
-	/* struct mshv_assert_interrupt arg = { */
-	/* 	.control = control, */
-	/* 	.dest_addr = (uint64_t)vp_index, */
-	/* 	.vector = vector, */
-	/* 	.rsvd = 0, */
-	/* }; */
-
-	/* ret = ioctl(vm_fd, MSHV_ASSERT_INTERRUPT, &arg); */
-	/* if (ret < 0) { */
-	/* 	return -1; */
-	/* } */
-	/* if (ret < 0) { */
-	/* 	perror("[mshv] failed to request interrupt"); */
-	/* 	printf("[mgns-qemu]: request_virtual_interrupt\n"); */
-	/* 	printf("  control:\n"); */
-	/* 	printf("    interrupt_type: %d\n", control.interrupt_type); */
-	/* 	printf("    level_triggered: %d\n", control.level_triggered); */
-	/* 	printf("    logical_dest_mode: %d\n", control.logical_dest_mode); */
-	/* 	printf("    rsvd: %d\n", control.rsvd); */
-	/* 	printf("  dest_addr: %llu\n", arg.dest_addr); */
-	/* 	printf("  vector: %d\n", arg.vector); */
-	/* 	printf("  rsvd: %d\n", arg.rsvd); */
-	/*	return -1; */
-	/* } */
 
     struct mshv_root_hvcall args = {0};
     args.code   = HVCALL_ASSERT_VIRTUAL_INTERRUPT;

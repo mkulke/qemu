@@ -63,13 +63,6 @@ struct hv_input_assert_virtual_interrupt {
 	__u16 rsvd_z1;
 };
 
-struct mshv_assert_interrupt {
-	union hv_interrupt_control control;
-	__u64 dest_addr;
-	__u32 vector;
-	__u32 rsvd;
-};
-
 struct mshv_user_ioeventfd {
 	__u64 datamatch;
 	__u64 addr;	   /* legal pio/mmio address */

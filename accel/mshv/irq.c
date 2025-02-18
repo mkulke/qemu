@@ -48,8 +48,6 @@ int set_msi_routing_mgns(uint32_t gsi, uint64_t addr, uint32_t data)
 		entry->data = data;
 
 		g_hash_table_insert(msi_control_mgns->gsi_routes, GINT_TO_POINTER(gsi), entry);
-
-		printf("[mgns-qemu] set msi w/ gsi: %d\n", gsi);
 		msi_control_mgns->updated = true;
 	}
 
@@ -85,9 +83,8 @@ int add_msi_routing_mgns(uint64_t addr, uint32_t data)
 		route_entry->address_hi = high_addr;
 		route_entry->address_lo = low_addr;
 		route_entry->data = data;
-		g_hash_table_insert(msi_control_mgns->gsi_routes, GINT_TO_POINTER(gsi), route_entry);
 
-		printf("[mgns-qemu] set msi w/ gsi: %d\n", gsi);
+		g_hash_table_insert(msi_control_mgns->gsi_routes, GINT_TO_POINTER(gsi), route_entry);
 		msi_control_mgns->updated = true;
 	}
 
@@ -96,7 +93,6 @@ int add_msi_routing_mgns(uint64_t addr, uint32_t data)
 
 int enable_msi_routing_mgns(int vm_fd)
 {
-	/* GList *entries; */
 	guint len;
 	int i, ret;
 	size_t table_size;
@@ -124,17 +120,6 @@ int enable_msi_routing_mgns(int vm_fd)
 			struct mshv_user_irq_entry *entry = value;
 			table->entries[i] = *entry;
 			i++;
-		}
-
-		/* print the routing table for debugging */
-		printf("[mgns-qemu] table.entries size: %d\n", len);
-		for (i = 0; i < len; i++) {
-			printf("\t%d => mshv_user_irq_entry { gsi: %u, address_lo: %u, address_hi: %u, data: %u }\n",
-				   i,
-				   table->entries[i].gsi,
-				   table->entries[i].address_lo,
-				   table->entries[i].address_hi,
-				   table->entries[i].data);
 		}
 
 		ret = ioctl(vm_fd, MSHV_SET_MSI_ROUTING, table);
@@ -232,13 +217,7 @@ int mshv_irqchip_add_msi_route(int vector, PCIDevice *dev)
 
     if (pci_available && dev) {
         msg = pci_get_msi_message(dev, vector);
-
-		/* native booking impl */
 		virq = add_msi_routing_mgns(msg.address, le32_to_cpu(msg.data));
-
-		/* mshv-c bookkeeping impl */
-        virq = mshv_add_msi_gsi_routing(mshv_state->vm, msg.address,
-                                        le32_to_cpu(msg.data));
     }
 
     return virq;
@@ -246,37 +225,25 @@ int mshv_irqchip_add_msi_route(int vector, PCIDevice *dev)
 
 void mshv_irqchip_release_virq(int virq)
 {
-	/* native booking impl */
 	remove_msi_routing_mgns(virq);
-
-	/* mshv-c bookkeeping impl */
-    mshv_remove_gsi_routing(mshv_state->vm, virq);
 }
 
 int mshv_irqchip_update_msi_route(int virq, MSIMessage msg, PCIDevice *dev)
 {
 	int ret;
 
-	/* native booking impl */
 	ret = set_msi_routing_mgns(virq, msg.address, le32_to_cpu(msg.data));
 	if (ret < 0) {
 		perror("failed to set msi routing");
 		return -1;
 	}
 
-	/* mshv-c bookkeeping impl */
-    mshv_set_msi_gsi_routing(mshv_state->vm, virq, msg.address,
-                             le32_to_cpu(msg.data));
     return 0;
 }
 
 void mshv_irqchip_commit_routes(void)
 {
-	/* native booking impl */
 	enable_msi_routing_mgns(mshv_state->vm);
-
-	/* mshv-c ioctl impl */
-    mshv_enable_msi_routing(mshv_state->vm);
 }
 
 static int mshv_irqchip_update_irqfd_notifier_gsi(MshvState *s,

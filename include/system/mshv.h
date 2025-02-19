@@ -31,6 +31,8 @@ typedef struct hyperv_message hv_message;
 
 #define MSHV_MAX_MSI_ROUTES 4096
 
+#define MSHV_PAGE_SHIFT 12
+
 #define mshv_err(FMT, ...)                                                     \
   do {                                                                         \
     fprintf(stderr, FMT, ##__VA_ARGS__);                                       \
@@ -78,24 +80,8 @@ struct MsiControlMgns {
 	GHashTable *gsi_routes;
 };
 
-typedef struct MshvVcpuMgns {
-    int fd;                     		// vCPU file descriptor
-    uint8_t vp_index;           		// Virtual processor index
-
-    struct CpuIdEntry *cpuid;   		// CPUID entries, dynamically allocated must be freed by caller
-    size_t cpuid_count;
-
-    struct MsrEntry *msrs;      		// MSR entries, dynamically allocated must be freed by caller
-    size_t msr_count;
-
-    const struct MshvOps *mshv_ops;  	// Pointer to VM operations callbacks
-    int vm_fd;                  		// VM file descriptor
-} MshvVcpuMgns;
-
 typedef struct MshvVmMgns {
-    int fd;                     // VM file descriptor
-    uint64_t vm_type;           // Type of VM: 0 (normal), 1 (SNP)
-    // Add more fields as needed for future functionality
+    int fd;
 } MshvVmMgns;
 
 typedef struct MshvCreatePartitionArgsMgns {
@@ -154,6 +140,23 @@ typedef struct {
     } value;
 } DatamatchMgns;
 
+typedef struct DirtyLogSlotMgns {
+	uint64_t guest_pfn;
+	uint64_t memory_size;
+} DirtyLogSlotMgns;
+
+void init_dirty_log_slots_mgns(void);
+int set_dirty_log_slot_mgns(uint64_t guest_pfn, uint64_t memory_size);
+
+struct mshv_user_mem_region *make_user_memory_region_mgns(int fm_fd,
+														  uint32_t _slot,
+														  uint64_t guest_phys_addr,
+														  uint64_t memory_size,
+														  uint64_t userspace_addr,
+													      bool readonly,
+														  bool log_dirty_pages);
+int create_user_memory_region_mgns(int vm_fd, struct mshv_user_mem_region *region);
+
 void init_msicontrol_mgns(void);
 int set_msi_routing_mgns(uint32_t gsi, uint64_t addr, uint32_t data);
 int remove_msi_routing_mgns(uint32_t gsi);
@@ -195,7 +198,7 @@ int mshv_irqchip_add_irqfd_notifier_gsi(EventNotifier *n, EventNotifier *rn,
 int mshv_irqchip_remove_irqfd_notifier_gsi(EventNotifier *n, int virq);
 
 /* taken from github.com/rust-vmm/mshv-ioctls/src/ioctls/system.rs */
-static const uint32_t mgns_msr_list[] = {
+static const uint32_t msr_list_mgns[] = {
     IA32_MSR_TSC,
     IA32_MSR_EFER,
     IA32_MSR_KERNEL_GS_BASE,
@@ -262,6 +265,6 @@ static const uint32_t mgns_msr_list[] = {
 	HV_X64_MSR_EOM,
 };
 
-#define mgns_MSR_LIST_SIZE (sizeof(mgns_msr_list) / sizeof(mgns_msr_list[0]))
+#define MSR_LIST_SIZE_mgns (sizeof(msr_list_mgns) / sizeof(msr_list_mgns[0]))
 
 #endif

@@ -382,7 +382,7 @@ static int mshv_init(MachineState *ms)
 		// effect, we can make the fn return the PerVMInfo struct instead and
 		// store it ourselves
 		int vm_fd = create_vm_with_type_mgns(vm_type, mshv_fd);
-		mgns_create_mshvc_vm(vm_fd, mgns_msr_list, mgns_MSR_LIST_SIZE);
+		mgns_create_mshvc_vm(vm_fd, msr_list_mgns, MSR_LIST_SIZE_mgns);
 		s->vm = vm_fd;
     } while (!s->vm);
 
@@ -620,12 +620,11 @@ int create_vm_with_type_mgns(uint64_t vm_type, int mshv_fd) {
     /* Allocate and initialize MshvVm structure */
 	vm = g_new0(MshvVmMgns, 1);
     if (!vm) {
-        perror("[mgns] Failed to allocate memory for VM");
+        perror("[mgns] Failed to allocate memory for VM struct");
         close(mshv_fd);
         return -ENOMEM;
     }
     vm->fd = mshv_fd;
-    vm->vm_type = vm_type;
 
 	/* Create partition */
 	int ret = create_partition_mgns(mshv_fd);

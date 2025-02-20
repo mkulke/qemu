@@ -140,22 +140,34 @@ typedef struct {
     } value;
 } DatamatchMgns;
 
+// typedef struct MemoryRegionMgns {
+// 	uint64_t guest_phys_addr;
+// 	uint64_t memory_size;
+// 	uint64_t userspace_addr;
+// 	bool readonly;
+// } MemoryRegionMgns;
+typedef MshvMemoryRegion MemoryRegionMgns;
+
+typedef struct MemEntryMgns {
+	MemoryRegionMgns mr;
+	bool mapped;
+} MemEntryMgns;
+
+typedef struct MemManagerMgns {
+	GList *mem_entries;
+} MemManagerMgns;
+
 typedef struct DirtyLogSlotMgns {
 	uint64_t guest_pfn;
 	uint64_t memory_size;
 } DirtyLogSlotMgns;
 
 void init_dirty_log_slots_mgns(void);
+void init_mem_manager_mgns(void);
 int set_dirty_log_slot_mgns(uint64_t guest_pfn, uint64_t memory_size);
-
-struct mshv_user_mem_region *make_user_memory_region_mgns(int fm_fd,
-														  uint32_t _slot,
-														  uint64_t guest_phys_addr,
-														  uint64_t memory_size,
-														  uint64_t userspace_addr,
-													      bool readonly,
-														  bool log_dirty_pages);
-int create_user_memory_region_mgns(int vm_fd, struct mshv_user_mem_region *region);
+int remove_dirty_log_slot_mgns(uint64_t guest_pfn);
+int add_mem_mgns(int vm_fd, const MemoryRegionMgns *mr);
+int remove_mem_mgns(int vm_fd, const MemoryRegionMgns *mr);
 
 void init_msicontrol_mgns(void);
 int set_msi_routing_mgns(uint32_t gsi, uint64_t addr, uint32_t data);

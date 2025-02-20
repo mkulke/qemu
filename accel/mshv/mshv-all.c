@@ -81,6 +81,22 @@ void update_cpu_db_mgns(int vm_fd, MshvVmMgns *vm)
 	qemu_mutex_unlock(&cpu_db_mutex_mgns);
 }
 
+static int do_mshv_set_memory_mgns(const MemoryRegionMgns *mshv_mr, bool add)
+{
+    int ret = 0;
+
+    if (!mshv_mr) {
+        return -1;
+    }
+
+    trace_mshv_set_memory(add, mshv_mr->guest_phys_addr, mshv_mr->memory_size,
+                          mshv_mr->userspace_addr, mshv_mr->readonly, ret);
+    if (add) {
+        return add_mem_mgns(mshv_state->vm, mshv_mr);
+    }
+	return remove_mem_mgns(mshv_state->vm, mshv_mr);
+}
+
 static int do_mshv_set_memory(const MshvMemoryRegion *mshv_mr, bool add)
 {
     int ret = 0;
@@ -165,6 +181,7 @@ static int mshv_set_phys_mem(MshvMemoryListener *mml,
     mshv_mr->userspace_addr = (uint64_t)ram;
 
     ret = do_mshv_set_memory(mshv_mr, add);
+    ret = do_mshv_set_memory_mgns(mshv_mr, add);
     if (add && (ret == 17)) {
         // qemu may create a memory alias as rom.
         // However, mshv may not support the overlapped regions.
@@ -373,7 +390,11 @@ static int mshv_init(MachineState *ms)
 
 	// TODO: the naming of below fn is off
 	int mshv_fd = init_vm_db_mgns();
+	// irq
 	init_msicontrol_mgns();
+	// memory
+	init_mem_manager_mgns();
+	init_dirty_log_slots_mgns();
 
     // TODO: object_property_find(OBJECT(current_machine), "mshv-type")
     vm_type = 0;

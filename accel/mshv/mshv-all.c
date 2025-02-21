@@ -97,27 +97,6 @@ static int do_mshv_set_memory_mgns(const MemoryRegionMgns *mshv_mr, bool add)
 	return remove_mem_mgns(mshv_state->vm, mshv_mr);
 }
 
-static int do_mshv_set_memory(const MshvMemoryRegion *mshv_mr, bool add)
-{
-    int ret = 0;
-
-    if (!mshv_mr) {
-        return -1;
-    }
-
-    trace_mshv_set_memory(add, mshv_mr->guest_phys_addr, mshv_mr->memory_size,
-                          mshv_mr->userspace_addr, mshv_mr->readonly, ret);
-    if (add) {
-        ret = mshv_add_mem(mshv_state->vm, mshv_mr);
-    }
-
-    if (!add) {
-        ret = mshv_remove_mem(mshv_state->vm, mshv_mr);
-    }
-
-    return ret;
-}
-
 /*
  * Calculate and align the start address and the size of the section.
  * Return the size. If the size is 0, the aligned section is empty.
@@ -150,7 +129,8 @@ static int mshv_set_phys_mem(MshvMemoryListener *mml,
     bool writable = !area->readonly && !area->rom_device;
     hwaddr start_addr, mr_offset, size;
     void *ram;
-    MshvMemoryRegion tmp, *mshv_mr = &tmp;
+    /* MshvMemoryRegion tmp, *mshv_mr = &tmp; */
+    MemoryRegionMgns tmp, *mshv_mr = &tmp;
 
     if (!memory_region_is_ram(area)) {
         if (writable) {
@@ -180,7 +160,7 @@ static int mshv_set_phys_mem(MshvMemoryListener *mml,
     mshv_mr->readonly = !writable;
     mshv_mr->userspace_addr = (uint64_t)ram;
 
-    ret = do_mshv_set_memory(mshv_mr, add);
+    /* ret = do_mshv_set_memory(mshv_mr, add); */
     ret = do_mshv_set_memory_mgns(mshv_mr, add);
     if (add && (ret == 17)) {
         // qemu may create a memory alias as rom.
@@ -585,34 +565,6 @@ int initialize_vm_mgns(int vm_fd) {
 	return 0;
 }
 
-/* const struct mshv_root_hvcall *create_time_freeze_args_mgns(uint8_t freeze) { */
-/* 	if (freeze != 0 && freeze != 1) { */
-/* 		perror("[mshv] Invalid time freeze value"); */
-/* 		return NULL; */
-/* 	} */
-
-/* 	struct hv_input_set_partition_property *in; */
-/* 	in = g_new0(struct hv_input_set_partition_property, 1); */
-/* 	if (!in) { */
-/* 		perror("[mshv] Failed to allocate memory for root hvcall args"); */
-/* 		return NULL; */
-/* 	} */
-/* 	in->property_code = HV_PARTITION_PROPERTY_TIME_FREEZE; */
-/* 	in->property_value = freeze; */
-
-/* 	struct mshv_root_hvcall *args; */
-/* 	args = g_new0(struct mshv_root_hvcall, 1); */
-/* 	if (!args) { */
-/* 		perror("[mshv] Failed to allocate memory for root hvcall args"); */
-/* 		return NULL; */
-/* 	} */
-/* 	args->code = HVCALL_SET_PARTITION_PROPERTY; */
-/* 	args->in_sz = sizeof(*in); */
-/* 	args->in_ptr = (uint64_t)in; */
-
-/* 	return args; */
-/* } */
-
 int hvcall_mgns(int mshv_fd, const struct mshv_root_hvcall *args) {
 	int ret = 0;
 
@@ -837,7 +789,9 @@ static int mshv_cpu_exec(CPUState *cpu)
          */
         smp_rmb();
 
-        exit_reason = mshv_run_vcpu(mshv_vcpufd(cpu), &mshv_msg);
+        /* exit_reason = mshv_run_vcpu(mshv_vcpufd(cpu), &mshv_msg); */
+        exit_reason = mshv_run_vcpu(mshv_vcpufd(cpu), &mshv_msg,
+				                    find_by_gpa_mgns, map_overlapped_region_mgns);
 
         switch (exit_reason) {
         case Ignore:

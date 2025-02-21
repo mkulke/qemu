@@ -63,20 +63,20 @@ int remove_dirty_log_slot_mgns(uint64_t guest_pfn)
 
 static int set_guest_memory_mgns(int vm_fd, struct mshv_user_mem_region *region)
 {
-	printf("[mgns-qemu] set_guest_memory_mgns (disabled)\n");
+	printf("[mgns-qemu] set_guest_memory_mgns (enabled)\n");
 	printf("[mgns-qemu]   guest_pfn:      0x%08llx\n", region->guest_pfn); 
 	printf("[mgns-qemu]   size:           0x%08llx\n", region->size);
 	printf("[mgns-qemu]   userspace_addr: 0x%016llx\n", region->userspace_addr);
 	printf("[mgns-qemu]   rsvd:           skip\n");
 	printf("[mgns-qemu]   flags:          0x%04x\n", region->flags);
 
-	/* int ret; */
+	int ret;
 
-	/* ret = ioctl(vm_fd, MSHV_SET_GUEST_MEMORY, region); */
-	/* if (ret < 0) { */
-	/* 	perror("failed to set guest memory"); */
-	/* 	return errno; */
-	/* } */
+	ret = ioctl(vm_fd, MSHV_SET_GUEST_MEMORY, region);
+	if (ret < 0) {
+		perror("failed to set guest memory");
+		return errno;
+	}
 
 	return 0;
 }
@@ -143,6 +143,95 @@ static int map_or_unmap_mgns(int vm_fd, const MemoryRegionMgns *mr, bool add)
 
 	region.flags = (1 << MSHV_SET_MEM_BIT_UNMAP);
 	return remove_user_memory_region_mgns(vm_fd, &region);
+}
+
+
+bool find_by_gpa_mgns(uint64_t addr, size_t *index)
+{
+	MemEntryMgns *entry;
+	GList *entries;
+	size_t i = 0;
+
+	entries = mem_manager_mgns->mem_entries;
+	for(GList* elem = entries; elem != NULL; elem = elem->next) {
+		entry = elem->data;
+		if (entry->mr.guest_phys_addr <= addr
+			&& addr - entry->mr.guest_phys_addr < entry->mr.memory_size) {
+			*index = i;
+			return true;
+		}
+		i++;
+	}
+
+	return false;
+}
+
+static bool find_overlap_region_mgns(size_t gpa_idx, MemoryRegionMgns *mr, size_t *overlap_idx)
+{
+	MemEntryMgns *entry;
+	GList *entries;
+	size_t i = 0;
+
+	entries = mem_manager_mgns->mem_entries;
+	for(GList* elem = entries; elem != NULL; elem = elem->next) {
+		entry = elem->data;
+
+		if(i != gpa_idx
+			&& (entry->mr.userspace_addr < mr->userspace_addr + mr->memory_size)
+			&& (entry->mr.userspace_addr + entry->mr.memory_size > mr->userspace_addr)
+			&& entry->mapped) {
+			*overlap_idx = i;
+			return true;
+		}
+		i++;
+	}
+
+	return false;
+}
+
+bool map_overlapped_region_mgns(int vm_fd, uint64_t gpa)
+{
+	size_t gpa_idx, overlap_idx;
+	MemEntryMgns *gpa_entry, *overlap_entry;
+	int ret;
+
+	WITH_QEMU_LOCK_GUARD(&mem_manager_mutex_mgns) {
+		if (!find_by_gpa_mgns(gpa, &gpa_idx)) {
+			return false;
+		}
+		gpa_entry = g_list_nth_data(mem_manager_mgns->mem_entries, gpa_idx);
+		if (!gpa_entry) {
+			perror("unexpected error. failed to find mem entry");
+			abort();
+		}
+
+		if (!find_overlap_region_mgns(gpa_idx, &gpa_entry->mr, &overlap_idx)) {
+			return false;
+		}
+		if (gpa_idx == overlap_idx) {
+			perror("unexpected error. gpa_idx == overlap_idx");
+			abort();
+		}
+
+		// unmap overlap
+		overlap_entry = g_list_nth_data(mem_manager_mgns->mem_entries, overlap_idx);
+		ret = map_or_unmap_mgns(vm_fd, &overlap_entry->mr, false);
+		if (ret < 0) {
+			perror("failed to unmap overlap region");
+			abort();
+		}
+		overlap_entry->mapped = false;
+
+		// map gpa
+		ret = map_or_unmap_mgns(vm_fd, &gpa_entry->mr, true);
+		if (ret < 0) {
+			perror("failed to map gpa region");
+			abort();
+		}
+		gpa_entry->mapped = true;
+	}
+
+	return true;
 }
 
 static inline MemEntryMgns *find_mem_entry_mgns(GList *entries,

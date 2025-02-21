@@ -154,6 +154,7 @@ typedef struct MemEntryMgns {
 
 typedef struct MemManagerMgns {
 	GList *mem_entries;
+ 	QemuMutex mutex;
 } MemManagerMgns;
 
 typedef struct DirtyLogSlotMgns {

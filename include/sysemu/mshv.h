@@ -140,13 +140,12 @@ typedef struct {
     } value;
 } DatamatchMgns;
 
-// typedef struct MemoryRegionMgns {
-// 	uint64_t guest_phys_addr;
-// 	uint64_t memory_size;
-// 	uint64_t userspace_addr;
-// 	bool readonly;
-// } MemoryRegionMgns;
-typedef MshvMemoryRegion MemoryRegionMgns;
+typedef struct MemoryRegionMgns {
+	uint64_t guest_phys_addr;
+	uint64_t memory_size;
+	uint64_t userspace_addr;
+	bool readonly;
+} MemoryRegionMgns;
 
 typedef struct MemEntryMgns {
 	MemoryRegionMgns mr;
@@ -168,6 +167,8 @@ int set_dirty_log_slot_mgns(uint64_t guest_pfn, uint64_t memory_size);
 int remove_dirty_log_slot_mgns(uint64_t guest_pfn);
 int add_mem_mgns(int vm_fd, const MemoryRegionMgns *mr);
 int remove_mem_mgns(int vm_fd, const MemoryRegionMgns *mr);
+bool find_by_gpa_mgns(uint64_t addr, size_t *index);
+bool map_overlapped_region_mgns(int vm_fd, uint64_t gpa);
 
 void init_msicontrol_mgns(void);
 int set_msi_routing_mgns(uint32_t gsi, uint64_t addr, uint32_t data);

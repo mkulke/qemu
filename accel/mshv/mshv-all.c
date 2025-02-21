@@ -374,7 +374,6 @@ static int mshv_init(MachineState *ms)
 	init_msicontrol_mgns();
 	// memory
 	init_mem_manager_mgns();
-	init_dirty_log_slots_mgns();
 
     // TODO: object_property_find(OBJECT(current_machine), "mshv-type")
     vm_type = 0;

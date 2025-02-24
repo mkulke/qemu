@@ -126,6 +126,10 @@ enum hv_unimplemented_msr_action_mgns {
 #define HVCALL_SET_PARTITION_PROPERTY		0x0045
 #define HVCALL_ASSERT_VIRTUAL_INTERRUPT		0x0094
 
+enum mapping_errors_mgns {
+	MSHV_USERSPACE_ADDR_REMAP_ERROR = 2001,
+};
+
 typedef enum {
     DATAMATCH_NONE,
     DATAMATCH_U32,
@@ -168,7 +172,7 @@ int set_dirty_log_slot_mgns(uint64_t guest_pfn, uint64_t memory_size);
 int remove_dirty_log_slot_mgns(uint64_t guest_pfn);
 int add_mem_mgns(int vm_fd, const MemoryRegionMgns *mr);
 int remove_mem_mgns(int vm_fd, const MemoryRegionMgns *mr);
-bool find_by_gpa_mgns(uint64_t addr, size_t *index);
+bool find_entry_idx_by_gpa_mgns(uint64_t addr, size_t *index);
 bool map_overlapped_region_mgns(int vm_fd, uint64_t gpa);
 
 void init_msicontrol_mgns(void);

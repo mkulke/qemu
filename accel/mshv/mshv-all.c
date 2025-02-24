@@ -790,7 +790,7 @@ static int mshv_cpu_exec(CPUState *cpu)
 
 		/* TODO: that is not ideal, it's a stop-gap still cpu.rs is ported */
 		QemuMemoryManager qmm = {
-			.find_by_gpa = find_by_gpa_mgns,
+			.find_by_gpa = find_entry_idx_by_gpa_mgns,
 			.map_overlapped_region = map_overlapped_region_mgns,
 		};
         /* exit_reason = mshv_run_vcpu(mshv_vcpufd(cpu), &mshv_msg); */

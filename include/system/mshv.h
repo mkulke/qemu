@@ -167,8 +167,16 @@ typedef struct DirtyLogSlotMgns {
 	uint64_t memory_size;
 } DirtyLogSlotMgns;
 
+typedef struct PerCpuInfoMgns {
+	int vp_fd;
+	uint8_t vp_index;
+	MshvOps *ops;
+} PerCpuInfoMgns;
+
 /* cpu */
 void init_cpu_db_mgns(void);
+int new_vcpu_mgns(int mshv_fd, uint8_t vp_index, MshvOps *ops);
+void remove_vcpu_mgns(int mshv_fd);
 
 /* memory */
 void init_dirty_log_slots_mgns(void);

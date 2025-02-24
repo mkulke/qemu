@@ -10,6 +10,7 @@
 #include "qemu/accel.h"
 #include "qemu/log.h"
 #include "qemu/queue.h"
+#include <stdint.h>
 
 #ifdef COMPILING_PER_TARGET
 #ifdef CONFIG_MSHV
@@ -166,6 +167,10 @@ typedef struct DirtyLogSlotMgns {
 	uint64_t memory_size;
 } DirtyLogSlotMgns;
 
+/* cpu */
+void init_cpu_db_mgns(void);
+
+/* memory */
 void init_dirty_log_slots_mgns(void);
 void init_mem_manager_mgns(void);
 int set_dirty_log_slot_mgns(uint64_t guest_pfn, uint64_t memory_size);
@@ -175,6 +180,7 @@ int remove_mem_mgns(int vm_fd, const MemoryRegionMgns *mr);
 bool find_entry_idx_by_gpa_mgns(uint64_t addr, size_t *index);
 bool map_overlapped_region_mgns(int vm_fd, uint64_t gpa);
 
+/* interrupt */
 void init_msicontrol_mgns(void);
 int set_msi_routing_mgns(uint32_t gsi, uint64_t addr, uint32_t data);
 int remove_msi_routing_mgns(uint32_t gsi);
@@ -189,7 +195,7 @@ int register_irqfd_with_resample_mgns(int vm_fd, int event_fd, int resample_fd,
 									  uint32_t gsi);
 int unregister_irqfd_mgns(int vm_fd, int event_fd, uint32_t gsi);
 
-int init_vm_db_mgns(void);
+void init_vm_db_mgns(void);
 void update_vm_db_mgns(int vm_fd, MshvVmMgns *vm);
 MshvVmMgns *get_vm_from_db_mgns(int vm_fd);
 // dead fn

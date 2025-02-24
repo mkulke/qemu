@@ -34,13 +34,14 @@ static QemuMutex vm_db_mutex_mgns;
 static GHashTable *cpu_db_mgns;
 static QemuMutex cpu_db_mutex_mgns;
 
-// return /dev/mshv fd
-int init_vm_db_mgns(void) {
+void init_vm_db_mgns(void) {
 	trace_mgns_init_vm_db();
 
     vm_db_mgns = g_hash_table_new(g_direct_hash, g_direct_equal);
     qemu_mutex_init(&vm_db_mutex_mgns);
+}
 
+static int init_mshv_mgns(void) {
     // Open /dev/mshv device (hypervisor initialization)
     int mshv_fd = open("/dev/mshv", O_RDWR | O_CLOEXEC);
     if (mshv_fd < 0) {
@@ -360,6 +361,7 @@ static int mshv_init(MachineState *ms)
 {
     MshvState *s;
     uint64_t vm_type;
+	int mshv_fd, ret;
 
     s = MSHV_STATE(ms->accelerator);
 
@@ -368,8 +370,14 @@ static int mshv_init(MachineState *ms)
     mshv_new();
     s->vm = 0;
 
-	// TODO: the naming of below fn is off
-	int mshv_fd = init_vm_db_mgns();
+	init_vm_db_mgns();
+	ret = init_mshv_mgns();
+	if (ret < 0) {
+		return -errno;
+	}
+	mshv_fd = ret;
+	// cpu
+	init_cpu_db_mgns();	
 	// irq
 	init_msicontrol_mgns();
 	// memory

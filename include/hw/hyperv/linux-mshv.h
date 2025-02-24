@@ -145,8 +145,13 @@ struct mshv_create_partition {
 	__u64 pt_isolation;
 };
 
+struct mshv_create_vp {
+	__u32 vp_index;
+};
+
 /* /dev/mshv */
 #define MSHV_CREATE_PARTITION	_IOW(MSHV_IOCTL, 0x00, struct mshv_create_partition)
+#define MSHV_CREATE_VP			_IOW(MSHV_IOCTL, 0x01, struct mshv_create_vp)
 
 /* Partition fds created with MSHV_CREATE_PARTITION */
 #define MSHV_INITIALIZE_PARTITION	_IO(MSHV_IOCTL, 0x00)

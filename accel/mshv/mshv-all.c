@@ -515,6 +515,7 @@ static int mshv_init_vcpu(CPUState *cpu)
         .pio_write_fn = pio_write_fn,
     };
     cpu->accel = g_new0(AccelCPUState, 1);
+    mshv_vcpufd(cpu) = new_vcpu_mgns(mshv_state->vm, cpu->cpu_index, &mshv_ops);
     mshv_vcpufd(cpu) = mshv_new_vcpu(mshv_state->vm, cpu->cpu_index, &mshv_ops);
     cpu->vcpu_dirty = false;
 
@@ -765,6 +766,7 @@ int resume_vm_mgns(int vm_fd) {
 static int mshv_destroy_vcpu(CPUState *cpu)
 {
     mshv_remove_vcpu(mshv_vcpufd(cpu));
+    remove_vcpu_mgns(mshv_vcpufd(cpu));
     mshv_vcpufd(cpu) = 0;
     g_free(cpu->accel);
     return 0;

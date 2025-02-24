@@ -154,8 +154,6 @@ struct mshv_create_partition {
 #define MSHV_IRQFD					_IOW(MSHV_IOCTL, 0x03, struct mshv_user_irqfd)
 #define MSHV_IOEVENTFD			    _IOW(MSHV_IOCTL, 0x04, struct mshv_user_ioeventfd)
 #define MSHV_SET_MSI_ROUTING		_IOW(MSHV_IOCTL, 0x05, struct mshv_user_irq_table)
-// TODO: replace with MSHV_ROOT_HVCALL#ASSERT_VIRTUAL_INTERRUPT
-#define MSHV_ASSERT_INTERRUPT		_IOW(MSHV_IOCTL, 0xF1, struct mshv_assert_interrupt)
 
 /**
  * struct mshv_root_hvcall - arguments for MSHV_ROOT_HVCALL

@@ -18,7 +18,6 @@ static MemEntryMgns *find_entry_by_userspace_addr_mgns(uint64_t addr)
 {
 	MemEntryMgns *entry;
 	GList *entries;
-	size_t i = 0;
 
 	entries = mem_manager_mgns->mem_entries;
 	for(GList* elem = entries; elem != NULL; elem = elem->next) {
@@ -29,7 +28,6 @@ static MemEntryMgns *find_entry_by_userspace_addr_mgns(uint64_t addr)
 			&& entry->mapped) {
 			return entry;
 		}
-		i++;
 	}
 
 	return NULL;
@@ -45,7 +43,7 @@ static int set_guest_memory_mgns(int vm_fd, struct mshv_user_mem_region *region)
 			return -MSHV_USERSPACE_ADDR_REMAP_ERROR;
 		}
 		/* printf("[mgns-qemu] set_guest_memory_mgns\n"); */
-		/* printf("[mgns-qemu]   guest_pfn:      0x%08llx\n", region->guest_pfn); */ 
+		/* printf("[mgns-qemu]   guest_pfn:      0x%08llx\n", region->guest_pfn); */
 		/* printf("[mgns-qemu]   size:           0x%08llx\n", region->size); */
 		/* printf("[mgns-qemu]   userspace_addr: 0x%016llx\n", region->userspace_addr); */
 		/* printf("[mgns-qemu]   rsvd:           skip\n"); */

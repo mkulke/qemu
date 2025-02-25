@@ -377,7 +377,7 @@ static int mshv_init(MachineState *ms)
 	}
 	mshv_fd = ret;
 	// cpu
-	init_cpu_db_mgns();	
+	init_cpu_db_mgns();
 	// irq
 	init_msicontrol_mgns();
 	// memory

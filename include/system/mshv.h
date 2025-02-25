@@ -181,6 +181,11 @@ int get_vcpu_mgns(int cpufd,
                   struct StandardRegisters *raw_regs,
                   struct SpecialRegisters *raw_sregs,
                   struct FloatingPointUnit *raw_fpu);
+int configure_msr_mgns(int cpu_fd, msr_entry *msrs, size_t n_msrs);
+
+/* msr */
+int is_supported_msr_mgns(uint32_t msr);
+int msr_to_hv_reg_name_mgns(uint32_t msr, uint32_t *hv_reg);
 
 /* memory */
 void init_dirty_log_slots_mgns(void);

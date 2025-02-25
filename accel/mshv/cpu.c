@@ -8,58 +8,6 @@
 static GHashTable *cpu_db_mgns;
 static QemuMutex cpu_db_mutex_mgns;
 
-void init_cpu_db_mgns(void)
-{
-	cpu_db_mgns = g_hash_table_new(g_direct_hash, g_direct_equal);
-	qemu_mutex_init(&cpu_db_mutex_mgns);
-}
-
-static int create_vcpu_mgns(int vm_fd, uint8_t vp_index)
-{
-	/* int ret; */
-	/* struct mshv_create_vp vp_arg = { */
-	/* 	.vp_index = vp_index, */
-	/* }; */
-	/* ret = ioctl(vm_fd, MSHV_CREATE_VP, &vp_arg); */
-	/* if (ret < 0) { */
-	/* 	perror("failed to create vcpu"); */
-	/* 	return -errno; */
-	/* } */
-
-	/* return ret; */
-	printf("[mgns-qemu] skipped create_vcpu_mgns %d\n", vp_index);
-	return 0;
-}
-
-void remove_vcpu_mgns(int vcpu_fd)
-{
-	WITH_QEMU_LOCK_GUARD(&cpu_db_mutex_mgns) {
-		g_hash_table_remove(cpu_db_mgns, GUINT_TO_POINTER(vcpu_fd));
-	}
-}
-
-int new_vcpu_mgns(int mshv_fd, uint8_t vp_index, MshvOps *ops)
-{
-	int ret, vcpu_fd;
-
-	ret = create_vcpu_mgns(mshv_fd, vp_index);
-	if (ret < 0) {
-		return ret;
-	}
-	vcpu_fd = ret;
-
-	PerCpuInfoMgns *info = g_new0(PerCpuInfoMgns, 1);
-	info->vp_index = vp_index;
-	info->ops = ops;
-	info->vp_fd = vcpu_fd;
-
-	WITH_QEMU_LOCK_GUARD(&cpu_db_mutex_mgns) {
-		g_hash_table_insert(cpu_db_mgns, GUINT_TO_POINTER(vcpu_fd), info);
-	}
-
-	return 0;
-}
-
 static enum hv_register_name STANDARD_REGISTER_NAMES[18] = {
 	HV_X64_REGISTER_RAX,
 	HV_X64_REGISTER_RBX,
@@ -129,6 +77,57 @@ static enum hv_register_name FPU_REGISTER_NAMES[26] = {
 	HV_X64_REGISTER_FP_CONTROL_STATUS,
 	HV_X64_REGISTER_XMM_CONTROL_STATUS,
 };
+void init_cpu_db_mgns(void)
+{
+	cpu_db_mgns = g_hash_table_new(g_direct_hash, g_direct_equal);
+	qemu_mutex_init(&cpu_db_mutex_mgns);
+}
+
+static int create_vcpu_mgns(int vm_fd, uint8_t vp_index)
+{
+	/* int ret; */
+	/* struct mshv_create_vp vp_arg = { */
+	/* 	.vp_index = vp_index, */
+	/* }; */
+	/* ret = ioctl(vm_fd, MSHV_CREATE_VP, &vp_arg); */
+	/* if (ret < 0) { */
+	/* 	perror("failed to create vcpu"); */
+	/* 	return -errno; */
+	/* } */
+
+	/* return ret; */
+	printf("[mgns-qemu] skipped create_vcpu_mgns %d\n", vp_index);
+	return 0;
+}
+
+void remove_vcpu_mgns(int vcpu_fd)
+{
+	WITH_QEMU_LOCK_GUARD(&cpu_db_mutex_mgns) {
+		g_hash_table_remove(cpu_db_mgns, GUINT_TO_POINTER(vcpu_fd));
+	}
+}
+
+int new_vcpu_mgns(int mshv_fd, uint8_t vp_index, MshvOps *ops)
+{
+	int ret, vcpu_fd;
+
+	ret = create_vcpu_mgns(mshv_fd, vp_index);
+	if (ret < 0) {
+		return ret;
+	}
+	vcpu_fd = ret;
+
+	PerCpuInfoMgns *info = g_new0(PerCpuInfoMgns, 1);
+	info->vp_index = vp_index;
+	info->ops = ops;
+	info->vp_fd = vcpu_fd;
+
+	WITH_QEMU_LOCK_GUARD(&cpu_db_mutex_mgns) {
+		g_hash_table_insert(cpu_db_mgns, GUINT_TO_POINTER(vcpu_fd), info);
+	}
+
+	return 0;
+}
 
 inline static int get_generic_regs_mgns(int cpu_fd,
 										struct hv_register_assoc *assocs,
@@ -140,6 +139,18 @@ inline static int get_generic_regs_mgns(int cpu_fd,
 	};
 
 	return ioctl(cpu_fd, MSHV_GET_VP_REGISTERS, &input);
+}
+
+inline static int set_generic_regs_mgns(int cpu_fd,
+										struct hv_register_assoc *assocs,
+										size_t n_regs)
+{
+	struct mshv_vp_registers input = {
+		.count = n_regs,
+		.regs = assocs,
+	};
+
+	return ioctl(cpu_fd, MSHV_SET_VP_REGISTERS, &input);
 }
 
 inline static void populate_standard_regs_mgns(struct hv_register_assoc *assocs,
@@ -372,8 +383,58 @@ int get_vcpu_mgns(int cpu_fd,
 
 	return 0;
 }
-/* int get_reg_mgns(int vcpu_fd, struct hv_register_assoc *reg_assocs, size_t n_regs) */
-/* int get_regs_mgns(int vcpu_fd) */
-/* { */
-/* 	return 0; */
-/* } */
+
+static int set_msrs(int cpu_fd, GList *msrs)
+{
+	size_t n_msrs;
+	GList *entries;
+	msr_entry *entry;
+	enum hv_register_name name;
+	struct hv_register_assoc *assoc;
+	int ret;
+	size_t i = 0;
+
+	n_msrs = g_list_length(msrs);
+	struct hv_register_assoc *assocs = g_new0(struct hv_register_assoc, n_msrs);
+
+	entries = msrs;
+	for(GList* elem = entries; elem != NULL; elem = elem->next) {
+		entry = elem->data;
+		ret = msr_to_hv_reg_name_mgns(entry->index, &name);
+		if (ret < 0) {
+			g_free(assocs);
+			return ret;
+		}
+		assoc = &assocs[i];
+		assoc->name = name;
+		/* the union has be initialized to 0 */
+		assoc->value.reg64 = entry->data;
+		i++;
+	}
+	ret = set_generic_regs_mgns(cpu_fd, assocs, n_msrs);
+	g_free(assocs);
+	if (ret < 0) {
+		perror("failed to set msrs");
+		return -errno;
+	}
+	return 0;
+}
+
+int configure_msr_mgns(int cpu_fd, msr_entry *msrs, size_t n_msrs)
+{
+	GList *valid_msrs = NULL;
+	uint32_t msr_index;
+	int ret;
+
+	for (size_t i = 0; i < n_msrs; i++) {
+		msr_index = msrs[i].index;
+		/* check whether index of msrs is in SUPPORTED_MSRS */
+		if (is_supported_msr_mgns(msr_index)) {
+			valid_msrs = g_list_append(valid_msrs, &msrs[i]);
+		}
+	}
+
+	ret = set_msrs(cpu_fd, valid_msrs);
+	g_list_free(valid_msrs);
+	return ret;
+}

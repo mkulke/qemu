@@ -137,9 +137,11 @@ static struct msr_entry *mshv_msr_entry_add(struct MsrList *msrs,
 
 static int mshv_put_msrs(CPUState *cpu)
 {
+	int ret = 0;
     X86CPU *x86cpu = X86_CPU(cpu);
     CPUX86State *env = &x86cpu->env;
     struct MsrList *msrs = g_malloc0(sizeof(struct MsrList));
+
     mshv_msr_entry_add(msrs, MSR_IA32_SYSENTER_CS, env->sysenter_cs);
     mshv_msr_entry_add(msrs, MSR_IA32_SYSENTER_ESP, env->sysenter_esp);
     mshv_msr_entry_add(msrs, MSR_IA32_SYSENTER_EIP, env->sysenter_eip);
@@ -164,10 +166,10 @@ static int mshv_put_msrs(CPUState *cpu)
     mshv_msr_entry_add(msrs, MSR_IA32_SMBASE, env->smbase);
     mshv_msr_entry_add(msrs, MSR_IA32_SPEC_CTRL, env->spec_ctrl);
     mshv_msr_entry_add(msrs, MSR_VIRT_SSBD, env->virt_ssbd);
-    mshv_configure_msr(mshv_vcpufd(cpu), &msrs->entries[0], msrs->nmsrs);
+    /* mshv_configure_msr(mshv_vcpufd(cpu), &msrs->entries[0], msrs->nmsrs); */
+    ret = configure_msr_mgns(mshv_vcpufd(cpu), &msrs->entries[0], msrs->nmsrs);
     g_free(msrs);
-
-    return 0;
+    return ret;
 }
 
 int mshv_arch_put_registers(MshvState *mshv_state, CPUState *cpu)

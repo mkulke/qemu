@@ -61,7 +61,8 @@ static int mshv_getput_regs(MshvState *mshv_state, CPUState *cpu, bool set)
     int ret = 0;
 
     if (!set) {
-        mshv_get_vcpu(mshv_vcpufd(cpu), &regs, &sregs, &fpu);
+        /* mshv_get_cpu(mshv_vcpufd(cpu), &regs, &sregs, &fpu); */
+        get_vcpu_mgns(mshv_vcpufd(cpu), &regs, &sregs, &fpu);
     }
 
     mshv_getput_reg(&regs.rax, &env->regs[R_EAX], set);

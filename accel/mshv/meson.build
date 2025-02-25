@@ -3,6 +3,7 @@ mshv_ss.add(when: mshv, if_true: files(
   'cpu.c',
   'irq.c',
   'mem.c',
+  'msr.c',
   'mshv-all.c'
 ))
 

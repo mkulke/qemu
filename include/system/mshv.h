@@ -177,6 +177,10 @@ typedef struct PerCpuInfoMgns {
 void init_cpu_db_mgns(void);
 int new_vcpu_mgns(int mshv_fd, uint8_t vp_index, MshvOps *ops);
 void remove_vcpu_mgns(int mshv_fd);
+int get_vcpu_mgns(int cpufd,
+                  struct StandardRegisters *raw_regs,
+                  struct SpecialRegisters *raw_sregs,
+                  struct FloatingPointUnit *raw_fpu);
 
 /* memory */
 void init_dirty_log_slots_mgns(void);

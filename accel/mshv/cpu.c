@@ -30,7 +30,7 @@ static enum hv_register_name STANDARD_REGISTER_NAMES[18] = {
 	HV_X64_REGISTER_RFLAGS,
 };
 
-static enum hv_register_name SPECIAL_REGISTER_NAMES[17] = {
+static enum hv_register_name SPECIAL_REGISTER_NAMES[18] = {
 	HV_X64_REGISTER_CS,
 	HV_X64_REGISTER_DS,
 	HV_X64_REGISTER_ES,
@@ -48,6 +48,7 @@ static enum hv_register_name SPECIAL_REGISTER_NAMES[17] = {
 	HV_X64_REGISTER_CR8,
 	HV_X64_REGISTER_EFER,
 	HV_X64_REGISTER_APIC_BASE,
+	HV_REGISTER_PENDING_INTERRUPTION,
 };
 
 static enum hv_register_name FPU_REGISTER_NAMES[26] = {

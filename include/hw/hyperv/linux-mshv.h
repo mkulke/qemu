@@ -22,6 +22,9 @@
 #define MSHV_IOCTL	0xB8
 
 enum hv_register_name {
+	/* Pending Interruption Register */
+	HV_REGISTER_PENDING_INTERRUPTION = 0x00010002,
+
 	/* X64 User-Mode Registers */
 	HV_X64_REGISTER_RAX		= 0x00020000,
 	HV_X64_REGISTER_RCX		= 0x00020001,

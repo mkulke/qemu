@@ -1,6 +1,7 @@
 #include "qemu/osdep.h"
 #include "cpu.h"
 #include "sysemu/mshv.h"
+#include <qemu-mshv.h>
 
 static void set_seg(struct SegmentRegister *lhs, const SegmentCache *rhs)
 {
@@ -100,11 +101,23 @@ static int mshv_getput_regs(MshvState *mshv_state, CPUState *cpu, bool set)
         sregs.apic_base = cpu_get_apic_base(x86cpu->apic_state);
         memset(&sregs.interrupt_bitmap, 0, sizeof(sregs.interrupt_bitmap));
         memset(&fpu, 0, sizeof(fpu));
-        mshv_configure_vcpu(
-            mshv_vcpufd(cpu), cpu->cpu_index,
-            IS_AMD_CPU(env) ? AMD : (IS_INTEL_CPU(env) ? Intel : Unknown),
-            env->nr_dies, cpu->nr_cores / env->nr_dies, cpu->nr_threads, &regs,
-            &sregs, env->xcr0, &fpu);
+		mshv_set_cpuid_mgns(mshv_vcpufd(cpu),
+						    cpu->cpu_index,
+							IS_AMD_CPU(env) ? AMD : (IS_INTEL_CPU(env) ? Intel : Unknown),
+							env->nr_dies,
+							cpu->nr_cores / env->nr_dies,
+							cpu->nr_threads);
+		mshv_configure_vcpu_mgns(mshv_vcpufd(cpu),
+							     &regs,
+								 &sregs,
+								 env->xcr0,
+								 &fpu,
+								 (void*) *set_vcpu_mgns);
+        /* mshv_configure_vcpu( */
+        /*     mshv_vcpufd(cpu), cpu->cpu_index, */
+        /*     IS_AMD_CPU(env) ? AMD : (IS_INTEL_CPU(env) ? Intel : Unknown), */
+        /*     env->nr_dies, cpu->nr_cores / env->nr_dies, cpu->nr_threads, &regs, */
+        /*     &sregs, env->xcr0, &fpu); */
     } else {
         cpu_set_apic_tpr(x86cpu->apic_state, sregs.cr8);
         cpu_set_apic_base(x86cpu->apic_state, sregs.apic_base);

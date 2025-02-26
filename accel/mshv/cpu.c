@@ -278,14 +278,14 @@ static int get_standard_regs_mgns(int cpu_fd, struct StandardRegisters *regs)
 	return 0;
 }
 
-static int set_standard_regs_mgns(int cpu_fd, struct StandardRegisters *regs)
+static int set_standard_regs_mgns(int cpu_fd, const struct StandardRegisters *regs)
 {
 	struct hv_register_assoc *assocs;
 	size_t n_regs = sizeof(STANDARD_REGISTER_NAMES) / sizeof(enum hv_register_name);
 	int ret;
 
 	assocs = g_new0(struct hv_register_assoc, n_regs);
-	
+
 	/* set names */
 	for (size_t i = 0; i < n_regs; i++) {
 		assocs[i].name = STANDARD_REGISTER_NAMES[i];
@@ -315,7 +315,6 @@ static int set_standard_regs_mgns(int cpu_fd, struct StandardRegisters *regs)
 		perror("failed to set standard registers");
 		return -errno;
 	}
-	g_free(assocs);
 	return 0;
 }
 
@@ -340,7 +339,7 @@ static int get_special_regs_mgns(int cpu_fd, struct SpecialRegisters *regs)
 	return 0;
 }
 
-static void populate_hv_segment_reg_mgns(struct SegmentRegister *reg,
+static void populate_hv_segment_reg_mgns(const struct SegmentRegister *reg,
 								   	     struct hv_x64_segment_register *hv_reg)
 {
 	hv_reg->base = reg->base;
@@ -358,7 +357,7 @@ static void populate_hv_segment_reg_mgns(struct SegmentRegister *reg,
 	hv_reg->granularity = reg->g & 0x1;
 }
 
-static void populate_hv_table_reg_mgns(struct TableRegister *reg,
+static void populate_hv_table_reg_mgns(const struct TableRegister *reg,
  							   	       struct hv_x64_table_register *hv_reg)
 {
 	hv_reg->base = reg->base;
@@ -366,7 +365,7 @@ static void populate_hv_table_reg_mgns(struct TableRegister *reg,
 	memset(hv_reg->pad, 0, sizeof(hv_reg->pad));
 }
 
-static int set_special_regs_mgns(int cpu_fd, struct SpecialRegisters *regs)
+static int set_special_regs_mgns(int cpu_fd, const struct SpecialRegisters *regs)
 {
 	struct hv_register_assoc *assocs;
 	uint64_t bits;
@@ -374,7 +373,7 @@ static int set_special_regs_mgns(int cpu_fd, struct SpecialRegisters *regs)
 	int ret;
 
 	assocs = g_new0(struct hv_register_assoc, n_regs);
-	
+
 	/* set names */
 	for (size_t i = 0; i < n_regs; i++) {
 		assocs[i].name = SPECIAL_REGISTER_NAMES[i];
@@ -416,7 +415,6 @@ static int set_special_regs_mgns(int cpu_fd, struct SpecialRegisters *regs)
 		perror("failed to set special registers");
 		return -errno;
 	}
-	g_free(assocs);
 	return 0;
 }
 
@@ -484,7 +482,7 @@ static int get_fpu_regs_mgns(int cpu_fd, struct FloatingPointUnit *regs)
 	return 0;
 }
 
-static int set_fpu_regs_mgns(int cpu_fd, struct FloatingPointUnit *regs)
+static int set_fpu_regs_mgns(int cpu_fd, const struct FloatingPointUnit *regs)
 {
 	struct hv_register_assoc *assocs;
 	union hv_register_value *value;
@@ -509,7 +507,7 @@ static int set_fpu_regs_mgns(int cpu_fd, struct FloatingPointUnit *regs)
 		fp_i = (i - 16);
 		value = &assocs[i].value;
 		memcpy(&value->reg128, &regs->fpr[fp_i], 16);
-	}	
+	}
 
 	/* last two registers are fp_control_status and xmm_control_status */
 	assocs[24].name = FPU_REGISTER_NAMES[24];
@@ -535,7 +533,6 @@ static int set_fpu_regs_mgns(int cpu_fd, struct FloatingPointUnit *regs)
 		perror("failed to set fpu registers");
 		return -errno;
 	}
-	g_free(assocs);
 	return 0;
 }
 
@@ -556,9 +553,9 @@ static int set_xc_reg_mgns(int cpu_fd, uint64_t xcr0)
 }
 
 int set_vcpu_mgns(int cpu_fd,
-				  struct StandardRegisters *standard_regs,
-				  struct SpecialRegisters *special_regs,
-				  struct FloatingPointUnit *fpu_regs,
+				  const struct StandardRegisters *standard_regs,
+				  const struct SpecialRegisters *special_regs,
+				  const struct FloatingPointUnit *fpu_regs,
 				  uint64_t xcr0)
 {
 	int ret;
@@ -575,7 +572,12 @@ int set_vcpu_mgns(int cpu_fd,
 	if (ret < 0) {
 		return ret;
 	}
-	return set_xc_reg_mgns(cpu_fd, xcr0);
+	ret = set_xc_reg_mgns(cpu_fd, xcr0);
+	if (ret < 0) {
+		return ret;
+	}
+	printf("[mgns-qemu] set_vcpu_mgns() done\n");
+	return 0;
 }
 
 int get_vcpu_mgns(int cpu_fd,
@@ -601,7 +603,109 @@ int get_vcpu_mgns(int cpu_fd,
 	return 0;
 }
 
-static int set_msrs(int cpu_fd, GList *msrs)
+static int register_intercept_result_cpuid_entry(int cpu_fd,
+												 uint8_t subleaf_specific,
+												 uint8_t always_override,
+												 struct hv_cpuid_entry *entry)
+{
+	struct hv_register_x64_cpuid_result_parameters cpuid_params = {
+		.input.eax = entry->function,
+		.input.ecx = entry->index,
+		.input.subleaf_specific = subleaf_specific,
+		.input.always_override = always_override,
+		.input.padding = 0,
+		/* With regard to masks - these are to specify bits to be overwritten. */
+		/* The current CpuidEntry structure wouldn't allow to carry the masks */
+		/* in addition to the actual register values. For this reason, the */
+		/* masks are set to the exact values of the corresponding register bits */
+		/* to be registered for an overwrite. To view resulting values the */
+		/* hypervisor would return, HvCallGetVpCpuidValues hypercall can be used. */
+		.result.eax = entry->eax,
+		.result.eax_mask = entry->eax,
+		.result.ebx = entry->ebx,
+		.result.ebx_mask = entry->ebx,
+		.result.ecx = entry->ecx,
+		.result.ecx_mask = entry->ecx,
+		.result.edx = entry->edx,
+		.result.edx_mask = entry->edx,
+	};
+ 	union hv_register_intercept_result_parameters parameters = {
+		.cpuid = cpuid_params,
+	};
+	struct mshv_register_intercept_result args = {
+		.intercept_type = HV_INTERCEPT_TYPE_X64_CPUID,
+		.parameters = parameters,
+	};
+	int ret;
+
+	ret = ioctl(cpu_fd, MSHV_VP_REGISTER_INTERCEPT_RESULT, &args);
+	if (ret < 0) {
+		perror("failed to register intercept result for cpuid");
+		return -errno;
+	}
+
+	return 0;
+}
+
+static int register_intercept_result_cpuid(int cpu_fd, struct hv_cpuid *cpuid)
+{
+	int ret = 0, entry_ret;
+	struct hv_cpuid_entry *entry;
+	uint8_t subleaf_specific, always_override;
+
+	for (size_t i = 0; i < cpuid->nent; i++) {
+		entry = &cpuid->entries[i];
+
+		/* set defaults */
+		subleaf_specific = 0;
+		always_override = 1;
+
+		/* Intel */
+		/* 0xb - Extended Topology Enumeration Leaf */
+		/* 0x1f - V2 Extended Topology Enumeration Leaf */
+		/* AMD */
+		/* 0x8000_001e - Processor Topology Information */
+		/* 0x8000_0026 - Extended CPU Topology */
+		if (entry->function == 0xb
+			|| entry->function == 0x1f
+			|| entry->function == 0x8000001e
+			|| entry->function == 0x80000026) {
+			subleaf_specific = 1;
+			always_override = 1;
+		}
+		else if (entry->function == 0x00000001
+		    || entry->function == 0x80000000
+		    || entry->function == 0x80000001
+		    || entry->function == 0x80000008) {
+			subleaf_specific = 0;
+			always_override = 1;
+		}
+
+		entry_ret = register_intercept_result_cpuid_entry(cpu_fd,
+														  subleaf_specific,
+														  always_override,
+														  entry);
+		if ((entry_ret < 0) && (ret == 0)) {
+			ret = entry_ret;
+		}
+	}
+
+	return ret;
+}
+
+int set_cpuid2_mgns(int cpu_fd, struct hv_cpuid *cpuid)
+{
+	int ret;
+
+	ret = register_intercept_result_cpuid(cpu_fd, cpuid);
+	if (ret < 0) {
+		return ret;
+	}
+
+	return 0;
+}
+
+static int set_msrs_mgns(int cpu_fd, GList *msrs)
 {
 	size_t n_msrs;
 	GList *entries;
@@ -651,7 +755,7 @@ int configure_msr_mgns(int cpu_fd, msr_entry *msrs, size_t n_msrs)
 		}
 	}
 
-	ret = set_msrs(cpu_fd, valid_msrs);
+	ret = set_msrs_mgns(cpu_fd, valid_msrs);
 	g_list_free(valid_msrs);
 	return ret;
 }

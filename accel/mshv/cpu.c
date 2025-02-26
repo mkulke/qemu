@@ -2,6 +2,7 @@
 #include "qemu/osdep.h"
 #include "qemu/lockable.h"
 #include "sysemu/mshv.h"
+#include <qemu-mshv.h>
 #include <stdint.h>
 #include <sys/ioctl.h>
 
@@ -29,7 +30,7 @@ static enum hv_register_name STANDARD_REGISTER_NAMES[18] = {
 	HV_X64_REGISTER_RFLAGS,
 };
 
-static enum hv_register_name SPECIAL_REGISTER_NAMES[17] = {
+static enum hv_register_name SPECIAL_REGISTER_NAMES[18] = {
 	HV_X64_REGISTER_CS,
 	HV_X64_REGISTER_DS,
 	HV_X64_REGISTER_ES,
@@ -297,6 +298,62 @@ static int get_special_regs_mgns(int cpu_fd, struct SpecialRegisters *regs)
 	return 0;
 }
 
+static int set_special_regs_mgns(int cpu_fd, struct SpecialRegisters *regs)
+{
+	return 0;
+	/* struct hv_register_assoc *assocs; */
+	/* union hv_register_value *value; */
+	/* size_t n_regs = sizeof(SPECIAL_REGISTER_NAMES) / sizeof(enum hv_register_name); */
+	/* size_t fp_i; */
+	/* union hv_x64_fp_control_status_register *ctrl_status; */
+	/* union hv_x64_xmm_control_status_register *xmm_ctrl_status; */
+	/* int ret; */
+
+	/* assocs = g_new0(struct hv_register_assoc, n_regs); */
+
+	/* /1* first 16 registers are xmm0-xmm15 *1/ */
+	/* for (size_t i = 0; i < 16; i++) { */
+	/* 	assocs[i].name = FPU_REGISTER_NAMES[i]; */
+	/* 	value = &assocs[i].value; */
+	/* 	memcpy(&value->reg128, &regs->xmm[i], 16); */
+	/* } */
+
+	/* /1* next 8 registers are fp_mmx0-fp_mmx7 *1/ */
+	/* for (size_t i = 16; i < 24; i++) { */
+	/* 	assocs[i].name = FPU_REGISTER_NAMES[i]; */
+	/* 	fp_i = (i - 16); */
+	/* 	value = &assocs[i].value; */
+	/* 	memcpy(&value->reg128, &regs->fpr[fp_i], 16); */
+	/* } */	
+
+	/* /1* last two registers are fp_control_status and xmm_control_status *1/ */
+	/* assocs[24].name = FPU_REGISTER_NAMES[24]; */
+	/* value = &assocs[24].value; */
+	/* ctrl_status = &value->fp_control_status; */
+	/* ctrl_status->fp_control = regs->fcw; */
+	/* ctrl_status->fp_status = regs->fsw; */
+	/* ctrl_status->fp_tag = regs->ftwx; */
+	/* ctrl_status->reserved = 0; */
+	/* ctrl_status->last_fp_op = regs->last_opcode; */
+	/* ctrl_status->last_fp_rip = regs->last_ip; */
+
+	/* assocs[25].name = FPU_REGISTER_NAMES[25]; */
+	/* value = &assocs[25].value; */
+	/* xmm_ctrl_status = &value->xmm_control_status; */
+	/* xmm_ctrl_status->xmm_status_control = regs->mxcsr; */
+	/* xmm_ctrl_status->xmm_status_control_mask = 0; */
+	/* xmm_ctrl_status->last_fp_rdp = regs->last_dp; */
+
+	/* ret = set_generic_regs_mgns(cpu_fd, assocs, n_regs); */
+	/* g_free(assocs); */
+	/* if (ret < 0) { */
+	/* 	perror("failed to set fpu registers"); */
+	/* 	return -errno; */
+	/* } */
+	/* g_free(assocs); */
+	/* return 0; */
+}
+
 inline static void populate_fpu_regs_mgns(struct hv_register_assoc *assocs,
 										  struct FloatingPointUnit *fpu)
 {
@@ -359,6 +416,97 @@ static int get_fpu_regs_mgns(int cpu_fd, struct FloatingPointUnit *regs)
 	populate_fpu_regs_mgns(assocs, regs);
 	g_free(assocs);
 	return 0;
+}
+
+static int set_fpu_regs_mgns(int cpu_fd, struct FloatingPointUnit *regs)
+{
+	struct hv_register_assoc *assocs;
+	union hv_register_value *value;
+	size_t n_regs = sizeof(FPU_REGISTER_NAMES) / sizeof(enum hv_register_name);
+	size_t fp_i;
+	union hv_x64_fp_control_status_register *ctrl_status;
+	union hv_x64_xmm_control_status_register *xmm_ctrl_status;
+	int ret;
+
+	assocs = g_new0(struct hv_register_assoc, n_regs);
+
+	/* first 16 registers are xmm0-xmm15 */
+	for (size_t i = 0; i < 16; i++) {
+		assocs[i].name = FPU_REGISTER_NAMES[i];
+		value = &assocs[i].value;
+		memcpy(&value->reg128, &regs->xmm[i], 16);
+	}
+
+	/* next 8 registers are fp_mmx0-fp_mmx7 */
+	for (size_t i = 16; i < 24; i++) {
+		assocs[i].name = FPU_REGISTER_NAMES[i];
+		fp_i = (i - 16);
+		value = &assocs[i].value;
+		memcpy(&value->reg128, &regs->fpr[fp_i], 16);
+	}	
+
+	/* last two registers are fp_control_status and xmm_control_status */
+	assocs[24].name = FPU_REGISTER_NAMES[24];
+	value = &assocs[24].value;
+	ctrl_status = &value->fp_control_status;
+	ctrl_status->fp_control = regs->fcw;
+	ctrl_status->fp_status = regs->fsw;
+	ctrl_status->fp_tag = regs->ftwx;
+	ctrl_status->reserved = 0;
+	ctrl_status->last_fp_op = regs->last_opcode;
+	ctrl_status->last_fp_rip = regs->last_ip;
+
+	assocs[25].name = FPU_REGISTER_NAMES[25];
+	value = &assocs[25].value;
+	xmm_ctrl_status = &value->xmm_control_status;
+	xmm_ctrl_status->xmm_status_control = regs->mxcsr;
+	xmm_ctrl_status->xmm_status_control_mask = 0;
+	xmm_ctrl_status->last_fp_rdp = regs->last_dp;
+
+	ret = set_generic_regs_mgns(cpu_fd, assocs, n_regs);
+	g_free(assocs);
+	if (ret < 0) {
+		perror("failed to set fpu registers");
+		return -errno;
+	}
+	g_free(assocs);
+	return 0;
+}
+
+static int set_xc_reg_mgns(int cpu_fd, uint64_t xcr0)
+{
+	int ret;
+	struct hv_register_assoc assoc = {
+		.name = HV_X64_REGISTER_XFEM,
+		.value.reg64 = xcr0,
+	};
+
+	ret = set_generic_regs_mgns(cpu_fd, &assoc, 1);
+	if (ret < 0) {
+		perror("failed to set xcr");
+		return -errno;
+	}
+	return 0;
+}
+
+int set_vcpu_mgns(int cpu_fd,
+				  struct StandardRegisters *standard_regs,
+				  struct SpecialRegisters *special_regs,
+				  struct FloatingPointUnit *fpu_regs,
+				  uint64_t xcr0)
+{
+	int ret;
+
+	ret = set_special_regs_mgns(cpu_fd, special_regs);
+	if (ret < 0) {
+		return ret;
+	}
+
+	ret = set_fpu_regs_mgns(cpu_fd, fpu_regs);
+	if (ret < 0) {
+		return ret;
+	}
+	return set_xc_reg_mgns(cpu_fd, xcr0);
 }
 
 int get_vcpu_mgns(int cpu_fd,

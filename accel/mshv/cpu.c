@@ -29,7 +29,7 @@ static enum hv_register_name STANDARD_REGISTER_NAMES[18] = {
 	HV_X64_REGISTER_RFLAGS,
 };
 
-static enum hv_register_name SPECIAL_REGISTER_NAMES[18] = {
+static enum hv_register_name SPECIAL_REGISTER_NAMES[17] = {
 	HV_X64_REGISTER_CS,
 	HV_X64_REGISTER_DS,
 	HV_X64_REGISTER_ES,

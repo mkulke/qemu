@@ -18,6 +18,7 @@
 #define HW_HYPERV_LINUX_MSHV_H
 
 #include <linux/types.h>
+#include <stdint.h>
 
 #define MSHV_IOCTL	0xB8
 
@@ -196,6 +197,28 @@ enum hv_register_name {
 	HV_REGISTER_SIMP		= 0x000A0013,
 	HV_REGISTER_EOM			= 0x000A0014,
 	HV_REGISTER_SIRBP		= 0x000A0015,
+};
+
+enum hv_intercept_type {
+	HV_INTERCEPT_TYPE_X64_IO_PORT		= 0X00000000,
+	HV_INTERCEPT_TYPE_X64_MSR			= 0X00000001,
+	HV_INTERCEPT_TYPE_X64_CPUID			= 0X00000002,
+	HV_INTERCEPT_TYPE_EXCEPTION			= 0X00000003,
+
+	/* Used to be HV_INTERCEPT_TYPE_REGISTER */
+	HV_INTERCEPT_TYPE_RESERVED0			= 0X00000004,
+	HV_INTERCEPT_TYPE_MMIO				= 0X00000005,
+	HV_INTERCEPT_TYPE_X64_GLOBAL_CPUID	= 0X00000006,
+	HV_INTERCEPT_TYPE_X64_APIC_SMI		= 0X00000007,
+	HV_INTERCEPT_TYPE_HYPERCALL			= 0X00000008,
+
+	HV_INTERCEPT_TYPE_X64_APIC_INIT_SIPI		= 0X00000009,
+	HV_INTERCEPT_MC_UPDATE_PATCH_LEVEL_MSR_READ	= 0X0000000A,
+
+	HV_INTERCEPT_TYPE_X64_APIC_WRITE		= 0X0000000B,
+	HV_INTERCEPT_TYPE_X64_MSR_INDEX			= 0X0000000C,
+	HV_INTERCEPT_TYPE_MAX,
+	HV_INTERCEPT_TYPE_INVALID			    = 0XFFFFFFFF,
 };
 
 struct hv_u128 {
@@ -492,6 +515,42 @@ struct hv_input_assert_virtual_interrupt {
 	__u16 rsvd_z1;
 };
 
+struct hv_register_x64_cpuid_result_parameters {
+	struct {
+		__u32 eax;
+		__u32 ecx;
+		__u8 subleaf_specific;
+		__u8 always_override;
+		__u16 padding;
+	} input;
+	struct {
+		__u32 eax;
+		__u32 eax_mask;
+		__u32 ebx;
+		__u32 ebx_mask;
+		__u32 ecx;
+		__u32 ecx_mask;
+		__u32 edx;
+		__u32 edx_mask;
+	} result;
+};
+
+struct hv_register_x64_msr_result_parameters {
+	__u32 msr_index;
+	__u32 access_type;
+	__u32 action; /* enum hv_unimplemented_msr_action */
+};
+
+union hv_register_intercept_result_parameters {
+	struct hv_register_x64_cpuid_result_parameters cpuid;
+	struct hv_register_x64_msr_result_parameters msr;
+};
+
+struct mshv_register_intercept_result {
+	__u32 intercept_type; /* enum hv_intercept_type */
+	union hv_register_intercept_result_parameters parameters;
+};
+
 struct mshv_user_ioeventfd {
 	__u64 datamatch;
 	__u64 addr;	   /* legal pio/mmio address */
@@ -563,6 +622,9 @@ struct mshv_create_vp {
 #define MSHV_GET_VP_REGISTERS		_IOWR(MSHV_IOCTL, 0xF0, struct mshv_vp_registers)
 #define MSHV_SET_VP_REGISTERS		_IOW(MSHV_IOCTL, 0xF1, struct mshv_vp_registers)
 
+#define MSHV_VP_REGISTER_INTERCEPT_RESULT _IOW(MSHV_IOCTL, 0xF3, struct mshv_register_intercept_result)
+
+
 /**
  * struct mshv_root_hvcall - arguments for MSHV_ROOT_HVCALL
  * @code: Hypercall code (HVCALL_*)
@@ -617,6 +679,23 @@ struct mshv_root_hvcall {
 #define HV_X64_MSR_EOM				0x40000084
 
 /* From  github.com/rust-vmm/mshv-bindings/src/x86_64/regs.rs */
+
+struct hv_cpuid_entry {
+	uint32_t function;
+	uint32_t index;
+	uint32_t flags;
+	uint32_t eax;
+	uint32_t ebx;
+	uint32_t ecx;
+	uint32_t edx;
+	uint32_t padding[3];
+};
+
+struct hv_cpuid {
+	uint32_t nent;
+	uint32_t padding;
+	struct hv_cpuid_entry entries[0];
+};
 
 #define IA32_MSR_TSC 			0x00000010
 #define IA32_MSR_EFER 			0xC0000080

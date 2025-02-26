@@ -30,7 +30,7 @@ static enum hv_register_name STANDARD_REGISTER_NAMES[18] = {
 	HV_X64_REGISTER_RFLAGS,
 };
 
-static enum hv_register_name SPECIAL_REGISTER_NAMES[18] = {
+static enum hv_register_name SPECIAL_REGISTER_NAMES[17] = {
 	HV_X64_REGISTER_CS,
 	HV_X64_REGISTER_DS,
 	HV_X64_REGISTER_ES,
@@ -277,6 +277,47 @@ static int get_standard_regs_mgns(int cpu_fd, struct StandardRegisters *regs)
 	return 0;
 }
 
+static int set_standard_regs_mgns(int cpu_fd, struct StandardRegisters *regs)
+{
+	struct hv_register_assoc *assocs;
+	size_t n_regs = sizeof(STANDARD_REGISTER_NAMES) / sizeof(enum hv_register_name);
+	int ret;
+
+	assocs = g_new0(struct hv_register_assoc, n_regs);
+	
+	/* set names */
+	for (size_t i = 0; i < n_regs; i++) {
+		assocs[i].name = STANDARD_REGISTER_NAMES[i];
+	}
+	assocs[0].value.reg64 = regs->rax;
+	assocs[1].value.reg64 = regs->rbx;
+	assocs[2].value.reg64 = regs->rcx;
+	assocs[3].value.reg64 = regs->rdx;
+	assocs[4].value.reg64 = regs->rsi;
+	assocs[5].value.reg64 = regs->rdi;
+	assocs[6].value.reg64 = regs->rsp;
+	assocs[7].value.reg64 = regs->rbp;
+	assocs[8].value.reg64 = regs->r8;
+	assocs[9].value.reg64 = regs->r9;
+	assocs[10].value.reg64 = regs->r10;
+	assocs[11].value.reg64 = regs->r11;
+	assocs[12].value.reg64 = regs->r12;
+	assocs[13].value.reg64 = regs->r13;
+	assocs[14].value.reg64 = regs->r14;
+	assocs[15].value.reg64 = regs->r15;
+	assocs[16].value.reg64 = regs->rip;
+	assocs[17].value.reg64 = regs->rflags;
+
+	ret = set_generic_regs_mgns(cpu_fd, assocs, n_regs);
+	g_free(assocs);
+	if (ret < 0) {
+		perror("failed to set standard registers");
+		return -errno;
+	}
+	g_free(assocs);
+	return 0;
+}
+
 static int get_special_regs_mgns(int cpu_fd, struct SpecialRegisters *regs)
 {
 	size_t n_regs = sizeof(SPECIAL_REGISTER_NAMES) / sizeof(enum hv_register_name);
@@ -298,60 +339,84 @@ static int get_special_regs_mgns(int cpu_fd, struct SpecialRegisters *regs)
 	return 0;
 }
 
+static void populate_hv_segment_reg_mgns(struct SegmentRegister *reg,
+								   	     struct hv_x64_segment_register *hv_reg)
+{
+	hv_reg->base = reg->base;
+	hv_reg->limit = reg->limit;
+	hv_reg->selector = reg->selector;
+
+	hv_reg->segment_type = reg->type_ & 0xF;
+	hv_reg->non_system_segment = reg->s & 0x1;
+	hv_reg->descriptor_privilege_level = reg->dpl & 0x3;
+	hv_reg->present = reg->present & 0x1;
+	hv_reg->reserved = 0;
+	hv_reg->available = reg->avl & 0x1;
+	hv_reg->_long = reg->l & 0x1;
+	hv_reg->_default = reg->db & 0x1;
+	hv_reg->granularity = reg->g & 0x1;
+}
+
+static void populate_hv_table_reg_mgns(struct TableRegister *reg,
+ 							   	       struct hv_x64_table_register *hv_reg)
+{
+	hv_reg->base = reg->base;
+	hv_reg->limit = reg->limit;
+	memset(hv_reg->pad, 0, sizeof(hv_reg->pad));
+}
+
 static int set_special_regs_mgns(int cpu_fd, struct SpecialRegisters *regs)
 {
+	struct hv_register_assoc *assocs;
+	uint64_t bits;
+	size_t n_regs = sizeof(SPECIAL_REGISTER_NAMES) / sizeof(enum hv_register_name);
+	int ret;
+
+	assocs = g_new0(struct hv_register_assoc, n_regs);
+	
+	/* set names */
+	for (size_t i = 0; i < n_regs; i++) {
+		assocs[i].name = SPECIAL_REGISTER_NAMES[i];
+	}
+	populate_hv_segment_reg_mgns(&regs->cs, &assocs[0].value.segment);
+	populate_hv_segment_reg_mgns(&regs->ds, &assocs[1].value.segment);
+	populate_hv_segment_reg_mgns(&regs->es, &assocs[2].value.segment);
+	populate_hv_segment_reg_mgns(&regs->fs, &assocs[3].value.segment);
+	populate_hv_segment_reg_mgns(&regs->gs, &assocs[4].value.segment);
+	populate_hv_segment_reg_mgns(&regs->ss, &assocs[5].value.segment);
+	populate_hv_segment_reg_mgns(&regs->tr, &assocs[6].value.segment);
+	populate_hv_segment_reg_mgns(&regs->ldt, &assocs[7].value.segment);
+
+	populate_hv_table_reg_mgns(&regs->gdt, &assocs[8].value.table);
+	populate_hv_table_reg_mgns(&regs->idt, &assocs[9].value.table);
+
+	assocs[10].value.reg64 = regs->cr0;
+	assocs[11].value.reg64 = regs->cr2;
+	assocs[12].value.reg64 = regs->cr3;
+	assocs[13].value.reg64 = regs->cr4;
+	assocs[14].value.reg64 = regs->cr8;
+	assocs[15].value.reg64 = regs->efer;
+	assocs[16].value.reg64 = regs->apic_base;
+
+	/* TODO: support asserting an interrupt using interrup_bitmap
+	 * it should be possible if we use the vm_fd
+	 */
+	for (size_t i = 0; i < 4; i++) {
+		bits = regs->interrupt_bitmap[i];
+		if (bits) {
+			perror("asserting an interrupt is not supported");
+			return -EINVAL;
+		}
+	}
+
+	ret = set_generic_regs_mgns(cpu_fd, assocs, n_regs);
+	g_free(assocs);
+	if (ret < 0) {
+		perror("failed to set special registers");
+		return -errno;
+	}
+	g_free(assocs);
 	return 0;
-	/* struct hv_register_assoc *assocs; */
-	/* union hv_register_value *value; */
-	/* size_t n_regs = sizeof(SPECIAL_REGISTER_NAMES) / sizeof(enum hv_register_name); */
-	/* size_t fp_i; */
-	/* union hv_x64_fp_control_status_register *ctrl_status; */
-	/* union hv_x64_xmm_control_status_register *xmm_ctrl_status; */
-	/* int ret; */
-
-	/* assocs = g_new0(struct hv_register_assoc, n_regs); */
-
-	/* /1* first 16 registers are xmm0-xmm15 *1/ */
-	/* for (size_t i = 0; i < 16; i++) { */
-	/* 	assocs[i].name = FPU_REGISTER_NAMES[i]; */
-	/* 	value = &assocs[i].value; */
-	/* 	memcpy(&value->reg128, &regs->xmm[i], 16); */
-	/* } */
-
-	/* /1* next 8 registers are fp_mmx0-fp_mmx7 *1/ */
-	/* for (size_t i = 16; i < 24; i++) { */
-	/* 	assocs[i].name = FPU_REGISTER_NAMES[i]; */
-	/* 	fp_i = (i - 16); */
-	/* 	value = &assocs[i].value; */
-	/* 	memcpy(&value->reg128, &regs->fpr[fp_i], 16); */
-	/* } */	
-
-	/* /1* last two registers are fp_control_status and xmm_control_status *1/ */
-	/* assocs[24].name = FPU_REGISTER_NAMES[24]; */
-	/* value = &assocs[24].value; */
-	/* ctrl_status = &value->fp_control_status; */
-	/* ctrl_status->fp_control = regs->fcw; */
-	/* ctrl_status->fp_status = regs->fsw; */
-	/* ctrl_status->fp_tag = regs->ftwx; */
-	/* ctrl_status->reserved = 0; */
-	/* ctrl_status->last_fp_op = regs->last_opcode; */
-	/* ctrl_status->last_fp_rip = regs->last_ip; */
-
-	/* assocs[25].name = FPU_REGISTER_NAMES[25]; */
-	/* value = &assocs[25].value; */
-	/* xmm_ctrl_status = &value->xmm_control_status; */
-	/* xmm_ctrl_status->xmm_status_control = regs->mxcsr; */
-	/* xmm_ctrl_status->xmm_status_control_mask = 0; */
-	/* xmm_ctrl_status->last_fp_rdp = regs->last_dp; */
-
-	/* ret = set_generic_regs_mgns(cpu_fd, assocs, n_regs); */
-	/* g_free(assocs); */
-	/* if (ret < 0) { */
-	/* 	perror("failed to set fpu registers"); */
-	/* 	return -errno; */
-	/* } */
-	/* g_free(assocs); */
-	/* return 0; */
 }
 
 inline static void populate_fpu_regs_mgns(struct hv_register_assoc *assocs,
@@ -497,11 +562,14 @@ int set_vcpu_mgns(int cpu_fd,
 {
 	int ret;
 
+	ret = set_standard_regs_mgns(cpu_fd, standard_regs);
+	if (ret < 0) {
+		return ret;
+	}
 	ret = set_special_regs_mgns(cpu_fd, special_regs);
 	if (ret < 0) {
 		return ret;
 	}
-
 	ret = set_fpu_regs_mgns(cpu_fd, fpu_regs);
 	if (ret < 0) {
 		return ret;

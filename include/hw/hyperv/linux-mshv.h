@@ -624,6 +624,60 @@ struct mshv_create_vp {
 
 #define MSHV_VP_REGISTER_INTERCEPT_RESULT _IOW(MSHV_IOCTL, 0xF3, struct mshv_register_intercept_result)
 
+/*
+ ********************************
+ * VP APIs for child partitions *
+ ********************************
+ */
+
+enum {
+	MSHV_VP_STATE_LAPIC = 0,
+	MSHV_VP_STATE_XSAVE, /* XSAVE data in compacted form */
+	MSHV_VP_STATE_SIMP,
+	MSHV_VP_STATE_SIEFP,
+	MSHV_VP_STATE_SYNTHETIC_TIMERS,
+	MSHV_VP_STATE_COUNT,
+};
+
+struct mshv_get_set_vp_state {
+	__u8 type;	/* MSHV_VP_STATE_* */
+	__u8 rsvd[3];	/* MBZ */
+	__u32 buf_sz;	/* in - 4k page-aligned size of buffer.
+			 * out - actual size of data.
+			 * On EINVAL, check this to see if buffer was too small
+			 */
+	__u64 buf_ptr;	/* 4k page-aligned data buffer. */
+};
+
+struct hv_local_interrupt_controller_state {
+	/* HV_X64_INTERRUPT_CONTROLLER_STATE */
+	__u32 apic_id;
+	__u32 apic_version;
+	__u32 apic_ldr;
+	__u32 apic_dfr;
+	__u32 apic_spurious;
+	__u32 apic_isr[8];
+	__u32 apic_tmr[8];
+	__u32 apic_irr[8];
+	__u32 apic_esr;
+	__u32 apic_icr_high;
+	__u32 apic_icr_low;
+	__u32 apic_lvt_timer;
+	__u32 apic_lvt_thermal;
+	__u32 apic_lvt_perfmon;
+	__u32 apic_lvt_lint0;
+	__u32 apic_lvt_lint1;
+	__u32 apic_lvt_error;
+	__u32 apic_lvt_cmci;
+	__u32 apic_error_status;
+	__u32 apic_initial_count;
+	__u32 apic_counter_value;
+	__u32 apic_divide_configuration;
+	__u32 apic_remote_read;
+};
+
+#define MSHV_GET_VP_STATE		_IOWR(MSHV_IOCTL, 0x01, struct mshv_get_set_vp_state)
+#define MSHV_SET_VP_STATE		_IOWR(MSHV_IOCTL, 0x02, struct mshv_get_set_vp_state)
 
 /**
  * struct mshv_root_hvcall - arguments for MSHV_ROOT_HVCALL

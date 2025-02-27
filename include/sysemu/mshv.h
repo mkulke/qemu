@@ -187,7 +187,16 @@ int set_vcpu_mgns(int cpu_fd,
 				  const struct FloatingPointUnit *fpu_regs,
 				  uint64_t xcr0);
 int configure_msr_mgns(int cpu_fd, msr_entry *msrs, size_t n_msrs);
-int set_cpuid2_mgns(int cpu_fd, struct hv_cpuid *cpuid);
+int configure_vcpu_mgns(int cpu_fd,
+						uint8_t id,
+						enum MshvCpuVendor cpu_vendor,
+						uint8_t ndies,
+						uint8_t ncores_per_die,
+						uint8_t nthreads_per_core,
+						struct StandardRegisters *standard_regs,
+						struct SpecialRegisters *special_regs,
+						uint64_t xcr0,
+						struct FloatingPointUnit *fpu_regs);
 
 /* msr */
 int is_supported_msr_mgns(uint32_t msr);

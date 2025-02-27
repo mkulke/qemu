@@ -1,13 +1,24 @@
 #include "hw/hyperv/linux-mshv.h"
 #include "qemu/osdep.h"
 #include "qemu/lockable.h"
+#include "qemu/memalign.h"
 #include "sysemu/mshv.h"
 #include <qemu-mshv.h>
 #include <stdint.h>
 #include <sys/ioctl.h>
+#include <sys/types.h>
 
 static GHashTable *cpu_db_mgns;
 static QemuMutex cpu_db_mutex_mgns;
+
+/* MTRR constants */
+/* IA32_MTRR_DEF_TYPE MSR: E (MTRRs enabled) flag, bit 11 */
+static u_int64_t MTRR_ENABLE = 0x800;
+static u_int64_t MTRR_MEM_TYPE_WB = 0x6;
+
+/* Defines poached from apicdef.h kernel header. */
+static u_int32_t APIC_MODE_NMI = 0x4;
+static u_int32_t APIC_MODE_EXTINT = 0x7;
 
 static enum hv_register_name STANDARD_REGISTER_NAMES[18] = {
 	HV_X64_REGISTER_RAX,
@@ -693,7 +704,7 @@ static int register_intercept_result_cpuid(int cpu_fd, struct hv_cpuid *cpuid)
 	return ret;
 }
 
-int set_cpuid2_mgns(int cpu_fd, struct hv_cpuid *cpuid)
+static int set_cpuid2(int cpu_fd, struct hv_cpuid *cpuid)
 {
 	int ret;
 
@@ -701,6 +712,44 @@ int set_cpuid2_mgns(int cpu_fd, struct hv_cpuid *cpuid)
 	if (ret < 0) {
 		return ret;
 	}
+
+	return 0;
+}
+
+/* TODO: Note this function is still using the cpuid impl from mshv-c */
+static int set_cpuid2_mgns(int cpu_fd, struct CpuIdMgns *cpuid_mgns)
+{
+	int ret;
+	size_t n_entries = cpuid_mgns->len;
+    size_t cpuid_size = sizeof(struct hv_cpuid)
+		+ n_entries * sizeof(struct hv_cpuid_entry);
+	struct hv_cpuid *cpuid;
+	struct hv_cpuid_entry *entry;
+	struct CpuIdEntryMgns *mgns_entry;
+
+	cpuid = g_malloc0(cpuid_size);
+	cpuid->nent = n_entries;
+	cpuid->padding = 0;
+	for (size_t i = 0; i < n_entries; i++) {
+		mgns_entry = &cpuid_mgns->entries[i];
+		entry = &cpuid->entries[i];
+		entry->function = mgns_entry->function;
+		entry->index = mgns_entry->index;
+		entry->flags = mgns_entry->flags;
+		entry->eax = mgns_entry->eax;
+		entry->ebx = mgns_entry->ebx;
+		entry->ecx = mgns_entry->ecx;
+		entry->edx = mgns_entry->edx;
+		/* padding is covered, due to 0ing  */
+	}
+
+	ret = set_cpuid2(cpu_fd, cpuid);
+	g_free(cpuid);
+	if (ret < 0) {
+		return ret;
+	}
+
+	printf("[mgns-qemu] set_cpuid2_mgns2() done\n");
 
 	return 0;
 }
@@ -759,3 +808,205 @@ int configure_msr_mgns(int cpu_fd, msr_entry *msrs, size_t n_msrs)
 	g_list_free(valid_msrs);
 	return ret;
 }
+
+static int setup_msrs_mgns(int cpu_fd)
+{
+	int ret;
+	uint64_t default_type = MTRR_ENABLE | MTRR_MEM_TYPE_WB;
+
+	/* boot msr entries */
+    struct msr_entry msrs[9] = {
+		{ .index = IA32_MSR_SYSENTER_CS, .data = 0x0, },
+		{ .index = IA32_MSR_SYSENTER_ESP, .data = 0x0, },
+		{ .index = IA32_MSR_SYSENTER_EIP, .data = 0x0, },
+		{ .index = IA32_MSR_STAR, .data = 0x0, },
+		{ .index = IA32_MSR_CSTAR, .data = 0x0, },
+		{ .index = IA32_MSR_LSTAR, .data = 0x0, },
+		{ .index = IA32_MSR_KERNEL_GS_BASE, .data = 0x0, },
+		{ .index = IA32_MSR_SFMASK, .data = 0x0, },
+		{ .index = IA32_MSR_MTRR_DEF_TYPE, .data = default_type, },
+	};
+
+	ret = configure_msr_mgns(cpu_fd, msrs, 9);
+	if (ret < 0) {
+		perror("failed to setup msrs");
+		return ret;
+	}
+
+	printf("[mgns-qemu] setup_msrs_mgns() done\n");
+
+	return 0;
+}
+
+static int get_vp_state_mgns(int cpu_fd,
+		                     struct mshv_get_set_vp_state *state)
+{
+	int ret;
+
+	ret = ioctl(cpu_fd, MSHV_GET_VP_STATE, state);
+	if (ret < 0) {
+		perror("failed to get vp state");
+		return -errno;
+	}
+
+	return 0;
+}
+
+static int set_vp_state_mgns(int cpu_fd,
+		                     struct mshv_get_set_vp_state *state)
+{
+	int ret;
+
+	ret = ioctl(cpu_fd, MSHV_SET_VP_STATE, state);
+	if (ret < 0) {
+		perror("failed to set vp state");
+		return -errno;
+	}
+
+	return 0;
+}
+
+static int get_lapic(int cpu_fd, struct hv_local_interrupt_controller_state *lapic_state)
+{
+	int ret;
+	size_t size = 4096;
+	/* buffer aligned to 4k, as *state requires that */
+	void *buffer = qemu_memalign(size, size);
+	struct mshv_get_set_vp_state state = { 0 };
+
+	state.buf_ptr = (uint64_t) buffer;
+	state.buf_sz = size;
+	state.type = MSHV_VP_STATE_LAPIC;
+
+	ret = get_vp_state_mgns(cpu_fd, &state);
+	if (ret == 0) {
+		memcpy(lapic_state, buffer, sizeof(*lapic_state));
+	}
+	qemu_vfree(buffer);
+	if (ret < 0) {
+		perror("failed to get lapic");
+		return ret;
+	}
+
+	return 0;
+}
+
+static int set_lapic(int cpu_fd, struct hv_local_interrupt_controller_state *lapic_state)
+{
+
+	int ret;
+	size_t size = 4096;
+	/* buffer aligned to 4k, as *state requires that */
+	void *buffer = qemu_memalign(size, size);
+	struct mshv_get_set_vp_state state = { 0 };
+
+	assert(lapic_state);
+	memcpy(lapic_state, buffer, sizeof(*lapic_state));
+
+	state.buf_ptr = (uint64_t) buffer;
+	state.buf_sz = size;
+	state.type = MSHV_VP_STATE_LAPIC;
+
+	ret = set_vp_state_mgns(cpu_fd, &state);
+	qemu_vfree(buffer);
+	if (ret < 0) {
+		perror("failed to set lapic");
+		return ret;
+	}
+
+	return 0;
+}
+
+static uint32_t set_apic_delivery_mode(uint32_t reg, uint32_t mode)
+{
+	return ((reg) & ~0x700) | ((mode) << 8);
+}
+
+static int set_lint_mgns(int cpu_fd)
+{
+	int ret;
+	uint32_t *lvt_lint0, *lvt_lint1;
+
+	struct hv_local_interrupt_controller_state lapic_state = { 0 };
+	ret = get_lapic(cpu_fd, &lapic_state);
+	if (ret < 0) {
+		return ret;
+	}
+
+
+	lvt_lint0 = &lapic_state.apic_lvt_lint0;
+	printf("[mgns-qemu] set_lint() lapic.APIC_LVT0 before: %x\n", *lvt_lint0);
+	*lvt_lint0 = set_apic_delivery_mode(*lvt_lint0, APIC_MODE_EXTINT);
+	printf("                                       after:  %x\n", *lvt_lint0);
+
+	lvt_lint1 = &lapic_state.apic_lvt_lint1;
+	printf("[mgns-qemu] set_lint() lapic.APIC_LVT1 before: %x\n", *lvt_lint1);
+	*lvt_lint1 = set_apic_delivery_mode(*lvt_lint1, APIC_MODE_NMI);
+	printf("                                       after:  %x\n", *lvt_lint1);
+
+	/* TODO: should we skip setting lapic if the values are the same? */
+
+	ret = set_lapic(cpu_fd, &lapic_state);
+	if (ret < 0) {
+		return ret;
+	}
+
+	return 0;
+}
+
+int configure_vcpu_mgns(int cpu_fd,
+						uint8_t id,
+						enum MshvCpuVendor cpu_vendor,
+						uint8_t ndies,
+						uint8_t ncores_per_die,
+						uint8_t nthreads_per_core,
+						struct StandardRegisters *standard_regs,
+						struct SpecialRegisters *special_regs,
+						uint64_t xcr0,
+						struct FloatingPointUnit *fpu_regs)
+{
+	int ret;
+	struct CpuIdMgns *cpuid_mshvc;
+
+	/* TODO: we create the cpuid data in mshv-c for the time being
+	 * we need to port it or consolidate with existing qemu facilities */
+	cpuid_mshvc = create_cpuid_mgns(id,
+								    cpu_vendor,
+								    ndies,
+								    ncores_per_die / ndies,
+								    nthreads_per_core);
+	ret = set_cpuid2_mgns(cpu_fd, cpuid_mshvc);
+	mshv_free_cpuid_mgns(cpuid_mshvc);
+	if (ret < 0) {
+		perror("failed to set cpuid");
+		return ret;
+	}
+
+	ret = setup_msrs_mgns(cpu_fd);
+	if (ret < 0) {
+		perror("failed to setup msrs");
+		return ret;
+	}
+
+	/* TODO: original is setting lint twice, after setting msrs
+	 * should we do the same? */
+
+	ret = set_vcpu_mgns(cpu_fd,
+						standard_regs,
+						special_regs,
+						fpu_regs,
+						xcr0);
+	if (ret < 0) {
+		perror("failed to set vcpu registers");
+		return ret;
+	}
+
+	ret = set_lint_mgns(cpu_fd);
+	if (ret < 0) {
+		perror("failed to set lpic int");
+		return ret;
+	}
+
+	return 0;
+}
+

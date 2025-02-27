@@ -101,18 +101,21 @@ static int mshv_getput_regs(MshvState *mshv_state, CPUState *cpu, bool set)
         sregs.apic_base = cpu_get_apic_base(x86cpu->apic_state);
         memset(&sregs.interrupt_bitmap, 0, sizeof(sregs.interrupt_bitmap));
         memset(&fpu, 0, sizeof(fpu));
-		mshv_set_cpuid_mgns(mshv_vcpufd(cpu),
-						    cpu->cpu_index,
-							IS_AMD_CPU(env) ? AMD : (IS_INTEL_CPU(env) ? Intel : Unknown),
-							env->nr_dies,
-							cpu->nr_cores / env->nr_dies,
-							cpu->nr_threads);
-		mshv_configure_vcpu_mgns(mshv_vcpufd(cpu),
-							     &regs,
-								 &sregs,
-								 env->xcr0,
-								 &fpu,
-								 (void*) *set_vcpu_mgns);
+
+		int cpu_fd = mshv_vcpufd(cpu);
+		MshvCpuVendor vendor = IS_AMD_CPU(env)
+			? AMD
+			: (IS_INTEL_CPU(env) ? Intel : Unknown);
+		configure_vcpu_mgns(cpu_fd,
+							cpu->cpu_index,
+						    vendor,
+						    env->nr_dies,
+						    cpu->nr_cores / env->nr_dies,
+						    cpu->nr_threads,
+							&regs,
+							&sregs,
+							env->xcr0,
+							&fpu);
         /* mshv_configure_vcpu( */
         /*     mshv_vcpufd(cpu), cpu->cpu_index, */
         /*     IS_AMD_CPU(env) ? AMD : (IS_INTEL_CPU(env) ? Intel : Unknown), */

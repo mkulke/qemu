@@ -504,16 +504,17 @@ static int pio_write_fn(uint64_t port, const uint8_t *data, uintptr_t size,
     return ret;
 }
 
+static MshvOps mshv_ops = {
+	.guest_mem_write_fn = guest_mem_write_fn,
+	.guest_mem_read_fn = guest_mem_read_fn,
+	.mmio_read_fn = mmio_read_fn,
+	.mmio_write_fn = mmio_write_fn,
+	.pio_read_fn = pio_read_fn,
+	.pio_write_fn = pio_write_fn,
+};
+
 static int mshv_init_vcpu(CPUState *cpu)
 {
-    MshvOps mshv_ops = {
-        .guest_mem_write_fn = guest_mem_write_fn,
-        .guest_mem_read_fn = guest_mem_read_fn,
-        .mmio_read_fn = mmio_read_fn,
-        .mmio_write_fn = mmio_write_fn,
-        .pio_read_fn = pio_read_fn,
-        .pio_write_fn = pio_write_fn,
-    };
     cpu->accel = g_new0(AccelCPUState, 1);
 
 	int vm_fd = mshv_state->vm;
@@ -812,6 +813,7 @@ static int mshv_cpu_exec(CPUState *cpu)
 								    mshv_vcpufd(cpu),
 									cpu->cpu_index,
 									&mshv_msg,
+									&mshv_ops,
 									&qmm);
 
         switch (exit_reason) {

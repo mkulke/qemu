@@ -752,7 +752,7 @@ int pause_vm_mgns(int vm_fd) {
 
 
 int resume_vm_mgns(int vm_fd) {
-	int ret; 
+	int ret;
 
 	ret = set_time_freeze_mgns(vm_fd, 0);
 	if (ret < 0) {

@@ -142,7 +142,7 @@ static inline MemEntryMgns *find_mem_entry_mgns(GList *entries,
 }
 
 /* this is a port of mem_manager->add_del_mem. We have to see how we can consolidate
- * this. 
+ * this.
  * We can probably combine mshv_add_del_mem() + mem_manager->add_del_mem()
  * mem_memanager is protected is wholly guarded by a mutex in the rust code
  * We are doing the same with mem_entries
@@ -154,7 +154,7 @@ static int add_del_mem_mgns(int vm_fd, const MemoryRegionMgns *mr, bool add)
 	int ret;
 
 	/* printf("[mgns-qemu] === add_del_mem_mgns(): =========================\n"); */
-	
+
 	WITH_QEMU_LOCK_GUARD(&mem_manager_mgns->mutex) {
 		entries = mem_manager_mgns->mem_entries;
 		entry = find_mem_entry_mgns(entries, mr);

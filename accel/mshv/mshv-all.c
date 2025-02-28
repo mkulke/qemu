@@ -515,8 +515,12 @@ static int mshv_init_vcpu(CPUState *cpu)
         .pio_write_fn = pio_write_fn,
     };
     cpu->accel = g_new0(AccelCPUState, 1);
-    mshv_vcpufd(cpu) = new_vcpu_mgns(mshv_state->vm, cpu->cpu_index, &mshv_ops);
-    mshv_vcpufd(cpu) = mshv_new_vcpu(mshv_state->vm, cpu->cpu_index, &mshv_ops);
+
+	int vm_fd = mshv_state->vm;
+	uint8_t id = cpu->cpu_index;
+    mshv_vcpufd(cpu) = create_vcpu_mgns(vm_fd, id);
+	register_vcpu_mgns(vm_fd, mshv_vcpufd(cpu), id, &mshv_ops);
+    /* mshv_vcpufd(cpu) = mshv_new_vcpu(mshv_state->vm, cpu->cpu_index, &mshv_ops); */
     cpu->vcpu_dirty = false;
 
     return 0;

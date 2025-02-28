@@ -198,6 +198,7 @@ int configure_vcpu_mgns(int cpu_fd,
 						struct SpecialRegisters *special_regs,
 						uint64_t xcr0,
 						struct FloatingPointUnit *fpu_regs);
+int run_vcpu_mgns(int cpu_fd, struct hv_message *msg);
 
 /* msr */
 int is_supported_msr_mgns(uint32_t msr);

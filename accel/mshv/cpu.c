@@ -994,7 +994,7 @@ int configure_vcpu_mgns(int cpu_fd,
 		return ret;
 	}
 
-	/* TODO: original is setting lint twice, after setting msrs
+	/* TODO: mshv-c is setting lint twice, after setting msrs
 	 * should we do the same? */
 
 	ret = set_vcpu_mgns(cpu_fd,
@@ -1016,3 +1016,15 @@ int configure_vcpu_mgns(int cpu_fd,
 	return 0;
 }
 
+int run_vcpu_mgns(int cpu_fd, struct hv_message *msg)
+{
+	int ret;
+
+	ret = ioctl(cpu_fd, MSHV_RUN_VP, msg);
+	if (ret < 0) {
+		perror("failed to run vcpu");
+		return -errno;
+	}
+
+	return 0;
+}

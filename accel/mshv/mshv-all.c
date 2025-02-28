@@ -808,7 +808,11 @@ static int mshv_cpu_exec(CPUState *cpu)
 			.map_overlapped_region = map_overlapped_region_mgns,
 		};
         /* exit_reason = mshv_run_vcpu(mshv_vcpufd(cpu), &mshv_msg); */
-        exit_reason = mshv_run_vcpu(mshv_vcpufd(cpu), &mshv_msg, &qmm);
+        exit_reason = mshv_run_vcpu(mshv_state->vm,
+								    mshv_vcpufd(cpu),
+									cpu->cpu_index,
+									&mshv_msg,
+									&qmm);
 
         switch (exit_reason) {
         case Ignore:

@@ -676,6 +676,13 @@ struct hv_local_interrupt_controller_state {
 	__u32 apic_remote_read;
 };
 
+#define MSHV_RUN_VP_BUF_SZ 256
+
+struct mshv_run_vp {
+	__u8 msg_buf[MSHV_RUN_VP_BUF_SZ];
+};
+
+#define MSHV_RUN_VP			    _IOR(MSHV_IOCTL, 0x00, struct mshv_run_vp)
 #define MSHV_GET_VP_STATE		_IOWR(MSHV_IOCTL, 0x01, struct mshv_get_set_vp_state)
 #define MSHV_SET_VP_STATE		_IOWR(MSHV_IOCTL, 0x02, struct mshv_get_set_vp_state)
 
@@ -731,6 +738,45 @@ struct mshv_root_hvcall {
 #define HV_X64_MSR_SIMP				0x40000083
 #define HV_X64_MSR_REFERENCE_TSC	0x40000021
 #define HV_X64_MSR_EOM				0x40000084
+
+/* Define port identifier type. */
+union hv_port_id {
+	__u32 as__u32;
+	struct {
+		__u32 id : 24;
+		__u32 reserved : 8;
+	};
+};
+
+#define HV_MESSAGE_SIZE			        (256)
+#define HV_MESSAGE_PAYLOAD_BYTE_COUNT	(240)
+#define HV_MESSAGE_PAYLOAD_QWORD_COUNT	(30)
+
+union hv_message_flags {
+	__u8 asu8;
+	struct {
+		__u8 msg_pending : 1;
+		__u8 reserved : 7;
+	};
+};
+
+struct hv_message_header {
+	__u32 message_type;
+	__u8 payload_size;
+	union hv_message_flags message_flags;
+	__u8 reserved[2];
+	union {
+		__u64 sender;
+		union hv_port_id port;
+	};
+};
+
+struct hv_message {
+	struct hv_message_header header;
+	union {
+		__u64 payload[HV_MESSAGE_PAYLOAD_QWORD_COUNT];
+	} u;
+};
 
 /* From  github.com/rust-vmm/mshv-bindings/src/x86_64/regs.rs */
 

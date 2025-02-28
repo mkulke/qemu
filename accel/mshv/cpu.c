@@ -96,25 +96,31 @@ void init_cpu_db_mgns(void)
 	qemu_mutex_init(&cpu_db_mutex_mgns);
 }
 
-static int create_vcpu_mgns(int vm_fd, uint8_t vp_index)
+int create_vcpu_mgns(int vm_fd, uint8_t vp_index)
 {
-	/* int ret; */
-	/* struct mshv_create_vp vp_arg = { */
-	/* 	.vp_index = vp_index, */
-	/* }; */
-	/* ret = ioctl(vm_fd, MSHV_CREATE_VP, &vp_arg); */
-	/* if (ret < 0) { */
-	/* 	perror("failed to create vcpu"); */
-	/* 	return -errno; */
-	/* } */
+	int ret;
+	struct mshv_create_vp vp_arg = {
+		.vp_index = vp_index,
+	};
+	ret = ioctl(vm_fd, MSHV_CREATE_VP, &vp_arg);
+	if (ret < 0) {
+		perror("failed to create vcpu");
+		return -errno;
+	}
 
-	/* return ret; */
-	printf("[mgns-qemu] skipped create_vcpu_mgns %d\n", vp_index);
-	return 0;
+	printf("[mgns-qemu] created vcpu %d\n", vp_index);
+
+	return ret;
+	/* printf("[mgns-qemu] skipped create_vcpu_mgns %d\n", vp_index); */
+	/* return 0; */
 }
 
 void remove_vcpu_mgns(int vcpu_fd)
 {
+	/* TODO: don't we have to perform an ioctl to remove the vcpu?
+	 * there is WHvDeleteVirtualProcessor in the WHV api
+	 * */
+
 	WITH_QEMU_LOCK_GUARD(&cpu_db_mutex_mgns) {
 		g_hash_table_remove(cpu_db_mgns, GUINT_TO_POINTER(vcpu_fd));
 	}

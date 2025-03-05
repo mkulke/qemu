@@ -752,6 +752,120 @@ union hv_port_id {
 #define HV_MESSAGE_PAYLOAD_BYTE_COUNT	(240)
 #define HV_MESSAGE_PAYLOAD_QWORD_COUNT	(30)
 
+/* Define hypervisor message types. */
+enum hv_message_type {
+	HVMSG_NONE							= 0x00000000,
+
+	/* Memory access messages. */
+	HVMSG_UNMAPPED_GPA					= 0x80000000,
+	HVMSG_GPA_INTERCEPT					= 0x80000001,
+	HVMSG_UNACCEPTED_GPA				= 0x80000003,
+	HVMSG_GPA_ATTRIBUTE_INTERCEPT		= 0x80000004,
+
+	/* Timer notification messages. */
+	HVMSG_TIMER_EXPIRED					= 0x80000010,
+
+	/* Error messages. */
+	HVMSG_INVALID_VP_REGISTER_VALUE		= 0x80000020,
+	HVMSG_UNRECOVERABLE_EXCEPTION		= 0x80000021,
+	HVMSG_UNSUPPORTED_FEATURE			= 0x80000022,
+
+	/*
+	 * Opaque intercept message. The original intercept message is only
+	 * accessible from the mapped intercept message page.
+	 */
+	HVMSG_OPAQUE_INTERCEPT				= 0x8000003F,
+
+	/* Trace buffer complete messages. */
+	HVMSG_EVENTLOG_BUFFERCOMPLETE		= 0x80000040,
+
+	/* Hypercall intercept */
+	HVMSG_HYPERCALL_INTERCEPT			= 0x80000050,
+
+	/* SynIC intercepts */
+	HVMSG_SYNIC_EVENT_INTERCEPT			= 0x80000060,
+	HVMSG_SYNIC_SINT_INTERCEPT			= 0x80000061,
+	HVMSG_SYNIC_SINT_DELIVERABLE		= 0x80000062,
+
+	/* Async call completion intercept */
+	HVMSG_ASYNC_CALL_COMPLETION			= 0x80000070,
+
+	/* Root scheduler messages */
+	HVMSG_SCHEDULER_VP_SIGNAL_BITSE		= 0x80000100,
+	HVMSG_SCHEDULER_VP_SIGNAL_PAIR		= 0x80000101,
+
+	/* Platform-specific processor intercept messages. */
+	HVMSG_X64_IO_PORT_INTERCEPT			= 0x80010000,
+	HVMSG_X64_MSR_INTERCEPT				= 0x80010001,
+	HVMSG_X64_CPUID_INTERCEPT			= 0x80010002,
+	HVMSG_X64_EXCEPTION_INTERCEPT		= 0x80010003,
+	HVMSG_X64_APIC_EOI					= 0x80010004,
+	HVMSG_X64_LEGACY_FP_ERROR			= 0x80010005,
+	HVMSG_X64_IOMMU_PRQ					= 0x80010006,
+	HVMSG_X64_HALT						= 0x80010007,
+	HVMSG_X64_INTERRUPTION_DELIVERABLE	= 0x80010008,
+	HVMSG_X64_SIPI_INTERCEPT			= 0x80010009,
+	HVMSG_X64_SEV_VMGEXIT_INTERCEPT		= 0x80010013,
+};
+
+union hv_x64_vp_execution_state {
+	__u16 as_uint16;
+	struct {
+		__u16 cpl:2;
+		__u16 cr0_pe:1;
+		__u16 cr0_am:1;
+		__u16 efer_lma:1;
+		__u16 debug_active:1;
+		__u16 interruption_pending:1;
+		__u16 vtl:4;
+		__u16 enclave_mode:1;
+		__u16 interrupt_shadow:1;
+		__u16 virtualization_fault_active:1;
+		__u16 reserved:2;
+	};
+};
+
+/* From openvmm::hvdef */
+enum hv_x64_intercept_type {
+	HV_X64_INTERCEPT_TYPE_READ = 0,
+	HV_X64_INTERCEPT_TYPE_WRITE = 1,
+	HV_X64_INTERCEPT_TYPE_EXECUTE = 2,
+};
+
+struct hv_x64_intercept_message_header {
+	__u32 vp_index;
+	__u8 instruction_length:4;
+	__u8 cr8:4; /* Only set for exo partitions */
+	__u8 intercept_access_type;
+	union hv_x64_vp_execution_state execution_state;
+	struct hv_x64_segment_register cs_segment;
+	__u64 rip;
+	__u64 rflags;
+};
+
+union hv_x64_memory_access_info {
+	__u8 as_uint8;
+	struct {
+		__u8 gva_valid:1;
+		__u8 gva_gpa_valid:1;
+		__u8 hypercall_output_pending:1;
+		__u8 tlb_locked_no_overlay:1;
+		__u8 reserved:4;
+	};
+};
+
+struct hv_x64_memory_intercept_message {
+	struct hv_x64_intercept_message_header header;
+	__u32 cache_type; /* enum hv_cache_type */
+	__u8 instruction_byte_count;
+	union hv_x64_memory_access_info memory_access_info;
+	__u8 tpr_priority;
+	__u8 reserved1;
+	__u64 guest_virtual_address;
+	__u64 guest_physical_address;
+	__u8 instruction_bytes[16];
+};
+
 union hv_message_flags {
 	__u8 asu8;
 	struct {

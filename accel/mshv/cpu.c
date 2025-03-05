@@ -148,9 +148,9 @@ int new_vcpu_mgns(int mshv_fd, uint8_t vp_index, MshvOps *ops)
 	return 0;
 }
 
-inline static int get_generic_regs_mgns(int cpu_fd,
-										struct hv_register_assoc *assocs,
-										size_t n_regs)
+static int get_generic_regs_mgns(int cpu_fd,
+								 struct hv_register_assoc *assocs,
+								 size_t n_regs)
 {
 	struct mshv_vp_registers input = {
 		.count = n_regs,
@@ -196,28 +196,39 @@ inline static void populate_standard_regs_mgns(struct hv_register_assoc *assocs,
 	regs->rflags = assocs[17].value.reg64;
 }
 
-inline static void populate_segment_reg_mgns(struct hv_x64_segment_register *hv_seg,
+inline static void populate_segment_reg_mgns(const struct hv_x64_segment_register *hv_seg,
 											 struct SegmentRegister *seg)
 {
-	*seg = (struct SegmentRegister){0};
+	memset(seg, 0, sizeof(struct SegmentRegister));
 
 	seg->base = hv_seg->base;
 	seg->limit = hv_seg->limit;
 	seg->selector = hv_seg->selector;
 	seg->unusable = 0;
 	seg->padding = 0;
+
+	seg->type_ = hv_seg->segment_type;
+	seg->present = hv_seg->present;
+	seg->dpl = hv_seg->descriptor_privilege_level;
+	seg->db = hv_seg->_default;
+	seg->s = hv_seg->non_system_segment;
+	seg->l = hv_seg->_long;
+	seg->g = hv_seg->granularity;
+	seg->avl = hv_seg->available;
+
 }
 
-inline static void populate_table_reg_mgns(struct hv_x64_segment_register *hv_seg,
-										   struct TableRegister *seg)
+inline static void populate_table_reg_mgns(const struct hv_x64_table_register *hv_seg,
+										   struct TableRegister *reg)
 {
-	*seg = (struct TableRegister){0};
+	memset(reg, 0, sizeof(TableRegister));
 
-	seg->base = hv_seg->base;
-	seg->limit = hv_seg->limit;
+	reg->base = hv_seg->base;
+	reg->limit = hv_seg->limit;
 }
 
-inline static void populate_interrupt_bitmap_mgns(uint64_t pending_reg, uint64_t *bitmap)
+static void populate_interrupt_bitmap_mgns(uint64_t pending_reg,
+		                                   uint64_t *bitmap)
 {
 	uint64_t interrupt_nr;
 	/* TODO: early exit */
@@ -243,8 +254,8 @@ inline static void populate_interrupt_bitmap_mgns(uint64_t pending_reg, uint64_t
 	}
 }
 
-inline static void populate_special_regs_mgns(struct hv_register_assoc *assocs,
-										      struct SpecialRegisters *regs)
+static void populate_special_regs_mgns(const struct hv_register_assoc *assocs,
+									   struct SpecialRegisters *regs)
 {
 	uint64_t pending_reg;
 
@@ -257,8 +268,8 @@ inline static void populate_special_regs_mgns(struct hv_register_assoc *assocs,
 	populate_segment_reg_mgns(&assocs[6].value.segment, &regs->tr);
 	populate_segment_reg_mgns(&assocs[7].value.segment, &regs->ldt);
 
-	populate_table_reg_mgns(&assocs[8].value.segment, &regs->gdt);
-	populate_table_reg_mgns(&assocs[9].value.segment, &regs->idt);
+	populate_table_reg_mgns(&assocs[8].value.table, &regs->gdt);
+	populate_table_reg_mgns(&assocs[9].value.table, &regs->idt);
 
 	regs->cr0	  	= assocs[10].value.reg64;
 	regs->cr2	  	= assocs[11].value.reg64;
@@ -272,7 +283,7 @@ inline static void populate_special_regs_mgns(struct hv_register_assoc *assocs,
 	populate_interrupt_bitmap_mgns(pending_reg, regs->interrupt_bitmap);
 }
 
-static int get_standard_regs_mgns(int cpu_fd, struct StandardRegisters *regs)
+int get_standard_regs_mgns(int cpu_fd, struct StandardRegisters *regs)
 {
 	size_t n_regs = sizeof(STANDARD_REGISTER_NAMES) / sizeof(enum hv_register_name);
 	struct hv_register_assoc *assocs;
@@ -291,6 +302,7 @@ static int get_standard_regs_mgns(int cpu_fd, struct StandardRegisters *regs)
 	}
 
 	populate_standard_regs_mgns(assocs, regs);
+
 	g_free(assocs);
 	return 0;
 }
@@ -351,7 +363,30 @@ static int get_special_regs_mgns(int cpu_fd, struct SpecialRegisters *regs)
 		g_free(assocs);
 		return -errno;
 	}
+
+	/* size_t size = sizeof(struct hv_register_assoc) * n_regs; */
+	/* printf("[mgns-qemu] hv_register_assoc w/ size %zu", size); */
+	/* for (size_t i = 0; i < size; i++) { */
+	/* 	if (i % 16 == 0) { */
+	/* 		printf("\n"); */
+	/* 	} */
+	/* 	printf("%02x ", ((uint8_t *)assocs)[i]); */
+	/* } */
+	/* printf("\n"); */
+
 	populate_special_regs_mgns(assocs, regs);
+
+	/* size = sizeof(struct SpecialRegisters); */
+	/* printf("[mgns-qemu] regs w/ size %zu", size); */
+	/* // print 16 bytes in hex every line */
+	/* for (size_t i = 0; i < size; i++) { */
+	/* 	if (i % 16 == 0) { */
+	/* 		printf("\n"); */
+	/* 	} */
+	/* 	printf("%02x ", ((uint8_t *)assocs)[i]); */
+	/* } */
+	/* printf("\n"); */
+
 	g_free(assocs);
 	return 0;
 }
@@ -1016,15 +1051,66 @@ int configure_vcpu_mgns(int cpu_fd,
 	return 0;
 }
 
-int run_vcpu_mgns(int cpu_fd, struct hv_message *msg)
+int set_cpu_state_mgns(int cpu_fd,
+		 	           const StandardRegisters *standard_regs,
+					   const SpecialRegisters *special_regs)
 {
 	int ret;
 
-	ret = ioctl(cpu_fd, MSHV_RUN_VP, msg);
+	ret = set_standard_regs_mgns(cpu_fd, standard_regs);
 	if (ret < 0) {
-		perror("failed to run vcpu");
-		return -errno;
+		perror("failed to set standard registers");
+		return ret;
 	}
 
+	ret = set_special_regs_mgns(cpu_fd, special_regs);
+	if (ret < 0) {
+		perror("failed to set special registers");
+		return ret;
+	}
+
+	return 0;
+}
+
+int get_cpu_state_mgns(int cpu_fd,
+					   StandardRegisters *standard_regs,
+					   SpecialRegisters *special_regs)
+{
+
+	int ret;
+
+	ret = get_standard_regs_mgns(cpu_fd, standard_regs);
+	if (ret < 0) {
+		perror("failed to get cpu state");
+		return ret;
+	}
+
+	ret = get_special_regs_mgns(cpu_fd, special_regs);
+	if (ret < 0) {
+		perror("failed to get cpu state");
+		return ret;
+	}
+
+	return 0;
+}
+
+int set_x64_registers_mgns(int cpu_fd, const struct X64Registers *regs)
+{
+	size_t n_regs = regs->count;
+	struct hv_register_assoc *assocs;
+
+	assocs = g_new0(struct hv_register_assoc, n_regs);
+	for (size_t i = 0; i < n_regs; i++) {
+		assocs[i].name = regs->names[i];
+		assocs[i].value.reg64 = regs->values[i];
+	}
+	int ret;
+
+	ret = set_generic_regs_mgns(cpu_fd, assocs, n_regs);
+	g_free(assocs);
+	if (ret < 0) {
+		perror("failed to set X64 registers");
+		return -errno;
+	}
 	return 0;
 }

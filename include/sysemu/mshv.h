@@ -174,6 +174,12 @@ typedef struct PerCpuInfoMgns {
 } PerCpuInfoMgns;
 
 /* cpu */
+
+typedef struct CpuStateMgns {
+	StandardRegisters standard_regs;
+	SpecialRegisters special_regs;
+} CpuStateMgns;
+
 void init_cpu_db_mgns(void);
 int new_vcpu_mgns(int mshv_fd, uint8_t vp_index, MshvOps *ops);
 int create_vcpu_mgns(int vm_fd, uint8_t vp_index);
@@ -198,7 +204,16 @@ int configure_vcpu_mgns(int cpu_fd,
 						struct SpecialRegisters *special_regs,
 						uint64_t xcr0,
 						struct FloatingPointUnit *fpu_regs);
-int run_vcpu_mgns(int cpu_fd, struct hv_message *msg);
+// int run_vcpu_mgns(int cpu_fd, struct hv_message *msg);
+int run_vcpu_mgns(int cpu_fd, void *msg);
+int get_standard_regs_mgns(int cpu_fd, struct StandardRegisters *regs);
+int set_cpu_state_mgns(int cpu_fd,
+		 	           const StandardRegisters *standard_regs,
+					   const SpecialRegisters *special_regs);
+int get_cpu_state_mgns(int cpu_fd,
+					   StandardRegisters *standard_regs,
+					   SpecialRegisters *special_regs);
+int set_x64_registers_mgns(int cpu_fd, const struct X64Registers *regs);
 
 /* msr */
 int is_supported_msr_mgns(uint32_t msr);

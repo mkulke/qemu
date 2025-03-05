@@ -808,13 +808,27 @@ static int mshv_cpu_exec(CPUState *cpu)
 			.find_by_gpa = find_entry_idx_by_gpa_mgns,
 			.map_overlapped_region = map_overlapped_region_mgns,
 		};
+		QemuCpuStateManager qcsm = {
+			.set_cpu_state = set_cpu_state_mgns,
+			.get_cpu_state = get_cpu_state_mgns,
+			.set_x64_registers = set_x64_registers_mgns,
+		};
         /* exit_reason = mshv_run_vcpu(mshv_vcpufd(cpu), &mshv_msg); */
+        /* exit_reason = mshv_run_vcpu(mshv_state->vm, */
+								    /* mshv_vcpufd(cpu), */
+									/* cpu->cpu_index, */
+									/* &mshv_msg, */
+									/* &mshv_ops, */
+									/* &qmm); */
         exit_reason = mshv_run_vcpu(mshv_state->vm,
 								    mshv_vcpufd(cpu),
 									cpu->cpu_index,
 									&mshv_msg,
 									&mshv_ops,
-									&qmm);
+									&qmm,
+									/* run_vcpu_mgns */
+									&qcsm
+									);
 
         switch (exit_reason) {
         case Ignore:

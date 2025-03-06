@@ -1140,3 +1140,16 @@ int set_x64_registers_mgns(int cpu_fd, const struct X64Registers *regs)
 	}
 	return 0;
 }
+
+int run_vcpu_mgns(int cpu_fd, struct hyperv_message *msg)
+{
+	int ret;
+
+	ret = ioctl(cpu_fd, MSHV_RUN_VP, msg);
+	if (ret < 0) {
+		perror("failed to run vcpu");
+		return -errno;
+	}
+
+	return 0;
+}

@@ -204,8 +204,6 @@ int configure_vcpu_mgns(int cpu_fd,
 						struct SpecialRegisters *special_regs,
 						uint64_t xcr0,
 						struct FloatingPointUnit *fpu_regs);
-// int run_vcpu_mgns(int cpu_fd, struct hv_message *msg);
-int run_vcpu_mgns(int cpu_fd, void *msg);
 int get_standard_regs_mgns(int cpu_fd, struct StandardRegisters *regs);
 int set_cpu_state_mgns(int cpu_fd,
 		 	           const StandardRegisters *standard_regs,
@@ -216,6 +214,7 @@ int get_cpu_state_mgns(int cpu_fd,
 int set_x64_registers_mgns(int cpu_fd, const struct X64Registers *regs);
 int translate_gva_mgns(int cpu_fd, uint64_t gva, uint64_t *gpa,
 					   uint64_t flags);
+int run_vcpu_mgns(int cpu_fd, struct hyperv_message *msg);
 
 /* msr */
 int is_supported_msr_mgns(uint32_t msr);

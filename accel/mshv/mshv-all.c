@@ -390,7 +390,6 @@ static int mshv_init(MachineState *ms)
 		// effect, we can make the fn return the PerVMInfo struct instead and
 		// store it ourselves
 		int vm_fd = create_vm_with_type_mgns(vm_type, mshv_fd);
-		mgns_create_mshvc_vm(vm_fd, msr_list_mgns, MSR_LIST_SIZE_mgns);
 		s->vm = vm_fd;
     } while (!s->vm);
 
@@ -520,26 +519,6 @@ static int mshv_init_vcpu(CPUState *cpu)
 	int vm_fd = mshv_state->vm;
 	uint8_t id = cpu->cpu_index;
     mshv_vcpufd(cpu) = create_vcpu_mgns(vm_fd, id);
-	register_vcpu_mgns(vm_fd, mshv_vcpufd(cpu), id, &mshv_ops);
-
-    /* mshv_vcpufd(cpu) = mshv_new_vcpu(mshv_state->vm, cpu->cpu_index, &mshv_ops); */
-    cpu->vcpu_dirty = false;
-
-    return 0;
-}
-
-int init_vcpu_mgns(CPUState *cpu)
-{
-    MshvOps mshv_ops = {
-        .guest_mem_write_fn = guest_mem_write_fn,
-        .guest_mem_read_fn = guest_mem_read_fn,
-        .mmio_read_fn = mmio_read_fn,
-        .mmio_write_fn = mmio_write_fn,
-        .pio_read_fn = pio_read_fn,
-        .pio_write_fn = pio_write_fn,
-    };
-    cpu->accel = g_new0(AccelCPUState, 1);
-    mshv_vcpufd(cpu) = mshv_new_vcpu(mshv_state->vm, cpu->cpu_index, &mshv_ops);
     cpu->vcpu_dirty = false;
 
     return 0;
@@ -771,7 +750,6 @@ int resume_vm_mgns(int vm_fd) {
 
 static int mshv_destroy_vcpu(CPUState *cpu)
 {
-    mshv_remove_vcpu(mshv_vcpufd(cpu));
     remove_vcpu_mgns(mshv_vcpufd(cpu));
     mshv_vcpufd(cpu) = 0;
     g_free(cpu->accel);
@@ -814,6 +792,7 @@ static int mshv_cpu_exec(CPUState *cpu)
 			.get_cpu_state = get_cpu_state_mgns,
 			.set_x64_registers = set_x64_registers_mgns,
 			.translate_gva = translate_gva_mgns,
+			.run = run_vcpu_mgns,
 		};
         /* exit_reason = mshv_run_vcpu(mshv_vcpufd(cpu), &mshv_msg); */
         /* exit_reason = mshv_run_vcpu(mshv_state->vm, */

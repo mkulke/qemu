@@ -1090,6 +1090,32 @@ int get_cpu_state_mgns(int cpu_fd,
 		perror("failed to get cpu state");
 		return ret;
 	}
+return 0;
+}
+
+int translate_gva_mgns(int cpu_fd, uint64_t gva, uint64_t *gpa,
+					   uint64_t flags)
+{
+	int ret;
+	union hv_translate_gva_result result = { 0 };
+
+	*gpa = 0;
+	struct mshv_translate_gva args = {
+		.gva = gva,
+		.flags = flags,
+		.gpa = (__u64 *)gpa,
+		.result = &result,
+	};
+
+	ret = ioctl(cpu_fd, MSHV_TRANSLATE_GVA, &args);
+	if (ret < 0) {
+		perror("failed to invoke gva translation");
+		return -errno;
+	}
+	if (result.result_code != HV_TRANSLATE_GVA_SUCCESS) {
+		perror("failed to translate gva to gpa");
+		return -1;
+	}
 
 	return 0;
 }

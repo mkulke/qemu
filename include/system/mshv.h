@@ -214,6 +214,8 @@ int get_cpu_state_mgns(int cpu_fd,
 					   StandardRegisters *standard_regs,
 					   SpecialRegisters *special_regs);
 int set_x64_registers_mgns(int cpu_fd, const struct X64Registers *regs);
+int translate_gva_mgns(int cpu_fd, uint64_t gva, uint64_t *gpa,
+					   uint64_t flags);
 
 /* msr */
 int is_supported_msr_mgns(uint32_t msr);

@@ -521,6 +521,7 @@ static int mshv_init_vcpu(CPUState *cpu)
 	uint8_t id = cpu->cpu_index;
     mshv_vcpufd(cpu) = create_vcpu_mgns(vm_fd, id);
 	register_vcpu_mgns(vm_fd, mshv_vcpufd(cpu), id, &mshv_ops);
+
     /* mshv_vcpufd(cpu) = mshv_new_vcpu(mshv_state->vm, cpu->cpu_index, &mshv_ops); */
     cpu->vcpu_dirty = false;
 
@@ -812,6 +813,7 @@ static int mshv_cpu_exec(CPUState *cpu)
 			.set_cpu_state = set_cpu_state_mgns,
 			.get_cpu_state = get_cpu_state_mgns,
 			.set_x64_registers = set_x64_registers_mgns,
+			.translate_gva = translate_gva_mgns,
 		};
         /* exit_reason = mshv_run_vcpu(mshv_vcpufd(cpu), &mshv_msg); */
         /* exit_reason = mshv_run_vcpu(mshv_state->vm, */

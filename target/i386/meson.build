@@ -33,6 +33,7 @@ subdir('nvmm')
 subdir('hvf')
 subdir('tcg')
 subdir('mshv')
+subdir('emulate')
 
 target_arch += {'i386': i386_ss}
 target_system_arch += {'i386': i386_system_ss}

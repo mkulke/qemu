@@ -180,6 +180,18 @@ typedef struct CpuStateMgns {
 	SpecialRegisters special_regs;
 } CpuStateMgns;
 
+enum VmExitMgns {
+	VmExitIgnore   = 0,
+	VmExitShutdown = 1,
+	VmExitSpecial  = 2,
+};
+
+struct EmulatorWrapperMgns {
+	uint64_t initial_gva;
+	uint64_t initial_gpa;
+	int cpu_fd;
+};
+
 void init_cpu_db_mgns(void);
 int new_vcpu_mgns(int mshv_fd, uint8_t vp_index, MshvOps *ops);
 int create_vcpu_mgns(int vm_fd, uint8_t vp_index);
@@ -215,6 +227,29 @@ int set_x64_registers_mgns(int cpu_fd, const struct X64Registers *regs);
 int translate_gva_mgns(int cpu_fd, uint64_t gva, uint64_t *gpa,
 					   uint64_t flags);
 int run_vcpu_mgns(int cpu_fd, struct hyperv_message *msg);
+// TODO: should be static
+int handle_unmapped_mem_mgns(int vm_fd,
+							 int vcpu_fd,
+							 const struct hyperv_message *msg,
+							 enum VmExitMgns *exit_reason);
+int handle_pio_mgns(int cpu_fd, const struct hyperv_message *msg);
+enum VmExitMgns run_vcpu_mgns2(int vm_fd,
+							   int cpu_fd,
+							   hv_message *msg);
+
+/* memory */
+void guest_mem_read_fn(uint64_t gpa, uint8_t *data, uintptr_t size,
+					   bool is_secure_mode);
+int guest_mem_write_fn(uint64_t gpa, const uint8_t *data, uintptr_t size,
+					   bool is_secure_mode);
+int mmio_write_fn(uint64_t gpa, const uint8_t *data, uintptr_t size,
+                  bool is_secure_mode);
+
+/* pio */
+int pio_write_fn(uint64_t port, const uint8_t *data, uintptr_t size,
+				 bool is_secure_mode);
+void pio_read_fn(uint64_t port, uint8_t *data, uintptr_t size,
+                 bool is_secure_mode);
 
 /* msr */
 int is_supported_msr_mgns(uint32_t msr);
@@ -340,5 +375,36 @@ static const uint32_t msr_list_mgns[] = {
 };
 
 #define MSR_LIST_SIZE_mgns (sizeof(msr_list_mgns) / sizeof(msr_list_mgns[0]))
+
+
+// EFER (technically not a register) bits
+#define EFER_LMA   ((uint64_t)0x400)
+#define EFER_LME   ((uint64_t)0x100)
+
+// CR0 bits
+#define CR0_PE     ((uint64_t)0x1)
+#define CR0_PG     ((uint64_t)0x80000000)
+
+// CR4 bits
+#define CR4_PAE    ((uint64_t)0x20)
+#define CR4_LA57   ((uint64_t)0x1000)
+
+// RFlags bits (shift values)
+#define CF_SHIFT   0
+#define PF_SHIFT   2
+#define AF_SHIFT   4
+#define ZF_SHIFT   6
+#define SF_SHIFT   7
+#define DF_SHIFT   10
+#define OF_SHIFT   11
+
+// RFlags bits (bit masks)
+#define CF         ((uint64_t)1 << CF_SHIFT)
+#define PF         ((uint64_t)1 << PF_SHIFT)
+#define AF         ((uint64_t)1 << AF_SHIFT)
+#define ZF         ((uint64_t)1 << ZF_SHIFT)
+#define SF         ((uint64_t)1 << SF_SHIFT)
+#define DF         ((uint64_t)1 << DF_SHIFT)
+#define OF         ((uint64_t)1 << OF_SHIFT)
 
 #endif

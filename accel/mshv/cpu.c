@@ -1153,3 +1153,413 @@ int run_vcpu_mgns(int cpu_fd, struct hyperv_message *msg)
 
 	return 0;
 }
+
+static int set_memory_info(const struct hyperv_message *msg,
+		                   struct hv_x64_memory_intercept_message *info)
+{
+	if (msg->header.message_type != HVMSG_GPA_INTERCEPT
+			&& msg->header.message_type != HVMSG_UNMAPPED_GPA
+			&& msg->header.message_type != HVMSG_UNACCEPTED_GPA) {
+		perror("invalid message type");
+		return -1;
+	}
+	// copy the content of the message to info
+	memcpy(info, msg->payload, sizeof(*info));
+	return 0;
+}
+
+static int emulate_ch(int cpu_fd,
+					  uint64_t gva,
+					  uint64_t gpa,
+					  uint8_t (*instructions)[16])
+{
+	return 0;
+}
+
+static int linearize_ds_ch(struct EmulatorWrapperMgns *emu,
+		                   uint64_t logical_addr)
+{
+	/* .linearize(iced_x86::Register::DS, info.rsi, true) */
+	return 0;
+}
+
+static int linearize_es_ch(struct EmulatorWrapperMgns *emu,
+		                   uint64_t logical_addr)
+{
+	/* .linearize(iced_x86::Register::DS, info.rsi, true) */
+	return 0;
+}
+
+static int handle_mmio_mgns(int cpu_fd,
+					        const struct hyperv_message *msg,
+					        enum VmExitMgns *exit_reason)
+{
+	struct hv_x64_memory_intercept_message info = { 0 };
+	size_t insn_len;
+	uint8_t access_type;
+	uint64_t gva, gpa;
+	int ret;
+
+	ret = set_memory_info(msg, &info);
+	if (ret < 0) {
+		perror("failed to convert message to memory info");
+		/* TODO: rather return? */
+		abort();
+	}
+	insn_len = info.instruction_byte_count;
+	access_type = info.header.intercept_access_type;
+	gva = info.guest_virtual_address;
+	gpa = info.guest_physical_address;
+
+	if (access_type == HV_X64_INTERCEPT_ACCESS_TYPE_EXECUTE) {
+		perror("invalid intercept access type: execute");
+		abort();
+	}
+
+	if (insn_len <= 0 || insn_len > 16) {
+		perror("invalid instruction length");
+		abort();
+	}
+
+	ret = emulate_ch(cpu_fd, gva, gpa, &info.instruction_bytes);
+	if (ret < 0) {
+		perror("failed to emulate mmio");
+		abort();
+	}
+
+	*exit_reason = VmExitIgnore;
+
+	return 0;
+}
+
+int handle_unmapped_mem_mgns(int vm_fd,
+							 int vcpu_fd,
+							 const struct hyperv_message *msg,
+							 enum VmExitMgns *exit_reason)
+{
+	struct hv_x64_memory_intercept_message info = { 0 };
+	uint64_t gpa;
+	int ret;
+	bool found;
+
+	ret = set_memory_info(msg, &info);
+	if (ret < 0) {
+		perror("failed to convert message to memory info");
+		return -1;
+	}
+	gpa = info.guest_physical_address;
+
+    found = find_entry_idx_by_gpa_mgns(gpa, NULL);
+	if (!found) {
+		return handle_mmio_mgns(vcpu_fd, msg, exit_reason);
+	}
+
+	ret = map_overlapped_region_mgns(vm_fd, gpa);
+	if (ret < 0) {
+		*exit_reason = VmExitSpecial;
+	} else {
+		*exit_reason = VmExitIgnore;
+	}
+
+	return 0;
+}
+
+static int read_memory_mgns(struct EmulatorWrapperMgns *emu,
+		                    uint64_t gva,
+		                    uint8_t *data,
+		                    size_t len)
+{
+	int ret;
+	uint64_t gpa, flags;
+
+	if (gva == emu->initial_gva) {
+		gpa = emu->initial_gpa;
+	} else {
+	    flags = HV_TRANSLATE_GVA_VALIDATE_READ;
+		ret = translate_gva_mgns(emu->cpu_fd, gva, &gpa, flags);
+		if (ret < 0) {
+			perror("failed to translate gva to gpa");
+			return -1;
+		}
+		/* TODO: it's unfortunate that this fn doesn't fail
+		 * the rust code has a code path for failed reads at this point,
+		 * but it's dead code */
+		guest_mem_read_fn(gpa, data, len, false);
+	}
+
+	return 0;
+}
+
+static int write_memory_mgns(struct EmulatorWrapperMgns *emu,
+							 uint64_t gva,
+							 const uint8_t *data,
+							 size_t len)
+{
+	int ret;
+	uint64_t gpa, flags;
+
+	if (gva == emu->initial_gva) {
+		gpa = emu->initial_gpa;
+	} else {
+	    flags = HV_TRANSLATE_GVA_VALIDATE_WRITE;
+		ret = translate_gva_mgns(emu->cpu_fd, gva, &gpa, flags);
+		if (ret < 0) {
+			perror("failed to translate gva to gpa");
+			return -1;
+		}
+	}
+	ret = guest_mem_write_fn(gpa, data, len, false);
+	if (ret == MEMTX_OK) {
+		return 0;
+	}
+
+	ret = mmio_write_fn(gpa, data, len, false);
+	if (ret < 0) {
+		perror("failed to write to mmio");
+		return -1;
+	}
+
+	return 0;
+}
+
+static int handle_pio_str_mgns(int cpu_fd,
+							   struct hv_x64_io_port_intercept_message *info) {
+	size_t len = info->access_info.access_size;
+	uint8_t access_type = info->header.intercept_access_type;
+	uint16_t port = info->port_number;
+	bool repop = info->access_info.rep_prefix == 1;
+	size_t repeat = repop ? info->rcx : 1;
+	size_t insn_len = info->header.instruction_length;
+	uint8_t data[4] = { 0 };
+	struct StandardRegisters standard_regs = { 0 };
+	struct SpecialRegisters special_regs = { 0 };
+	bool direction_flag;
+	uint32_t reg_names[3];
+	uint64_t reg_values[3];
+	int ret;
+	uint64_t src, dst, rip, rax, rsi, rdi;
+	struct X64Registers x64_regs = { 0 };
+	struct EmulatorWrapperMgns *emu = { 0 };
+
+	ret = get_cpu_state_mgns(cpu_fd, &standard_regs, &special_regs);
+	if (ret < 0) {
+		perror("failed to get cpu state");
+		return -1;
+	}
+
+	emu->cpu_fd = cpu_fd;
+	emu->initial_gpa = 0;
+	emu->initial_gva = 0;
+
+	direction_flag = (standard_regs.rflags & DF) != 0;
+
+	if (access_type == HV_X64_INTERCEPT_ACCESS_TYPE_WRITE) {
+		src = linearize_ds_ch(emu, info->rsi);
+
+		for (size_t i = 0; i < repeat; i++) {
+			ret = read_memory_mgns(emu, src, data, len);
+			if (ret < 0) {
+				perror("failed to read memory");
+				return -1;
+			}
+			ret = pio_write_fn(port, data, len, false);
+			if (ret < 0) {
+				perror("failed to write to io port");
+				return -1;
+			}
+			if (direction_flag) {
+				src -= (uint64_t)len;
+				info->rsi -= (uint64_t)len;
+			} else {
+				src += (uint64_t)len;
+				info->rsi += (uint64_t)len;
+			}
+		}
+		rip = info->header.rip + insn_len;
+		rax = info->rax;
+		rsi = info->rsi;
+		reg_names[0] = HV_X64_REGISTER_RIP;
+		reg_values[0] = rip;
+		reg_names[1] = HV_X64_REGISTER_RAX;
+		reg_values[1] = rax;
+		reg_names[2] = HV_X64_REGISTER_RSI;
+		reg_values[2] = rsi;
+	} else {
+		dst = linearize_es_ch(emu, info->rdi);
+		for (size_t i = 0; i < repeat; i++) {
+			pio_read_fn(port, data, len, false);
+
+			ret = write_memory_mgns(emu, dst, data, len);
+			if (ret < 0) {
+				perror("failed to write memory");
+				return -1;
+			}
+			if (direction_flag) {
+				dst -= (uint64_t)len;
+				info->rdi -= (uint64_t)len;
+			} else {
+				dst += (uint64_t)len;
+				info->rdi += (uint64_t)len;
+			}
+		}
+		rip = info->header.rip + insn_len;
+		rax = info->rax;
+		rdi = info->rdi;
+		reg_names[0] = HV_X64_REGISTER_RIP;
+		reg_values[0] = rip;
+		reg_names[1] = HV_X64_REGISTER_RAX;
+		reg_values[1] = rax;
+		reg_names[2] = HV_X64_REGISTER_RDI;
+		reg_values[2] = rdi;
+	}
+
+	x64_regs.names = reg_names;
+	x64_regs.values = reg_values;
+	x64_regs.count = 2;
+
+	ret = set_x64_registers_mgns(cpu_fd, &x64_regs);
+	if (ret < 0) {
+		perror("failed to set x64 registers");
+		return -1;
+	}
+
+	return 0;
+}
+
+static int handle_pio_non_str_mgns(int cpu_fd,
+                                   struct hv_x64_io_port_intercept_message *info) {
+	size_t len = info->access_info.access_size;
+	uint8_t access_type = info->header.intercept_access_type;
+	int ret;
+	uint32_t val, eax;
+	const uint32_t eax_mask =  0xffffffffu >> (32 - len * 8);
+	size_t insn_len;
+	uint64_t rip, rax;
+	uint32_t reg_names[2];
+	uint64_t reg_values[2];
+	struct X64Registers x64_regs = { 0 };
+	uint16_t port = info->port_number;
+
+	if (access_type == HV_X64_INTERCEPT_ACCESS_TYPE_WRITE) {
+		union {
+			uint32_t u32;
+			uint8_t bytes[4];
+		} conv;
+
+		/* convert the first 4 bytes of rax to bytes */
+		conv.u32 = (uint32_t)info->rax;
+		/* secure mode is set to false */
+		ret = pio_write_fn(port, conv.bytes, len, false);
+		if (ret < 0) {
+			perror("failed to write to io port");
+			return -1;
+		}
+	} else {
+		uint8_t data[4] = { 0 };
+		/* secure mode is set to false */
+		pio_read_fn(info->port_number, data, len, false);
+
+		/* Preserve high bits in EAX, but clear out high bits in RAX */
+		val = *(uint32_t *)data;
+		eax = (((uint32_t)info->rax) & ~eax_mask) | (val & eax_mask);
+		info->rax = (uint64_t)eax;
+	}
+
+	insn_len = info->header.instruction_length;
+
+	/* Advance RIP and update RAX */
+	rip = info->header.rip + insn_len;
+	rax = info->rax;
+
+	reg_names[0] = HV_X64_REGISTER_RIP;
+	reg_values[0] = rip;
+	reg_names[1] = HV_X64_REGISTER_RAX;
+	reg_values[1] = rax;
+
+	x64_regs.names = reg_names;
+	x64_regs.values = reg_values;
+	x64_regs.count = 2;
+
+	ret = set_x64_registers_mgns(cpu_fd, &x64_regs);
+	if (ret < 0) {
+		perror("failed to set x64 registers");
+		return -1;
+	}
+
+	return 0;
+}
+
+static int set_ioport_info(const struct hyperv_message *msg,
+		                   struct hv_x64_io_port_intercept_message *info)
+{
+	if (msg->header.message_type != HVMSG_X64_IO_PORT_INTERCEPT) {
+		perror("invalid message type");
+		return -1;
+	}
+	// copy the content of the message to info
+	memcpy(info, msg->payload, sizeof(*info));
+	return 0;
+}
+
+int handle_pio_mgns(int cpu_fd, const struct hyperv_message *msg)
+{
+	struct hv_x64_io_port_intercept_message info = { 0 };
+	int ret;
+
+	ret = set_ioport_info(msg, &info);
+	if (ret < 0) {
+		perror("failed to convert message to ioport info");
+		return -1;
+	}
+
+	if (info.access_info.string_op) {
+		return handle_pio_str_mgns(cpu_fd, &info);
+	}
+
+	return handle_pio_non_str_mgns(cpu_fd, &info);
+}
+
+enum VmExitMgns run_vcpu_mgns2(int vm_fd,
+							   int cpu_fd,
+							   hv_message *msg)
+{
+	int ret;
+	hv_message exit_msg = { 0 };
+	enum VmExitMgns exit_reason;
+
+	ret = ioctl(cpu_fd, MSHV_RUN_VP, &exit_msg);
+	if (ret < 0) {
+		perror("failed to run vcpu");
+		return VmExitShutdown;
+	}
+
+	switch(exit_msg.header.message_type) {
+		case HVMSG_UNRECOVERABLE_EXCEPTION:
+			*msg = exit_msg;
+			return VmExitShutdown;
+		case HVMSG_UNMAPPED_GPA:
+			ret = handle_unmapped_mem_mgns(vm_fd, cpu_fd, &exit_msg, &exit_reason);
+			if (ret < 0) {
+				perror("failed to handle unmapped memory");
+				abort();
+			}
+			return exit_reason;
+		case HVMSG_GPA_INTERCEPT:
+			ret = handle_mmio_mgns(cpu_fd, &exit_msg, &exit_reason);
+			if (ret < 0) {
+				perror("failed to handle mmio");
+				abort();
+			}
+			return exit_reason;
+		case HVMSG_X64_IO_PORT_INTERCEPT:
+			ret = handle_pio_mgns(cpu_fd, &exit_msg);
+			if (ret < 0) {
+				return VmExitSpecial;
+			}
+			return VmExitIgnore;
+		default:
+			msg = &exit_msg;
+	}
+
+	return 0;
+}

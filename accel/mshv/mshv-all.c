@@ -443,8 +443,8 @@ static inline MemTxAttrs mshv_get_mem_attrs(bool is_secure_mode)
     return ((MemTxAttrs){ .secure = is_secure_mode });
 }
 
-static void guest_mem_read_fn(uint64_t gpa, uint8_t *data, uintptr_t size,
-                              bool is_secure_mode)
+void guest_mem_read_fn(uint64_t gpa, uint8_t *data, uintptr_t size,
+					   bool is_secure_mode)
 {
     int ret = 0;
     MemTxAttrs memattr = mshv_get_mem_attrs(is_secure_mode);
@@ -453,7 +453,7 @@ static void guest_mem_read_fn(uint64_t gpa, uint8_t *data, uintptr_t size,
     assert(ret == MEMTX_OK);
 }
 
-static int guest_mem_write_fn(uint64_t gpa, const uint8_t *data, uintptr_t size,
+int guest_mem_write_fn(uint64_t gpa, const uint8_t *data, uintptr_t size,
                               bool is_secure_mode)
 {
     int ret = 0;
@@ -473,8 +473,8 @@ static void mmio_read_fn(uint64_t gpa, uint8_t *data, uintptr_t size,
     assert(ret == MEMTX_OK);
 }
 
-static int mmio_write_fn(uint64_t gpa, const uint8_t *data, uintptr_t size,
-                         bool is_secure_mode)
+int mmio_write_fn(uint64_t gpa, const uint8_t *data, uintptr_t size,
+				  bool is_secure_mode)
 {
     int ret = 0;
     MemTxAttrs memattr = mshv_get_mem_attrs(is_secure_mode);
@@ -483,8 +483,8 @@ static int mmio_write_fn(uint64_t gpa, const uint8_t *data, uintptr_t size,
     return ret;
 }
 
-static void pio_read_fn(uint64_t port, uint8_t *data, uintptr_t size,
-                        bool is_secure_mode)
+void pio_read_fn(uint64_t port, uint8_t *data, uintptr_t size,
+                 bool is_secure_mode)
 {
     int ret = 0;
     MemTxAttrs memattr = mshv_get_mem_attrs(is_secure_mode);
@@ -493,8 +493,8 @@ static void pio_read_fn(uint64_t port, uint8_t *data, uintptr_t size,
     assert(ret == MEMTX_OK);
 }
 
-static int pio_write_fn(uint64_t port, const uint8_t *data, uintptr_t size,
-                        bool is_secure_mode)
+int pio_write_fn(uint64_t port, const uint8_t *data, uintptr_t size,
+			     bool is_secure_mode)
 {
     int ret = 0;
     MemTxAttrs memattr = mshv_get_mem_attrs(is_secure_mode);
@@ -794,20 +794,11 @@ static int mshv_cpu_exec(CPUState *cpu)
 			.translate_gva = translate_gva_mgns,
 			.run = run_vcpu_mgns,
 		};
-        /* exit_reason = mshv_run_vcpu(mshv_vcpufd(cpu), &mshv_msg); */
-        /* exit_reason = mshv_run_vcpu(mshv_state->vm, */
-								    /* mshv_vcpufd(cpu), */
-									/* cpu->cpu_index, */
-									/* &mshv_msg, */
-									/* &mshv_ops, */
-									/* &qmm); */
         exit_reason = mshv_run_vcpu(mshv_state->vm,
 								    mshv_vcpufd(cpu),
-									cpu->cpu_index,
 									&mshv_msg,
 									&mshv_ops,
 									&qmm,
-									/* run_vcpu_mgns */
 									&qcsm
 									);
 

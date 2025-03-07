@@ -90,7 +90,9 @@ bool find_entry_idx_by_gpa_mgns(uint64_t addr, size_t *index)
 		entry = elem->data;
 		if (entry->mr.guest_phys_addr <= addr
 			&& addr - entry->mr.guest_phys_addr < entry->mr.memory_size) {
-			*index = i;
+			if (index != NULL) {
+				*index = i;
+			}
 			return true;
 		}
 		i++;

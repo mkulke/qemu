@@ -868,10 +868,10 @@ union hv_x64_vp_execution_state {
 };
 
 /* From openvmm::hvdef */
-enum hv_x64_intercept_type {
-	HV_X64_INTERCEPT_TYPE_READ = 0,
-	HV_X64_INTERCEPT_TYPE_WRITE = 1,
-	HV_X64_INTERCEPT_TYPE_EXECUTE = 2,
+enum hv_x64_intercept_access_type {
+	HV_X64_INTERCEPT_ACCESS_TYPE_READ = 0,
+	HV_X64_INTERCEPT_ACCESS_TYPE_WRITE = 1,
+	HV_X64_INTERCEPT_ACCESS_TYPE_EXECUTE = 2,
 };
 
 struct hv_x64_intercept_message_header {
@@ -883,6 +883,31 @@ struct hv_x64_intercept_message_header {
 	struct hv_x64_segment_register cs_segment;
 	__u64 rip;
 	__u64 rflags;
+};
+
+union hv_x64_io_port_access_info {
+	__u8 as_uint8;
+	struct {
+		__u8 access_size:3;
+		__u8 string_op:1;
+		__u8 rep_prefix:1;
+		__u8 reserved:3;
+	};
+};
+
+struct hv_x64_io_port_intercept_message {
+	struct hv_x64_intercept_message_header header;
+	__u16 port_number;
+	union hv_x64_io_port_access_info access_info;
+	__u8 instruction_byte_count;
+	__u32 reserved;
+	__u64 rax;
+	__u8 instruction_bytes[16];
+	struct hv_x64_segment_register ds_segment;
+	struct hv_x64_segment_register es_segment;
+	__u64 rcx;
+	__u64 rsi;
+	__u64 rdi;
 };
 
 union hv_x64_memory_access_info {
@@ -1004,5 +1029,10 @@ struct hv_cpuid {
 #define IA32_MSR_TSC_ADJUST 	  0x0000003b
 
 #define IA32_MSR_MISC_ENABLE 0x000001a0
+
+
+#define HV_TRANSLATE_GVA_VALIDATE_READ	     (0x0001)
+#define HV_TRANSLATE_GVA_VALIDATE_WRITE      (0x0002)
+#define HV_TRANSLATE_GVA_VALIDATE_EXECUTE    (0x0004)
 
 #endif

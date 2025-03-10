@@ -367,7 +367,7 @@ static int mshv_init(MachineState *ms)
 
     accel_blocker_init();
 
-    mshv_new();
+    /* mshv_new(); */
     s->vm = 0;
 
 	init_vm_db_mgns();
@@ -463,7 +463,7 @@ int guest_mem_write_fn(uint64_t gpa, const uint8_t *data, uintptr_t size,
     return ret;
 }
 
-static void mmio_read_fn(uint64_t gpa, uint8_t *data, uintptr_t size,
+void mmio_read_fn(uint64_t gpa, uint8_t *data, uintptr_t size,
                          bool is_secure_mode)
 {
     int ret = 0;
@@ -503,23 +503,23 @@ int pio_write_fn(uint64_t port, const uint8_t *data, uintptr_t size,
     return ret;
 }
 
-static MshvOps mshv_ops = {
-	.guest_mem_write_fn = guest_mem_write_fn,
-	.guest_mem_read_fn = guest_mem_read_fn,
-	.mmio_read_fn = mmio_read_fn,
-	.mmio_write_fn = mmio_write_fn,
-	.pio_read_fn = pio_read_fn,
-	.pio_write_fn = pio_write_fn,
-	/* fn's for the plaform in the emulator */
-	.set_cpu_state = set_cpu_state_mgns,
-	.get_cpu_state = get_cpu_state_mgns,
-	.set_x64_registers = set_x64_registers_mgns,
-	.translate_gva = translate_gva_mgns,
-	.run = run_vcpu_mgns,
-	/* memory fn */
-	.find_by_gpa = find_entry_idx_by_gpa_mgns,
-	.map_overlapped_region = map_overlapped_region_mgns,
-};
+/* static MshvOps mshv_ops = { */
+/* 	.guest_mem_write_fn = guest_mem_write_fn, */
+/* 	.guest_mem_read_fn = guest_mem_read_fn, */
+/* 	.mmio_read_fn = mmio_read_fn, */
+/* 	.mmio_write_fn = mmio_write_fn, */
+/* 	.pio_read_fn = pio_read_fn, */
+/* 	.pio_write_fn = pio_write_fn, */
+/* 	/1* fn's for the plaform in the emulator *1/ */
+/* 	.set_cpu_state = set_cpu_state_mgns, */
+/* 	.get_cpu_state = get_cpu_state_mgns, */
+/* 	.set_x64_registers = set_x64_registers_mgns, */
+/* 	.translate_gva = translate_gva_mgns, */
+/* 	.run = run_vcpu_mgns, */
+/* 	/1* memory fn *1/ */
+/* 	.find_by_gpa = find_entry_idx_by_gpa_mgns, */
+/* 	.map_overlapped_region = map_overlapped_region_mgns, */
+/* }; */
 
 static int mshv_init_vcpu(CPUState *cpu)
 {
@@ -768,7 +768,8 @@ static int mshv_destroy_vcpu(CPUState *cpu)
 static int mshv_cpu_exec(CPUState *cpu)
 {
     hv_message mshv_msg;
-    MshvVmExit exit_reason;
+    /* MshvVmExit exit_reason; */
+    enum VmExitMgns exit_reason;
     int ret = 0;
 
     bql_unlock();
@@ -791,13 +792,16 @@ static int mshv_cpu_exec(CPUState *cpu)
          */
         smp_rmb();
 
-        exit_reason = mshv_run_vcpu(mshv_state->vm,
-								    mshv_vcpufd(cpu),
-									&mshv_msg,
-									&mshv_ops);
+        /* exit_reason = mshv_run_vcpu(mshv_state->vm, */
+								    /* mshv_vcpufd(cpu), */
+									/* &mshv_msg, */
+									/* &mshv_ops); */
+        exit_reason = run_vcpu_mgns2(mshv_state->vm,
+								     mshv_vcpufd(cpu),
+									 &mshv_msg);
 
         switch (exit_reason) {
-        case Ignore:
+        case VmExitIgnore:
             break;
         default:
             ret = EXCP_INTERRUPT;

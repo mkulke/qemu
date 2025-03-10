@@ -995,6 +995,15 @@ static int set_lint_mgns(int cpu_fd)
 	return 0;
 }
 
+static void free_cpuid_mgns(CpuIdMgns *cpu_id) {
+    if (cpu_id != NULL) {
+        if (cpu_id->entries != NULL) {
+            g_free(cpu_id->entries);
+        }
+        g_free(cpu_id);
+    }
+}
+
 int configure_vcpu_mgns(int cpu_fd,
 						uint8_t id,
 						enum MshvCpuVendor cpu_vendor,
@@ -1017,7 +1026,7 @@ int configure_vcpu_mgns(int cpu_fd,
 								    ncores_per_die / ndies,
 								    nthreads_per_core);
 	ret = set_cpuid2_mgns(cpu_fd, cpuid_mshvc);
-	mshv_free_cpuid_mgns(cpuid_mshvc);
+	free_cpuid_mgns(cpuid_mshvc);
 	if (ret < 0) {
 		perror("failed to set cpuid");
 		return ret;

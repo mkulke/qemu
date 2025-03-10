@@ -244,6 +244,8 @@ int guest_mem_write_fn(uint64_t gpa, const uint8_t *data, uintptr_t size,
 					   bool is_secure_mode);
 int mmio_write_fn(uint64_t gpa, const uint8_t *data, uintptr_t size,
                   bool is_secure_mode);
+void mmio_read_fn(uint64_t gpa, uint8_t *data, uintptr_t size,
+                  bool is_secure_mode);
 
 /* pio */
 int pio_write_fn(uint64_t port, const uint8_t *data, uintptr_t size,

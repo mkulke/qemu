@@ -510,6 +510,15 @@ static MshvOps mshv_ops = {
 	.mmio_write_fn = mmio_write_fn,
 	.pio_read_fn = pio_read_fn,
 	.pio_write_fn = pio_write_fn,
+	/* fn's for the plaform in the emulator */
+	.set_cpu_state = set_cpu_state_mgns,
+	.get_cpu_state = get_cpu_state_mgns,
+	.set_x64_registers = set_x64_registers_mgns,
+	.translate_gva = translate_gva_mgns,
+	.run = run_vcpu_mgns,
+	/* memory fn */
+	.find_by_gpa = find_entry_idx_by_gpa_mgns,
+	.map_overlapped_region = map_overlapped_region_mgns,
 };
 
 static int mshv_init_vcpu(CPUState *cpu)
@@ -782,25 +791,10 @@ static int mshv_cpu_exec(CPUState *cpu)
          */
         smp_rmb();
 
-		/* TODO: that is not ideal, it's a stop-gap still cpu.rs is ported */
-		QemuMemoryManager qmm = {
-			.find_by_gpa = find_entry_idx_by_gpa_mgns,
-			.map_overlapped_region = map_overlapped_region_mgns,
-		};
-		QemuCpuStateManager qcsm = {
-			.set_cpu_state = set_cpu_state_mgns,
-			.get_cpu_state = get_cpu_state_mgns,
-			.set_x64_registers = set_x64_registers_mgns,
-			.translate_gva = translate_gva_mgns,
-			.run = run_vcpu_mgns,
-		};
         exit_reason = mshv_run_vcpu(mshv_state->vm,
 								    mshv_vcpufd(cpu),
 									&mshv_msg,
-									&mshv_ops,
-									&qmm,
-									&qcsm
-									);
+									&mshv_ops);
 
         switch (exit_reason) {
         case Ignore:

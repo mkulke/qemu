@@ -1168,26 +1168,56 @@ static int set_memory_info(const struct hyperv_message *msg,
 	return 0;
 }
 
+static MshvOps mshv_ops = {
+	.guest_mem_write_fn = guest_mem_write_fn,
+	.guest_mem_read_fn = guest_mem_read_fn,
+	.mmio_read_fn = mmio_read_fn,
+	.mmio_write_fn = mmio_write_fn,
+	.pio_read_fn = pio_read_fn,
+	.pio_write_fn = pio_write_fn,
+	/* fn's for the plaform in the emulator */
+	.set_cpu_state = set_cpu_state_mgns,
+	.get_cpu_state = get_cpu_state_mgns,
+	.set_x64_registers = set_x64_registers_mgns,
+	.translate_gva = translate_gva_mgns,
+	.run = run_vcpu_mgns,
+	/* memory fn */
+	.find_by_gpa = find_entry_idx_by_gpa_mgns,
+	.map_overlapped_region = map_overlapped_region_mgns,
+};
+
 static int emulate_ch(int cpu_fd,
 					  uint64_t gva,
 					  uint64_t gpa,
 					  uint8_t (*instructions)[16])
 {
+	emulate_ch_exported(cpu_fd,
+			           gva, gpa,
+					   (uint8_t*)instructions, 16,
+					   &mshv_ops);
 	return 0;
 }
 
 static int linearize_ds_ch(struct EmulatorWrapperMgns *emu,
 		                   uint64_t logical_addr)
 {
-	/* .linearize(iced_x86::Register::DS, info.rsi, true) */
-	return 0;
+	return linearize_exported(emu->cpu_fd,
+					   DSRegister,
+					   logical_addr,
+					   emu->initial_gva,
+					   emu->initial_gpa,
+					   &mshv_ops);
 }
 
 static int linearize_es_ch(struct EmulatorWrapperMgns *emu,
 		                   uint64_t logical_addr)
 {
-	/* .linearize(iced_x86::Register::DS, info.rsi, true) */
-	return 0;
+	return linearize_exported(emu->cpu_fd,
+					   ESRegister,
+					   logical_addr,
+					   emu->initial_gva,
+					   emu->initial_gpa,
+					   &mshv_ops);
 }
 
 static int handle_mmio_mgns(int cpu_fd,
@@ -1339,7 +1369,7 @@ static int handle_pio_str_mgns(int cpu_fd,
 	int ret;
 	uint64_t src, dst, rip, rax, rsi, rdi;
 	struct X64Registers x64_regs = { 0 };
-	struct EmulatorWrapperMgns *emu = { 0 };
+	struct EmulatorWrapperMgns emu = { 0 };
 
 	ret = get_cpu_state_mgns(cpu_fd, &standard_regs, &special_regs);
 	if (ret < 0) {
@@ -1347,17 +1377,17 @@ static int handle_pio_str_mgns(int cpu_fd,
 		return -1;
 	}
 
-	emu->cpu_fd = cpu_fd;
-	emu->initial_gpa = 0;
-	emu->initial_gva = 0;
+	emu.cpu_fd = cpu_fd;
+	emu.initial_gpa = 0;
+	emu.initial_gva = 0;
 
 	direction_flag = (standard_regs.rflags & DF) != 0;
 
 	if (access_type == HV_X64_INTERCEPT_ACCESS_TYPE_WRITE) {
-		src = linearize_ds_ch(emu, info->rsi);
+		src = linearize_ds_ch(&emu, info->rsi);
 
 		for (size_t i = 0; i < repeat; i++) {
-			ret = read_memory_mgns(emu, src, data, len);
+			ret = read_memory_mgns(&emu, src, data, len);
 			if (ret < 0) {
 				perror("failed to read memory");
 				return -1;
@@ -1385,11 +1415,11 @@ static int handle_pio_str_mgns(int cpu_fd,
 		reg_names[2] = HV_X64_REGISTER_RSI;
 		reg_values[2] = rsi;
 	} else {
-		dst = linearize_es_ch(emu, info->rdi);
+		dst = linearize_es_ch(&emu, info->rdi);
 		for (size_t i = 0; i < repeat; i++) {
 			pio_read_fn(port, data, len, false);
 
-			ret = write_memory_mgns(emu, dst, data, len);
+			ret = write_memory_mgns(&emu, dst, data, len);
 			if (ret < 0) {
 				perror("failed to write memory");
 				return -1;

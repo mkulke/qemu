@@ -2,7 +2,7 @@
 #include "qemu/osdep.h"
 #include "qemu/lockable.h"
 #include "qemu/memalign.h"
-#include "sysemu/mshv.h"
+#include "system/mshv.h"
 #include <qemu-mshv.h>
 #include <stdint.h>
 #include <sys/ioctl.h>

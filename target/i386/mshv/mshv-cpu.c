@@ -1,6 +1,6 @@
 #include "qemu/osdep.h"
 #include "cpu.h"
-#include "sysemu/mshv.h"
+#include "system/mshv.h"
 #include <qemu-mshv.h>
 
 static void set_seg(struct SegmentRegister *lhs, const SegmentCache *rhs)
@@ -56,6 +56,7 @@ static int mshv_getput_regs(MshvState *mshv_state, CPUState *cpu, bool set)
 {
     X86CPU *x86cpu = X86_CPU(cpu);
     CPUX86State *env = &x86cpu->env;
+	X86CPUTopoInfo *topo_info = &env->topo_info;
     StandardRegisters regs;
     SpecialRegisters sregs;
     FloatingPointUnit fpu;
@@ -109,8 +110,8 @@ static int mshv_getput_regs(MshvState *mshv_state, CPUState *cpu, bool set)
 		configure_vcpu_mgns(cpu_fd,
 							cpu->cpu_index,
 						    vendor,
-						    env->nr_dies,
-						    cpu->nr_cores / env->nr_dies,
+						    topo_info->dies_per_pkg,
+						    topo_info->cores_per_module / topo_info->dies_per_pkg,
 						    cpu->nr_threads,
 							&regs,
 							&sregs,

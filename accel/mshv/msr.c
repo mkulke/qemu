@@ -1,5 +1,5 @@
 #include "qemu/osdep.h"
-#include "sysemu/mshv.h"
+#include "system/mshv.h"
 #include "hw/hyperv/linux-mshv.h"
 
 static uint32_t SUPPORTED_MSRS[64] = {

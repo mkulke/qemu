@@ -1,5 +1,5 @@
 #include "qemu/osdep.h"
-#include "sysemu/mshv.h"
+#include "system/mshv.h"
 #include "hw/pci/msi.h"
 
 bool mshv_allowed;

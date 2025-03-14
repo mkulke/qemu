@@ -1,7 +1,7 @@
 #include "hw/hyperv/linux-mshv.h"
 #include "qemu/osdep.h"
 #include "hw/pci/msi.h"
-#include "sysemu/mshv.h"
+#include "system/mshv.h"
 #include "trace.h"
 #include <stdint.h>
 #include <sys/ioctl.h>

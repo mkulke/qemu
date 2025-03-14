@@ -30,14 +30,14 @@
 #include "hw/intc/ioapic_internal.h"
 #include "hw/pci/msi.h"
 #include "hw/qdev-properties.h"
+#include "system/accel-irq.h"
 #include "system/kvm.h"
+#include "system/mshv.h"
 #include "system/system.h"
 #include "hw/i386/apic-msidef.h"
 #include "hw/i386/x86-iommu.h"
 #include "trace.h"
 
-#include "sysemu/mshv.h"
-#include "sysemu/accel-irq.h"
 
 #if defined(CONFIG_KVM) || defined(CONFIG_MSHV)
 #define ACCEL_GSI_IRQFD_POSSIBLE

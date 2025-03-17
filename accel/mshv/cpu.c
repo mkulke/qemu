@@ -1178,18 +1178,6 @@ static MshvOps mshv_ops = {
 	.translate_gva = translate_gva_mgns,
 };
 
-static int emulate_ch(int cpu_fd,
-					  uint64_t gva,
-					  uint64_t gpa,
-					  uint8_t (*instructions)[16])
-{
-	emulate_ch_exported(cpu_fd,
-			           gva, gpa,
-					   (uint8_t*)instructions, 16,
-					   &mshv_ops);
-	return 0;
-}
-
 static int linearize_ds_ch(struct EmulatorWrapperMgns *emu,
 		                   uint64_t logical_addr)
 {
@@ -1243,7 +1231,10 @@ static int handle_mmio_mgns(int cpu_fd,
 		abort();
 	}
 
-	ret = emulate_ch(cpu_fd, gva, gpa, &info.instruction_bytes);
+	emulate_with_ch(cpu_fd,
+				    gva, gpa,
+				    info.instruction_bytes, 16,
+				    &mshv_ops);
 	if (ret < 0) {
 		perror("failed to emulate mmio");
 		abort();

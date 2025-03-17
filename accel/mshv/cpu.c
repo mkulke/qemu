@@ -1208,6 +1208,7 @@ static int handle_mmio_mgns(int cpu_fd,
 	size_t insn_len;
 	uint8_t access_type;
 	uint64_t gva, gpa;
+	uint8_t *instruction_bytes;
 	int ret;
 
 	ret = set_memory_info(msg, &info);
@@ -1231,9 +1232,14 @@ static int handle_mmio_mgns(int cpu_fd,
 		abort();
 	}
 
+	/* TODO: insn_len != 16 is x-page access, do we handle it properly */
+
+	instruction_bytes = info.instruction_bytes;
+
+	/* emulate_local(instruction_bytes, size); */
 	emulate_with_ch(cpu_fd,
 				    gva, gpa,
-				    info.instruction_bytes, 16,
+				    instruction_bytes, insn_len,
 				    &mshv_ops);
 	if (ret < 0) {
 		perror("failed to emulate mmio");

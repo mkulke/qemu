@@ -1150,19 +1150,6 @@ int set_x64_registers_mgns(int cpu_fd, const struct X64Registers *regs)
 	return 0;
 }
 
-int run_vcpu_mgns(int cpu_fd, struct hyperv_message *msg)
-{
-	int ret;
-
-	ret = ioctl(cpu_fd, MSHV_RUN_VP, msg);
-	if (ret < 0) {
-		perror("failed to run vcpu");
-		return -errno;
-	}
-
-	return 0;
-}
-
 static int set_memory_info(const struct hyperv_message *msg,
 		                   struct hv_x64_memory_intercept_message *info)
 {
@@ -1189,10 +1176,6 @@ static MshvOps mshv_ops = {
 	.get_cpu_state = get_cpu_state_mgns,
 	.set_x64_registers = set_x64_registers_mgns,
 	.translate_gva = translate_gva_mgns,
-	.run = run_vcpu_mgns,
-	/* memory fn */
-	.find_by_gpa = find_entry_idx_by_gpa_mgns,
-	.map_overlapped_region = map_overlapped_region_mgns,
 };
 
 static int emulate_ch(int cpu_fd,
@@ -1558,9 +1541,7 @@ int handle_pio_mgns(int cpu_fd, const struct hyperv_message *msg)
 	return handle_pio_non_str_mgns(cpu_fd, &info);
 }
 
-enum VmExitMgns run_vcpu_mgns2(int vm_fd,
-							   int cpu_fd,
-							   hv_message *msg)
+enum VmExitMgns run_vcpu_mgns(int vm_fd, int cpu_fd, hv_message *msg)
 {
 	int ret;
 	hv_message exit_msg = { 0 };

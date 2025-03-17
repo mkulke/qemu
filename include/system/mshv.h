@@ -226,14 +226,13 @@ int get_cpu_state_mgns(int cpu_fd,
 int set_x64_registers_mgns(int cpu_fd, const struct X64Registers *regs);
 int translate_gva_mgns(int cpu_fd, uint64_t gva, uint64_t *gpa,
 					   uint64_t flags);
-int run_vcpu_mgns(int cpu_fd, struct hyperv_message *msg);
 // TODO: should be static
 int handle_unmapped_mem_mgns(int vm_fd,
 							 int vcpu_fd,
 							 const struct hyperv_message *msg,
 							 enum VmExitMgns *exit_reason);
 int handle_pio_mgns(int cpu_fd, const struct hyperv_message *msg);
-enum VmExitMgns run_vcpu_mgns2(int vm_fd,
+enum VmExitMgns run_vcpu_mgns(int vm_fd,
 							   int cpu_fd,
 							   hv_message *msg);
 

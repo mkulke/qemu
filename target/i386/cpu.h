@@ -2101,7 +2101,7 @@ typedef struct CPUArchState {
     QEMUTimer *xen_periodic_timer;
     QemuMutex xen_timers_lock;
 #endif
-#if defined(CONFIG_HVF)
+#if defined(CONFIG_HVF) || defined(CONFIG_MSHV)
     X86LazyFlags lflags;
     void *emu_mmio_buf;
 #endif

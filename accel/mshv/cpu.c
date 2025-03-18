@@ -1166,16 +1166,14 @@ static int set_memory_info(const struct hyperv_message *msg,
 
 static MshvOps mshv_ops = {
 	.guest_mem_write_fn = guest_mem_write_fn,
-	.guest_mem_read_fn = guest_mem_read_fn,
-	.mmio_read_fn = mmio_read_fn,
-	.mmio_write_fn = mmio_write_fn,
-	.pio_read_fn = pio_read_fn,
-	.pio_write_fn = pio_write_fn,
+	.guest_mem_read_fn  = guest_mem_read_fn,
+	.pio_read_fn        = pio_read_fn,
+	.pio_write_fn       = pio_write_fn,
 	/* fn's for the plaform in the emulator */
-	.set_cpu_state = set_cpu_state_mgns,
-	.get_cpu_state = get_cpu_state_mgns,
-	.set_x64_registers = set_x64_registers_mgns,
-	.translate_gva = translate_gva_mgns,
+	.set_cpu_state      = set_cpu_state_mgns,
+	.get_cpu_state      = get_cpu_state_mgns,
+	.set_x64_registers  = set_x64_registers_mgns,
+	.translate_gva      = translate_gva_mgns,
 };
 
 static int linearize_ds_ch(struct EmulatorWrapperMgns *emu,
@@ -1328,12 +1326,7 @@ static int write_memory_mgns(struct EmulatorWrapperMgns *emu,
 		}
 	}
 	ret = guest_mem_write_fn(gpa, data, len, false);
-	if (ret == MEMTX_OK) {
-		return 0;
-	}
-
-	ret = mmio_write_fn(gpa, data, len, false);
-	if (ret < 0) {
+	if (ret != MEMTX_OK) {
 		perror("failed to write to mmio");
 		return -1;
 	}

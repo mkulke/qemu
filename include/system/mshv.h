@@ -96,6 +96,7 @@ int mshv_arch_put_registers(MshvState *s, CPUState *cpu);
 
 int mshv_arch_get_registers(MshvState *s, CPUState *cpu);
 
+int mshv_load_regs(CPUState *cpu);
 
 #else //! CONFIG_MSHV_IS_POSSIBLE
 #define mshv_enabled() false
@@ -186,12 +187,6 @@ enum VmExitMgns {
 	VmExitSpecial  = 2,
 };
 
-struct EmulatorWrapperMgns {
-	uint64_t initial_gva;
-	uint64_t initial_gpa;
-	int cpu_fd;
-};
-
 void init_cpu_db_mgns(void);
 int new_vcpu_mgns(int mshv_fd, uint8_t vp_index, MshvOps *ops);
 int create_vcpu_mgns(int vm_fd, uint8_t vp_index);
@@ -217,34 +212,21 @@ int configure_vcpu_mgns(int cpu_fd,
 						uint64_t xcr0,
 						struct FloatingPointUnit *fpu_regs);
 int get_standard_regs_mgns(int cpu_fd, struct StandardRegisters *regs);
-int set_cpu_state_mgns(int cpu_fd,
-		 	           const StandardRegisters *standard_regs,
-					   const SpecialRegisters *special_regs);
-int get_cpu_state_mgns(int cpu_fd,
-					   StandardRegisters *standard_regs,
-					   SpecialRegisters *special_regs);
+int get_special_regs_mgns(int cpu_fd, struct SpecialRegisters *regs);
 int set_x64_registers_mgns(int cpu_fd, const struct X64Registers *regs);
-int translate_gva_mgns(int cpu_fd, uint64_t gva, uint64_t *gpa,
-					   uint64_t flags);
-// TODO: should be static
-int handle_unmapped_mem_mgns(int vm_fd,
-							 int vcpu_fd,
-							 const struct hyperv_message *msg,
-							 enum VmExitMgns *exit_reason);
-int handle_pio_mgns(int cpu_fd, const struct hyperv_message *msg);
-enum VmExitMgns run_vcpu_mgns(int vm_fd,
-							   int cpu_fd,
-							   hv_message *msg);
+enum VmExitMgns run_vcpu_mgns(int vm_fd, CPUState *cpu, hv_message *msg);
 
-/* memory */
-void guest_mem_read_fn(uint64_t gpa, uint8_t *data, uintptr_t size,
-					   bool is_secure_mode);
+/* for use in the local sw emu */
+int guest_mem_read_mgns(CPUState *cpu, uint64_t gva, uint8_t *data,
+						uintptr_t size);
+int guest_mem_write_mgns(CPUState *cpu, uint64_t gva, const uint8_t *data,
+						uintptr_t size);
+/* for use in the remote sw emu */
+int guest_mem_read_fn(uint64_t gpa, uint8_t *data, uintptr_t size,
+					  bool is_secure_mode);
 int guest_mem_write_fn(uint64_t gpa, const uint8_t *data, uintptr_t size,
 					   bool is_secure_mode);
-int mmio_write_fn(uint64_t gpa, const uint8_t *data, uintptr_t size,
-                  bool is_secure_mode);
-void mmio_read_fn(uint64_t gpa, uint8_t *data, uintptr_t size,
-                  bool is_secure_mode);
+int translate_gva_mgns(int cpu_fd, uint64_t gva, uint64_t *gpa, uint64_t flags);
 
 /* pio */
 int pio_write_fn(uint64_t port, const uint8_t *data, uintptr_t size,

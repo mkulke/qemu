@@ -63,7 +63,6 @@ static int mshv_getput_regs(MshvState *mshv_state, CPUState *cpu, bool set)
     int ret = 0;
 
     if (!set) {
-        /* mshv_get_cpu(mshv_vcpufd(cpu), &regs, &sregs, &fpu); */
         get_vcpu_mgns(mshv_vcpufd(cpu), &regs, &sregs, &fpu);
     }
 
@@ -117,11 +116,6 @@ static int mshv_getput_regs(MshvState *mshv_state, CPUState *cpu, bool set)
 							&sregs,
 							env->xcr0,
 							&fpu);
-        /* mshv_configure_vcpu( */
-        /*     mshv_vcpufd(cpu), cpu->cpu_index, */
-        /*     IS_AMD_CPU(env) ? AMD : (IS_INTEL_CPU(env) ? Intel : Unknown), */
-        /*     env->nr_dies, cpu->nr_cores / env->nr_dies, cpu->nr_threads, &regs, */
-        /*     &sregs, env->xcr0, &fpu); */
     } else {
         cpu_set_apic_tpr(x86cpu->apic_state, sregs.cr8);
         cpu_set_apic_base(x86cpu->apic_state, sregs.apic_base);

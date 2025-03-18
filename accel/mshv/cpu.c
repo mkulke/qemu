@@ -1060,11 +1060,12 @@ int configure_vcpu_mgns(int cpu_fd,
 	return 0;
 }
 
-int set_cpu_state_mgns(int cpu_fd,
-		 	           const StandardRegisters *standard_regs,
-					   const SpecialRegisters *special_regs)
+static int set_cpu_state_mgns(const EmulatorPropsMgns *emu_props,
+							  const StandardRegisters *standard_regs,
+							  const SpecialRegisters *special_regs)
 {
 	int ret;
+	int cpu_fd = emu_props->cpu_fd;
 
 	ret = set_standard_regs_mgns(cpu_fd, standard_regs);
 	if (ret < 0) {
@@ -1081,12 +1082,13 @@ int set_cpu_state_mgns(int cpu_fd,
 	return 0;
 }
 
-int get_cpu_state_mgns(int cpu_fd,
-					   StandardRegisters *standard_regs,
-					   SpecialRegisters *special_regs)
+static int get_cpu_state_mgns(const EmulatorPropsMgns *emu_props,
+						      StandardRegisters *standard_regs,
+					          SpecialRegisters *special_regs)
 {
 
 	int ret;
+	int cpu_fd = emu_props->cpu_fd;
 
 	ret = get_standard_regs_mgns(cpu_fd, standard_regs);
 	if (ret < 0) {
@@ -1102,11 +1104,13 @@ int get_cpu_state_mgns(int cpu_fd,
 return 0;
 }
 
-int translate_gva_mgns(int cpu_fd, uint64_t gva, uint64_t *gpa,
-					   uint64_t flags)
+static int translate_gva_mgns(const EmulatorPropsMgns *props,
+						      uint64_t gva, uint64_t *gpa,
+						      uint64_t flags)
 {
 	int ret;
 	union hv_translate_gva_result result = { 0 };
+	int cpu_fd = props->cpu_fd;
 
 	*gpa = 0;
 	struct mshv_translate_gva args = {
@@ -1164,50 +1168,108 @@ static int set_memory_info(const struct hyperv_message *msg,
 	return 0;
 }
 
+static int read_memory_mgns(const struct EmulatorPropsMgns *props,
+		                    uint64_t gva,
+		                    uint8_t *data,
+		                    size_t len)
+{
+	int ret;
+	uint64_t gpa, flags;
+
+	if (gva == props->initial_gva) {
+		gpa = props->initial_gpa;
+	} else {
+	    flags = HV_TRANSLATE_GVA_VALIDATE_READ;
+		ret = translate_gva_mgns(props, gva, &gpa, flags);
+		if (ret < 0) {
+			perror("failed to translate gva to gpa");
+			return -1;
+		}
+		/* TODO: it's unfortunate that this fn doesn't fail
+		 * the rust code has a code path for failed reads at this point,
+		 * but it's dead code */
+		guest_mem_read_fn(gpa, data, len, false);
+	}
+
+	return 0;
+}
+
 static MshvOps mshv_ops = {
 	.guest_mem_write_fn = guest_mem_write_fn,
 	.guest_mem_read_fn  = guest_mem_read_fn,
 	.pio_read_fn        = pio_read_fn,
 	.pio_write_fn       = pio_write_fn,
 	/* fn's for the plaform in the emulator */
-	.set_cpu_state      = set_cpu_state_mgns,
-	.get_cpu_state      = get_cpu_state_mgns,
-	.set_x64_registers  = set_x64_registers_mgns,
-	.translate_gva      = translate_gva_mgns,
+	.read_memory_fn	    = read_memory_mgns,
+	.set_cpu_state_fn   = set_cpu_state_mgns,
+	.get_cpu_state_fn   = get_cpu_state_mgns,
+	.translate_gva_fn   = translate_gva_mgns,
 };
 
-static int linearize_ds_ch(struct EmulatorWrapperMgns *emu,
+static int linearize_ds_ch(struct EmulatorPropsMgns *props,
 		                   uint64_t logical_addr)
 {
-	return linearize_exported(emu->cpu_fd,
-					   DSRegister,
-					   logical_addr,
-					   emu->initial_gva,
-					   emu->initial_gpa,
-					   &mshv_ops);
+	return linearize_exported(props, DSRegister, logical_addr, &mshv_ops);
 }
 
-static int linearize_es_ch(struct EmulatorWrapperMgns *emu,
+static int linearize_es_ch(struct EmulatorPropsMgns *props,
 		                   uint64_t logical_addr)
 {
-	return linearize_exported(emu->cpu_fd,
-					   ESRegister,
-					   logical_addr,
-					   emu->initial_gva,
-					   emu->initial_gpa,
-					   &mshv_ops);
+	return linearize_exported(props, ESRegister, logical_addr, &mshv_ops);
 }
 
-static int handle_mmio_mgns(int cpu_fd,
+/* static const struct x86_emul_ops mshv_x86_emul_ops = { */
+/*     .read_mem = hvf_read_mem, */
+/*     /1* .write_mem = hvf_write_mem, *1/ */
+/*     /1* .read_segment_descriptor = hvf_read_segment_descriptor, *1/ */
+/*     /1* .handle_io = hvf_handle_io, *1/ */
+/*     /1* .simulate_rdmsr = hvf_simulate_rdmsr, *1/ */
+/*     /1* .simulate_wrmsr = hvf_simulate_wrmsr, *1/ */
+/* }; */
+
+/* void (*read_mem)(CPUState *cpu, void *data, target_ulong addr, int bytes); */
+
+static int emulate_local_mgns(CPUState *cpu,
+							  uint8_t *instruction_bytes,
+							  size_t insn_len)
+{
+    X86CPU *x86_cpu = X86_CPU(cpu);
+    CPUX86State *env = &x86_cpu->env;
+	struct x86_decode decode;
+	int ret;
+
+
+                /* hvf_load_regs(cpu); */
+                /* decode_instruction(env, &decode); */
+                /* exec_instruction(env, &decode); */
+                /* hvf_store_regs(cpu); */
+
+	ret = mshv_load_regs(cpu);
+	if (ret < 0) {
+		return -1;
+	}
+
+	/* see above */
+	/* init_emu(&mshv_x86_emul_ops); */
+	init_decoder();
+
+	decode_instruction(env, &decode);
+
+	return 0;
+}
+
+static int handle_mmio_mgns(CPUState *cpu,
 					        const struct hyperv_message *msg,
 					        enum VmExitMgns *exit_reason)
 {
 	struct hv_x64_memory_intercept_message info = { 0 };
 	size_t insn_len;
 	uint8_t access_type;
-	uint64_t gva, gpa;
+	/* uint64_t gva, gpa; */
 	uint8_t *instruction_bytes;
 	int ret;
+	int cpu_fd = mshv_vcpufd(cpu);
+	struct EmulatorPropsMgns emu_props = { 0 };
 
 	ret = set_memory_info(msg, &info);
 	if (ret < 0) {
@@ -1217,8 +1279,10 @@ static int handle_mmio_mgns(int cpu_fd,
 	}
 	insn_len = info.instruction_byte_count;
 	access_type = info.header.intercept_access_type;
-	gva = info.guest_virtual_address;
-	gpa = info.guest_physical_address;
+
+	emu_props.initial_gva = info.guest_virtual_address;
+	emu_props.initial_gpa = info.guest_physical_address;
+	emu_props.cpu_fd = cpu_fd;
 
 	if (access_type == HV_X64_INTERCEPT_ACCESS_TYPE_EXECUTE) {
 		perror("invalid intercept access type: execute");
@@ -1281,33 +1345,7 @@ int handle_unmapped_mem_mgns(int vm_fd,
 	return 0;
 }
 
-static int read_memory_mgns(struct EmulatorWrapperMgns *emu,
-		                    uint64_t gva,
-		                    uint8_t *data,
-		                    size_t len)
-{
-	int ret;
-	uint64_t gpa, flags;
-
-	if (gva == emu->initial_gva) {
-		gpa = emu->initial_gpa;
-	} else {
-	    flags = HV_TRANSLATE_GVA_VALIDATE_READ;
-		ret = translate_gva_mgns(emu->cpu_fd, gva, &gpa, flags);
-		if (ret < 0) {
-			perror("failed to translate gva to gpa");
-			return -1;
-		}
-		/* TODO: it's unfortunate that this fn doesn't fail
-		 * the rust code has a code path for failed reads at this point,
-		 * but it's dead code */
-		guest_mem_read_fn(gpa, data, len, false);
-	}
-
-	return 0;
-}
-
-static int write_memory_mgns(struct EmulatorWrapperMgns *emu,
+static int write_memory_mgns(struct EmulatorPropsMgns *props,
 							 uint64_t gva,
 							 const uint8_t *data,
 							 size_t len)
@@ -1315,11 +1353,11 @@ static int write_memory_mgns(struct EmulatorWrapperMgns *emu,
 	int ret;
 	uint64_t gpa, flags;
 
-	if (gva == emu->initial_gva) {
-		gpa = emu->initial_gpa;
+	if (gva == props->initial_gva) {
+		gpa = props->initial_gpa;
 	} else {
 	    flags = HV_TRANSLATE_GVA_VALIDATE_WRITE;
-		ret = translate_gva_mgns(emu->cpu_fd, gva, &gpa, flags);
+		ret = translate_gva_mgns(props, gva, &gpa, flags);
 		if (ret < 0) {
 			perror("failed to translate gva to gpa");
 			return -1;
@@ -1351,17 +1389,17 @@ static int handle_pio_str_mgns(int cpu_fd,
 	int ret;
 	uint64_t src, dst, rip, rax, rsi, rdi;
 	struct X64Registers x64_regs = { 0 };
-	struct EmulatorWrapperMgns emu = { 0 };
-
-	ret = get_cpu_state_mgns(cpu_fd, &standard_regs, &special_regs);
-	if (ret < 0) {
-		perror("failed to get cpu state");
-		return -1;
-	}
+	struct EmulatorPropsMgns emu = { 0 };
 
 	emu.cpu_fd = cpu_fd;
 	emu.initial_gpa = 0;
 	emu.initial_gva = 0;
+
+	ret = get_cpu_state_mgns(&emu, &standard_regs, &special_regs);
+	if (ret < 0) {
+		perror("failed to get cpu state");
+		return -1;
+	}
 
 	direction_flag = (standard_regs.rflags & DF) != 0;
 

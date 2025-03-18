@@ -21,6 +21,8 @@
 #include <stdint.h>
 #include <sys/ioctl.h>
 
+#include "emulate/x86_decode.h"
+
 #define TYPE_MSHV_ACCEL ACCEL_CLASS_NAME("mshv")
 
 DECLARE_INSTANCE_CHECKER(MshvState, MSHV_STATE, TYPE_MSHV_ACCEL)
@@ -444,14 +446,20 @@ static inline MemTxAttrs mshv_get_mem_attrs(bool is_secure_mode)
     return ((MemTxAttrs){ .secure = is_secure_mode });
 }
 
-void guest_mem_read_fn(uint64_t gpa, uint8_t *data, uintptr_t size,
+int guest_mem_read_fn(uint64_t gpa, uint8_t *data, uintptr_t size,
 					   bool is_secure_mode)
 {
-    int ret = 0;
+    int ret;
     MemTxAttrs memattr = mshv_get_mem_attrs(is_secure_mode);
+
     ret = address_space_rw(&address_space_memory, gpa, memattr, (void *)data,
                            size, false);
-    assert(ret == MEMTX_OK);
+	if (ret != MEMTX_OK) {
+		perror("Failed to read guest memory");
+		return -1;
+	}
+
+	return 0;
 }
 
 int guest_mem_write_fn(uint64_t gpa, const uint8_t *data, uintptr_t size,
@@ -754,9 +762,7 @@ static int mshv_cpu_exec(CPUState *cpu)
          */
         smp_rmb();
 
-        exit_reason = run_vcpu_mgns(mshv_state->vm,
-								    mshv_vcpufd(cpu),
-									&mshv_msg);
+        exit_reason = run_vcpu_mgns(mshv_state->vm, cpu, &mshv_msg);
 
         switch (exit_reason) {
         case VmExitIgnore:

@@ -455,27 +455,7 @@ void guest_mem_read_fn(uint64_t gpa, uint8_t *data, uintptr_t size,
 }
 
 int guest_mem_write_fn(uint64_t gpa, const uint8_t *data, uintptr_t size,
-                              bool is_secure_mode)
-{
-    int ret = 0;
-    MemTxAttrs memattr = mshv_get_mem_attrs(is_secure_mode);
-    ret = address_space_rw(&address_space_memory, gpa, memattr, (void *)data,
-                           size, true);
-    return ret;
-}
-
-void mmio_read_fn(uint64_t gpa, uint8_t *data, uintptr_t size,
-                         bool is_secure_mode)
-{
-    int ret = 0;
-    MemTxAttrs memattr = mshv_get_mem_attrs(is_secure_mode);
-    ret = address_space_rw(&address_space_memory, gpa, memattr, (void *)data,
-                           size, false);
-    assert(ret == MEMTX_OK);
-}
-
-int mmio_write_fn(uint64_t gpa, const uint8_t *data, uintptr_t size,
-				  bool is_secure_mode)
+                       bool is_secure_mode)
 {
     int ret = 0;
     MemTxAttrs memattr = mshv_get_mem_attrs(is_secure_mode);

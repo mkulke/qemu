@@ -257,6 +257,47 @@ bool map_overlapped_region_mgns(int vm_fd, uint64_t gpa)
 	return true;
 }
 
+int guest_mem_read_mgns(CPUState *cpu, uint64_t gva, uint8_t *data,
+						uintptr_t size)
+{
+	int ret;
+	uint64_t gpa, flags;
+	int cpu_fd = mshv_vcpufd(cpu);
+
+	flags = HV_TRANSLATE_GVA_VALIDATE_WRITE;
+	ret = translate_gva_mgns(cpu_fd, gva, &gpa, flags);
+	if (ret < 0) {
+		perror("failed to translate gva to gpa");
+		return -1;
+	}
+	ret = guest_mem_read_fn(gpa, data, size, false);
+	if (ret < 0) {
+		perror("failed to write to guest memory");
+		return -1;
+	}
+	return 0;
+}
+
+int guest_mem_write_mgns(CPUState *cpu, uint64_t gva, const uint8_t *data,
+						uintptr_t size)
+{
+	int ret;
+	uint64_t gpa, flags;
+	int cpu_fd = mshv_vcpufd(cpu);
+
+	flags = HV_TRANSLATE_GVA_VALIDATE_WRITE;
+	ret = translate_gva_mgns(cpu_fd, gva, &gpa, flags);
+	if (ret < 0) {
+		perror("failed to translate gva to gpa");
+		return -1;
+	}
+	ret = guest_mem_write_fn(gpa, data, size, false);
+	if (ret < 0) {
+		perror("failed to write to guest memory");
+		return -1;
+	}
+	return 0;
+}
 
 int add_mem_mgns(int vm_fd, const MemoryRegionMgns *mr)
 {

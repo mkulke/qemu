@@ -8,6 +8,9 @@
 #include <sys/ioctl.h>
 #include <sys/types.h>
 
+#include "emulate/x86_decode.h"
+#include "emulate/x86_emu.h"
+
 static GHashTable *cpu_db_mgns;
 static QemuMutex cpu_db_mutex_mgns;
 
@@ -149,8 +152,8 @@ int new_vcpu_mgns(int mshv_fd, uint8_t vp_index, MshvOps *ops)
 }
 
 static int get_generic_regs_mgns(int cpu_fd,
-								 struct hv_register_assoc *assocs,
-								 size_t n_regs)
+						         struct hv_register_assoc *assocs,
+						         size_t n_regs)
 {
 	struct mshv_vp_registers input = {
 		.count = n_regs,
@@ -172,7 +175,7 @@ inline static int set_generic_regs_mgns(int cpu_fd,
 	return ioctl(cpu_fd, MSHV_SET_VP_REGISTERS, &input);
 }
 
-inline static void populate_standard_regs_mgns(struct hv_register_assoc *assocs,
+inline static void populate_standard_regs_mgns(const struct hv_register_assoc *assocs,
 										       struct StandardRegisters *regs)
 {
 	regs->rax =	assocs[0].value.reg64;
@@ -197,7 +200,7 @@ inline static void populate_standard_regs_mgns(struct hv_register_assoc *assocs,
 }
 
 inline static void populate_segment_reg_mgns(const struct hv_x64_segment_register *hv_seg,
-											 struct SegmentRegister *seg)
+							                 struct SegmentRegister *seg)
 {
 	memset(seg, 0, sizeof(struct SegmentRegister));
 
@@ -347,7 +350,7 @@ static int set_standard_regs_mgns(int cpu_fd, const struct StandardRegisters *re
 	return 0;
 }
 
-static int get_special_regs_mgns(int cpu_fd, struct SpecialRegisters *regs)
+int get_special_regs_mgns(int cpu_fd, struct SpecialRegisters *regs)
 {
 	size_t n_regs = sizeof(SPECIAL_REGISTER_NAMES) / sizeof(enum hv_register_name);
 	struct hv_register_assoc *assocs;
@@ -1104,13 +1107,12 @@ static int get_cpu_state_mgns(const EmulatorPropsMgns *emu_props,
 return 0;
 }
 
-static int translate_gva_mgns(const EmulatorPropsMgns *props,
-						      uint64_t gva, uint64_t *gpa,
-						      uint64_t flags)
+int translate_gva_mgns(int cpu_fd,
+					   uint64_t gva, uint64_t *gpa,
+					   uint64_t flags)
 {
 	int ret;
 	union hv_translate_gva_result result = { 0 };
-	int cpu_fd = props->cpu_fd;
 
 	*gpa = 0;
 	struct mshv_translate_gva args = {
@@ -1180,7 +1182,7 @@ static int read_memory_mgns(const struct EmulatorPropsMgns *props,
 		gpa = props->initial_gpa;
 	} else {
 	    flags = HV_TRANSLATE_GVA_VALIDATE_READ;
-		ret = translate_gva_mgns(props, gva, &gpa, flags);
+		ret = translate_gva_mgns(props->cpu_fd, gva, &gpa, flags);
 		if (ret < 0) {
 			perror("failed to translate gva to gpa");
 			return -1;
@@ -1194,6 +1196,34 @@ static int read_memory_mgns(const struct EmulatorPropsMgns *props,
 	return 0;
 }
 
+static int write_memory_mgns(const struct EmulatorPropsMgns *props,
+							 uint64_t gva,
+							 const uint8_t *data,
+							 size_t len)
+{
+	int ret;
+	uint64_t gpa, flags;
+
+	if (gva == props->initial_gva) {
+		gpa = props->initial_gpa;
+	} else {
+	    flags = HV_TRANSLATE_GVA_VALIDATE_WRITE;
+		ret = translate_gva_mgns(props->cpu_fd, gva, &gpa, flags);
+		if (ret < 0) {
+			perror("failed to translate gva to gpa");
+			return -1;
+		}
+	}
+	ret = guest_mem_write_fn(gpa, data, len, false);
+	if (ret != MEMTX_OK) {
+		perror("failed to write to mmio");
+		return -1;
+	}
+
+	return 0;
+}
+
+
 static MshvOps mshv_ops = {
 	.guest_mem_write_fn = guest_mem_write_fn,
 	.guest_mem_read_fn  = guest_mem_read_fn,
@@ -1201,6 +1231,7 @@ static MshvOps mshv_ops = {
 	.pio_write_fn       = pio_write_fn,
 	/* fn's for the plaform in the emulator */
 	.read_memory_fn	    = read_memory_mgns,
+	.write_memory_fn	= write_memory_mgns,
 	.set_cpu_state_fn   = set_cpu_state_mgns,
 	.get_cpu_state_fn   = get_cpu_state_mgns,
 	.translate_gva_fn   = translate_gva_mgns,
@@ -1298,9 +1329,15 @@ static int handle_mmio_mgns(CPUState *cpu,
 
 	instruction_bytes = info.instruction_bytes;
 
-	/* emulate_local(instruction_bytes, size); */
-	emulate_with_ch(cpu_fd,
-				    gva, gpa,
+	if (false) {
+		ret = emulate_local_mgns(cpu, instruction_bytes, insn_len);
+		if (ret < 0) {
+			perror("failed to emulate instruction");
+			abort();
+		}
+	}
+
+	emulate_with_ch(&emu_props,
 				    instruction_bytes, insn_len,
 				    &mshv_ops);
 	if (ret < 0) {
@@ -1313,10 +1350,10 @@ static int handle_mmio_mgns(CPUState *cpu,
 	return 0;
 }
 
-int handle_unmapped_mem_mgns(int vm_fd,
-							 int vcpu_fd,
-							 const struct hyperv_message *msg,
-							 enum VmExitMgns *exit_reason)
+static int handle_unmapped_mem_mgns(int vm_fd,
+									CPUState *cpu,
+									const struct hyperv_message *msg,
+									enum VmExitMgns *exit_reason)
 {
 	struct hv_x64_memory_intercept_message info = { 0 };
 	uint64_t gpa;
@@ -1332,7 +1369,7 @@ int handle_unmapped_mem_mgns(int vm_fd,
 
     found = find_entry_idx_by_gpa_mgns(gpa, NULL);
 	if (!found) {
-		return handle_mmio_mgns(vcpu_fd, msg, exit_reason);
+		return handle_mmio_mgns(cpu, msg, exit_reason);
 	}
 
 	ret = map_overlapped_region_mgns(vm_fd, gpa);
@@ -1340,33 +1377,6 @@ int handle_unmapped_mem_mgns(int vm_fd,
 		*exit_reason = VmExitSpecial;
 	} else {
 		*exit_reason = VmExitIgnore;
-	}
-
-	return 0;
-}
-
-static int write_memory_mgns(struct EmulatorPropsMgns *props,
-							 uint64_t gva,
-							 const uint8_t *data,
-							 size_t len)
-{
-	int ret;
-	uint64_t gpa, flags;
-
-	if (gva == props->initial_gva) {
-		gpa = props->initial_gpa;
-	} else {
-	    flags = HV_TRANSLATE_GVA_VALIDATE_WRITE;
-		ret = translate_gva_mgns(props, gva, &gpa, flags);
-		if (ret < 0) {
-			perror("failed to translate gva to gpa");
-			return -1;
-		}
-	}
-	ret = guest_mem_write_fn(gpa, data, len, false);
-	if (ret != MEMTX_OK) {
-		perror("failed to write to mmio");
-		return -1;
 	}
 
 	return 0;
@@ -1551,7 +1561,7 @@ static int set_ioport_info(const struct hyperv_message *msg,
 	return 0;
 }
 
-int handle_pio_mgns(int cpu_fd, const struct hyperv_message *msg)
+static int handle_pio_mgns(int cpu_fd, const struct hyperv_message *msg)
 {
 	struct hv_x64_io_port_intercept_message info = { 0 };
 	int ret;
@@ -1569,11 +1579,12 @@ int handle_pio_mgns(int cpu_fd, const struct hyperv_message *msg)
 	return handle_pio_non_str_mgns(cpu_fd, &info);
 }
 
-enum VmExitMgns run_vcpu_mgns(int vm_fd, int cpu_fd, hv_message *msg)
+enum VmExitMgns run_vcpu_mgns(int vm_fd, CPUState *cpu, hv_message *msg)
 {
 	int ret;
 	hv_message exit_msg = { 0 };
 	enum VmExitMgns exit_reason;
+	int cpu_fd = mshv_vcpufd(cpu);
 
 	ret = ioctl(cpu_fd, MSHV_RUN_VP, &exit_msg);
 	if (ret < 0) {
@@ -1586,14 +1597,14 @@ enum VmExitMgns run_vcpu_mgns(int vm_fd, int cpu_fd, hv_message *msg)
 			*msg = exit_msg;
 			return VmExitShutdown;
 		case HVMSG_UNMAPPED_GPA:
-			ret = handle_unmapped_mem_mgns(vm_fd, cpu_fd, &exit_msg, &exit_reason);
+			ret = handle_unmapped_mem_mgns(vm_fd, cpu, &exit_msg, &exit_reason);
 			if (ret < 0) {
 				perror("failed to handle unmapped memory");
 				abort();
 			}
 			return exit_reason;
 		case HVMSG_GPA_INTERCEPT:
-			ret = handle_mmio_mgns(cpu_fd, &exit_msg, &exit_reason);
+			ret = handle_mmio_mgns(cpu, &exit_msg, &exit_reason);
 			if (ret < 0) {
 				perror("failed to handle mmio");
 				abort();

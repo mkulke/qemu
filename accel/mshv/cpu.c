@@ -761,7 +761,7 @@ static int set_cpuid2(int cpu_fd, struct hv_cpuid *cpuid)
 }
 
 /* TODO: Note this function is still using the cpuid impl from mshv-c */
-static int set_cpuid2_mgns(int cpu_fd, struct CpuIdMgns *cpuid_mgns)
+static int set_cpuid2_mgns(int cpu_fd, struct CpuId *cpuid_mgns)
 {
 	int ret;
 	size_t n_entries = cpuid_mgns->len;
@@ -769,7 +769,7 @@ static int set_cpuid2_mgns(int cpu_fd, struct CpuIdMgns *cpuid_mgns)
 		+ n_entries * sizeof(struct hv_cpuid_entry);
 	struct hv_cpuid *cpuid;
 	struct hv_cpuid_entry *entry;
-	struct CpuIdEntryMgns *mgns_entry;
+	struct CpuIdEntry *mgns_entry;
 
 	cpuid = g_malloc0(cpuid_size);
 	cpuid->nent = n_entries;
@@ -998,7 +998,7 @@ static int set_lint_mgns(int cpu_fd)
 	return 0;
 }
 
-static void free_cpuid_mgns(CpuIdMgns *cpu_id) {
+static void free_cpuid_mgns(CpuId *cpu_id) {
     if (cpu_id != NULL) {
         if (cpu_id->entries != NULL) {
             g_free(cpu_id->entries);
@@ -1019,15 +1019,15 @@ int configure_vcpu_mgns(int cpu_fd,
 						struct FloatingPointUnit *fpu_regs)
 {
 	int ret;
-	struct CpuIdMgns *cpuid_mshvc;
+	struct CpuId *cpuid_mshvc;
 
 	/* TODO: we create the cpuid data in mshv-c for the time being
 	 * we need to port it or consolidate with existing qemu facilities */
-	cpuid_mshvc = create_cpuid_mgns(id,
-								    cpu_vendor,
-								    ndies,
-								    ncores_per_die / ndies,
-								    nthreads_per_core);
+	cpuid_mshvc = create_cpuid_ch(id,
+								  cpu_vendor,
+								  ndies,
+								  ncores_per_die / ndies,
+								  nthreads_per_core);
 	ret = set_cpuid2_mgns(cpu_fd, cpuid_mshvc);
 	free_cpuid_mgns(cpuid_mshvc);
 	if (ret < 0) {
@@ -1063,12 +1063,11 @@ int configure_vcpu_mgns(int cpu_fd,
 	return 0;
 }
 
-static int set_cpu_state_mgns(const EmulatorPropsMgns *emu_props,
+static int set_cpu_state_mgns(int cpu_fd,
 							  const StandardRegisters *standard_regs,
 							  const SpecialRegisters *special_regs)
 {
 	int ret;
-	int cpu_fd = emu_props->cpu_fd;
 
 	ret = set_standard_regs_mgns(cpu_fd, standard_regs);
 	if (ret < 0) {
@@ -1085,13 +1084,12 @@ static int set_cpu_state_mgns(const EmulatorPropsMgns *emu_props,
 	return 0;
 }
 
-static int get_cpu_state_mgns(const EmulatorPropsMgns *emu_props,
+static int get_cpu_state_mgns(int cpu_fd,
 						      StandardRegisters *standard_regs,
 					          SpecialRegisters *special_regs)
 {
 
 	int ret;
-	int cpu_fd = emu_props->cpu_fd;
 
 	ret = get_standard_regs_mgns(cpu_fd, standard_regs);
 	if (ret < 0) {
@@ -1170,7 +1168,9 @@ static int set_memory_info(const struct hyperv_message *msg,
 	return 0;
 }
 
-static int read_memory_mgns(const struct EmulatorPropsMgns *props,
+static int read_memory_mgns(int cpu_fd,
+							uint64_t initial_gva,
+							uint64_t initial_gpa,
 		                    uint64_t gva,
 		                    uint8_t *data,
 		                    size_t len)
@@ -1178,11 +1178,11 @@ static int read_memory_mgns(const struct EmulatorPropsMgns *props,
 	int ret;
 	uint64_t gpa, flags;
 
-	if (gva == props->initial_gva) {
-		gpa = props->initial_gpa;
+	if (gva == initial_gva) {
+		gpa = initial_gpa;
 	} else {
 	    flags = HV_TRANSLATE_GVA_VALIDATE_READ;
-		ret = translate_gva_mgns(props->cpu_fd, gva, &gpa, flags);
+		ret = translate_gva_mgns(cpu_fd, gva, &gpa, flags);
 		if (ret < 0) {
 			perror("failed to translate gva to gpa");
 			return -1;
@@ -1196,7 +1196,9 @@ static int read_memory_mgns(const struct EmulatorPropsMgns *props,
 	return 0;
 }
 
-static int write_memory_mgns(const struct EmulatorPropsMgns *props,
+static int write_memory_mgns(int cpu_fd,
+							 uint64_t initial_gva,
+							 uint64_t initial_gpa,
 							 uint64_t gva,
 							 const uint8_t *data,
 							 size_t len)
@@ -1204,11 +1206,11 @@ static int write_memory_mgns(const struct EmulatorPropsMgns *props,
 	int ret;
 	uint64_t gpa, flags;
 
-	if (gva == props->initial_gva) {
-		gpa = props->initial_gpa;
+	if (gva == initial_gva) {
+		gpa = initial_gpa;
 	} else {
 	    flags = HV_TRANSLATE_GVA_VALIDATE_WRITE;
-		ret = translate_gva_mgns(props->cpu_fd, gva, &gpa, flags);
+		ret = translate_gva_mgns(cpu_fd, gva, &gpa, flags);
 		if (ret < 0) {
 			perror("failed to translate gva to gpa");
 			return -1;
@@ -1223,13 +1225,13 @@ static int write_memory_mgns(const struct EmulatorPropsMgns *props,
 	return 0;
 }
 
-
-static MshvOps mshv_ops = {
+static MshvOps emu_ops_ch = {
+	/* trait impls for the emulator */
 	.guest_mem_write_fn = guest_mem_write_fn,
 	.guest_mem_read_fn  = guest_mem_read_fn,
 	.pio_read_fn        = pio_read_fn,
 	.pio_write_fn       = pio_write_fn,
-	/* fn's for the plaform in the emulator */
+	/* cb's for the plaform in the emulator */
 	.read_memory_fn	    = read_memory_mgns,
 	.write_memory_fn	= write_memory_mgns,
 	.set_cpu_state_fn   = set_cpu_state_mgns,
@@ -1260,9 +1262,7 @@ static int linearize_es_ch(struct EmulatorPropsMgns *props,
 
 /* void (*read_mem)(CPUState *cpu, void *data, target_ulong addr, int bytes); */
 
-static int emulate_local_mgns(CPUState *cpu,
-							  uint8_t *instruction_bytes,
-							  size_t insn_len)
+static int emulate_local(CPUState *cpu, uint8_t *insn_bytes, size_t insn_len)
 {
     X86CPU *x86_cpu = X86_CPU(cpu);
     CPUX86State *env = &x86_cpu->env;
@@ -1300,7 +1300,6 @@ static int handle_mmio_mgns(CPUState *cpu,
 	uint8_t *instruction_bytes;
 	int ret;
 	int cpu_fd = mshv_vcpufd(cpu);
-	struct EmulatorPropsMgns emu_props = { 0 };
 
 	ret = set_memory_info(msg, &info);
 	if (ret < 0) {
@@ -1310,10 +1309,6 @@ static int handle_mmio_mgns(CPUState *cpu,
 	}
 	insn_len = info.instruction_byte_count;
 	access_type = info.header.intercept_access_type;
-
-	emu_props.initial_gva = info.guest_virtual_address;
-	emu_props.initial_gpa = info.guest_physical_address;
-	emu_props.cpu_fd = cpu_fd;
 
 	if (access_type == HV_X64_INTERCEPT_ACCESS_TYPE_EXECUTE) {
 		perror("invalid intercept access type: execute");
@@ -1325,24 +1320,21 @@ static int handle_mmio_mgns(CPUState *cpu,
 		abort();
 	}
 
-	/* TODO: insn_len != 16 is x-page access, do we handle it properly */
+	/* TODO: insn_len != 16 is x-page access, do we handle it properly? */
 
 	instruction_bytes = info.instruction_bytes;
 
-	if (false) {
-		ret = emulate_local_mgns(cpu, instruction_bytes, insn_len);
+	if (getenv("USE_LOCAL_EMU") != NULL) {
+		ret = emulate_local(cpu, instruction_bytes, insn_len);
 		if (ret < 0) {
-			perror("failed to emulate instruction");
+			perror("failed to emulate mmio w/ local emulator");
 			abort();
 		}
-	}
-
-	emulate_with_ch(&emu_props,
-				    instruction_bytes, insn_len,
-				    &mshv_ops);
-	if (ret < 0) {
-		perror("failed to emulate mmio");
-		abort();
+	} else {
+		emulate_ch(cpu_fd,
+				   info.guest_virtual_address, info.guest_physical_address,
+				   instruction_bytes, insn_len,
+				   &emu_ops_ch);
 	}
 
 	*exit_reason = VmExitIgnore;
@@ -1399,13 +1391,8 @@ static int handle_pio_str_mgns(int cpu_fd,
 	int ret;
 	uint64_t src, dst, rip, rax, rsi, rdi;
 	struct X64Registers x64_regs = { 0 };
-	struct EmulatorPropsMgns emu = { 0 };
 
-	emu.cpu_fd = cpu_fd;
-	emu.initial_gpa = 0;
-	emu.initial_gva = 0;
-
-	ret = get_cpu_state_mgns(&emu, &standard_regs, &special_regs);
+	ret = get_cpu_state_mgns(cpu_fd, &standard_regs, &special_regs);
 	if (ret < 0) {
 		perror("failed to get cpu state");
 		return -1;
@@ -1414,10 +1401,10 @@ static int handle_pio_str_mgns(int cpu_fd,
 	direction_flag = (standard_regs.rflags & DF) != 0;
 
 	if (access_type == HV_X64_INTERCEPT_ACCESS_TYPE_WRITE) {
-		src = linearize_ds_ch(&emu, info->rsi);
+		src = linearize_ds_ch(cpu_fd, info->rsi);
 
 		for (size_t i = 0; i < repeat; i++) {
-			ret = read_memory_mgns(&emu, src, data, len);
+			ret = read_memory_mgns(cpu_fd, 0, 0, src, data, len);
 			if (ret < 0) {
 				perror("failed to read memory");
 				return -1;
@@ -1445,11 +1432,11 @@ static int handle_pio_str_mgns(int cpu_fd,
 		reg_names[2] = HV_X64_REGISTER_RSI;
 		reg_values[2] = rsi;
 	} else {
-		dst = linearize_es_ch(&emu, info->rdi);
+		dst = linearize_es_ch(cpu_fd, info->rdi);
 		for (size_t i = 0; i < repeat; i++) {
 			pio_read_fn(port, data, len, false);
 
-			ret = write_memory_mgns(&emu, dst, data, len);
+			ret = write_memory_mgns(cpu_fd, 0, 0, dst, data, len);
 			if (ret < 0) {
 				perror("failed to write memory");
 				return -1;

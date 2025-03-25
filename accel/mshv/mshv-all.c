@@ -494,6 +494,10 @@ int pio_write_fn(uint64_t port, const uint8_t *data, uintptr_t size,
 
 static int mshv_init_vcpu(CPUState *cpu)
 {
+    X86CPU *x86_cpu = X86_CPU(cpu);
+    CPUX86State *env = &x86_cpu->env;
+
+    env->emu_mmio_buf = g_new(char, 4096);
     cpu->accel = g_new0(AccelCPUState, 1);
 
 	int vm_fd = mshv_state->vm;
@@ -730,8 +734,13 @@ int resume_vm_mgns(int vm_fd) {
 
 static int mshv_destroy_vcpu(CPUState *cpu)
 {
+    X86CPU *x86_cpu = X86_CPU(cpu);
+    CPUX86State *env = &x86_cpu->env;
+
     remove_vcpu_mgns(mshv_vcpufd(cpu));
     mshv_vcpufd(cpu) = 0;
+
+    g_free(env->emu_mmio_buf);
     g_free(cpu->accel);
     return 0;
 }

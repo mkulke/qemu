@@ -96,8 +96,6 @@ int mshv_arch_put_registers(MshvState *s, CPUState *cpu);
 
 int mshv_arch_get_registers(MshvState *s, CPUState *cpu);
 
-int mshv_load_regs(CPUState *cpu);
-
 #else //! CONFIG_MSHV_IS_POSSIBLE
 #define mshv_enabled() false
 #endif
@@ -221,6 +219,9 @@ int guest_mem_read_mgns(CPUState *cpu, uint64_t gva, uint8_t *data,
 						uintptr_t size);
 int guest_mem_write_mgns(CPUState *cpu, uint64_t gva, const uint8_t *data,
 						uintptr_t size);
+int mshv_load_regs(int cpu_fd, CPUState *cpu);
+int mshv_store_regs(int cpu_fd, const CPUState *cpu);
+
 /* for use in the remote sw emu */
 int guest_mem_read_fn(uint64_t gpa, uint8_t *data, uintptr_t size,
 					  bool is_secure_mode);

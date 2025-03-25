@@ -21,6 +21,7 @@
 #include "emulate/x86_decode.h"
 #include "emulate/x86_emu.h"
 #include "qemu/typedefs.h"
+#include "qemu/error-report.h"
 #include "system/mshv.h"
 
 /* RW or Exec segment */
@@ -107,9 +108,10 @@ static bool segments_expands_down(const SegmentCache *seg)
 
 static uint32_t segment_limit(const SegmentCache *seg)
 {
-	SegmentRegister *mshv_seg = (SegmentRegister *)seg;
-	uint32_t limit = mshv_seg->limit;
-	uint8_t granularity = mshv_seg->g;
+	SegmentRegister mshv_seg = {0};
+	set_seg(&mshv_seg, seg);
+	uint32_t limit = mshv_seg.limit;
+	uint8_t granularity = mshv_seg.g;
 
 	if (granularity != 0) {
 		limit = (limit << 12) | 0xFFF;
@@ -179,7 +181,7 @@ static int linearize(CPUState *cpu,
 		}
 
 		if (logical_addr_32b > limit) {
-			perror("address exceeds limit");
+			error_report("address exceeds limit %u", limit);
 			return -1;
 		} 
 		*linear_addr = logical_addr_32b + base;	
@@ -362,9 +364,10 @@ target_ulong linear_addr(CPUState *cpu, target_ulong addr, X86Seg seg)
     /* return vmx_read_segment_base(cpu, seg) + addr; */
 	ret = linearize(cpu, addr, &linear_addr, seg);
 	if (ret < 0) {
-		perror("failed to linearize address");
+		error_report("failed to linearize address");
 		abort();
 	}
+
 	return linear_addr;
 }
 

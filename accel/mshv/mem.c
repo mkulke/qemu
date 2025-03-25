@@ -264,7 +264,7 @@ int guest_mem_read_mgns(CPUState *cpu, uint64_t gva, uint8_t *data,
 	uint64_t gpa, flags;
 	int cpu_fd = mshv_vcpufd(cpu);
 
-	flags = HV_TRANSLATE_GVA_VALIDATE_WRITE;
+	flags = HV_TRANSLATE_GVA_VALIDATE_READ;
 	ret = translate_gva_mgns(cpu_fd, gva, &gpa, flags);
 	if (ret < 0) {
 		perror("failed to translate gva to gpa");
@@ -272,7 +272,7 @@ int guest_mem_read_mgns(CPUState *cpu, uint64_t gva, uint8_t *data,
 	}
 	ret = guest_mem_read_fn(gpa, data, size, false);
 	if (ret < 0) {
-		perror("failed to write to guest memory");
+		perror("failed to read guest memory");
 		return -1;
 	}
 	return 0;

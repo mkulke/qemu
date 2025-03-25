@@ -53,6 +53,102 @@ static void mshv_getput_reg(uint64_t *mshv_reg, target_ulong *qemu_reg, int set)
     }
 }
 
+int mshv_store_regs(int cpu_fd, const CPUState *cpu)
+{
+    X86CPU *x86cpu = X86_CPU(cpu);
+    CPUX86State *env = &x86cpu->env;
+    StandardRegisters regs = {0};
+    SpecialRegisters sregs = {0};
+    FloatingPointUnit fpu = {0};
+	int ret;
+
+	regs.rax = env->regs[R_EAX];
+	regs.rbx = env->regs[R_EBX];
+	regs.rcx = env->regs[R_ECX];
+	regs.rdx = env->regs[R_EDX];
+	regs.rsi = env->regs[R_ESI];
+	regs.rdi = env->regs[R_EDI];
+	regs.rsp = env->regs[R_ESP];
+	regs.rbp = env->regs[R_EBP];
+	regs.rflags = env->eflags;
+	regs.rip = env->eip;
+
+	set_seg(&sregs.cs, &env->segs[R_CS]);
+	set_seg(&sregs.ds, &env->segs[R_DS]);
+	set_seg(&sregs.es, &env->segs[R_ES]);
+	set_seg(&sregs.fs, &env->segs[R_FS]);
+	set_seg(&sregs.gs, &env->segs[R_GS]);
+	set_seg(&sregs.ss, &env->segs[R_SS]);
+
+	sregs.idt.limit = env->idt.limit;
+	sregs.idt.base = env->idt.base;
+	sregs.gdt.limit = env->gdt.limit;
+	sregs.gdt.base = env->gdt.base;
+
+	sregs.cr0 = env->cr[0];
+	sregs.cr2 = env->cr[2];
+	sregs.cr3 = env->cr[3];
+	sregs.cr4 = env->cr[4];
+	sregs.efer = env->efer;
+
+	ret = set_vcpu_mgns(cpu_fd, &regs, &sregs, &fpu, env->xcr0);
+	if (ret < 0) {
+		perror("Failed to store cpu registers");
+		return -1;
+	}
+	return 0;
+}
+
+int mshv_load_regs(int cpu_fd, CPUState *cpu)
+{
+    X86CPU *x86cpu = X86_CPU(cpu);
+    CPUX86State *env = &x86cpu->env;
+    StandardRegisters regs;
+    SpecialRegisters sregs;
+    FloatingPointUnit fpu;
+	int ret;
+
+	ret = get_vcpu_mgns(cpu_fd, &regs, &sregs, &fpu);
+	if (ret < 0) {
+		perror("Failed to load cpu registers");
+		return -1;
+	}
+
+	env->regs[R_EAX] = regs.rax;
+	env->regs[R_EBX] = regs.rbx;
+	env->regs[R_ECX] = regs.rcx;
+	env->regs[R_EDX] = regs.rdx;
+	env->regs[R_ESI] = regs.rsi;
+	env->regs[R_EDI] = regs.rdi;
+	env->regs[R_ESP] = regs.rsp;
+	env->regs[R_EBP] = regs.rbp;
+	env->eflags = regs.rflags;
+	env->eip = regs.rip;
+
+	get_seg(&env->segs[R_CS], &sregs.cs);
+	get_seg(&env->segs[R_DS], &sregs.ds);
+	get_seg(&env->segs[R_ES], &sregs.es);
+	get_seg(&env->segs[R_FS], &sregs.fs);
+	get_seg(&env->segs[R_GS], &sregs.gs);
+	get_seg(&env->segs[R_SS], &sregs.ss);
+
+	env->idt.limit = sregs.idt.limit;
+	env->idt.base = sregs.idt.base;
+	env->gdt.limit = sregs.gdt.limit;
+	env->gdt.base = sregs.gdt.base;
+
+	env->cr[0] = sregs.cr0;
+	env->cr[2] = sregs.cr2;
+	env->cr[3] = sregs.cr3;
+	env->cr[4] = sregs.cr4;
+	env->efer = sregs.efer;
+
+	cpu_set_apic_tpr(x86cpu->apic_state, sregs.cr8);
+	cpu_set_apic_base(x86cpu->apic_state, sregs.apic_base);
+
+	return 0;
+}
+
 static int mshv_getput_regs(MshvState *mshv_state, CPUState *cpu, bool set)
 {
     X86CPU *x86cpu = X86_CPU(cpu);
@@ -204,76 +300,4 @@ int mshv_arch_put_registers(MshvState *mshv_state, CPUState *cpu)
 int mshv_arch_get_registers(MshvState *mshv_state, CPUState *cpu)
 {
     return mshv_getput_regs(mshv_state, cpu, false);
-}
-
-int mshv_load_regs(CPUState *cpu)
-{
-	StandardRegisters regs = {0};
-	SpecialRegisters sregs = {0};
-	X86CPU *x86cpu = X86_CPU(cpu);
-	CPUX86State *env = &x86cpu->env;
-	int cpu_fd = mshv_vcpufd(cpu);
-	int ret;
-	int set = false;
-
-	ret = get_standard_regs_mgns(cpu_fd, &regs);
-	if (ret < 0) {
-		perror("Failed to load standard registers");
-		return -1;
-	}
-
-    mshv_getput_reg(&regs.rax, &env->regs[R_EAX], set);
-    mshv_getput_reg(&regs.rbx, &env->regs[R_EBX], set);
-    mshv_getput_reg(&regs.rcx, &env->regs[R_ECX], set);
-    mshv_getput_reg(&regs.rdx, &env->regs[R_EDX], set);
-    mshv_getput_reg(&regs.rsi, &env->regs[R_ESI], set);
-    mshv_getput_reg(&regs.rdi, &env->regs[R_EDI], set);
-    mshv_getput_reg(&regs.rsp, &env->regs[R_ESP], set);
-    mshv_getput_reg(&regs.rbp, &env->regs[R_EBP], set);
-	mshv_getput_reg(&regs.r8,  &env->regs[R_R8],  set);
-	mshv_getput_reg(&regs.r9,  &env->regs[R_R9],  set);
-	mshv_getput_reg(&regs.r10, &env->regs[R_R10], set);
-	mshv_getput_reg(&regs.r11, &env->regs[R_R11], set);
-	mshv_getput_reg(&regs.r12, &env->regs[R_R12], set);
-	mshv_getput_reg(&regs.r13, &env->regs[R_R13], set);
-	mshv_getput_reg(&regs.r14, &env->regs[R_R14], set);
-	mshv_getput_reg(&regs.r15, &env->regs[R_R15], set);
-
-    mshv_getput_reg(&regs.rflags, &env->eflags, set);
-	rflags_to_lflags(env);
-    mshv_getput_reg(&regs.rip, &env->eip, set);
-
-	ret = get_special_regs_mgns(cpu_fd, &sregs);
-	if (ret < 0) {
-		perror("Failed to load special registers");
-		return -1;
-	}
-
-    mshv_getset_seg(&sregs.cs, &env->segs[R_CS], set);
-    mshv_getset_seg(&sregs.ds, &env->segs[R_DS], set);
-    mshv_getset_seg(&sregs.es, &env->segs[R_ES], set);
-    mshv_getset_seg(&sregs.fs, &env->segs[R_FS], set);
-    mshv_getset_seg(&sregs.gs, &env->segs[R_GS], set);
-    mshv_getset_seg(&sregs.ss, &env->segs[R_SS], set);
-
-    mshv_getset_seg(&sregs.ldt, &env->ldt, set);
-    mshv_getset_seg(&sregs.tr, &env->tr, set);
-
-    mshv_getset_seg(&sregs.ldt, &env->ldt, set);
-    mshv_getset_seg(&sregs.tr, &env->tr, set);
-
-    env->gdt.limit = sregs.gdt.limit;
-    env->gdt.base = sregs.gdt.base;
-
-    env->idt.limit = sregs.idt.limit;
-    env->idt.base = sregs.idt.base;
-
-    mshv_getput_reg(&sregs.cr0, &env->cr[0], set);
-    mshv_getput_reg(&sregs.cr2, &env->cr[2], set);
-    mshv_getput_reg(&sregs.cr3, &env->cr[3], set);
-    mshv_getput_reg(&sregs.cr4, &env->cr[4], set);
-
-    mshv_getput_reg(&sregs.efer, &env->efer, set);
-
-	return 0;
 }

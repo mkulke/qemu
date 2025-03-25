@@ -1,6 +1,7 @@
 #include "hw/hyperv/linux-mshv.h"
 #include "qemu/osdep.h"
 #include "qemu/lockable.h"
+#include "qemu/error-report.h"
 #include "qemu/memalign.h"
 #include "system/mshv.h"
 #include <qemu-mshv.h>
@@ -22,6 +23,9 @@ static u_int64_t MTRR_MEM_TYPE_WB = 0x6;
 /* Defines poached from apicdef.h kernel header. */
 static u_int32_t APIC_MODE_NMI = 0x4;
 static u_int32_t APIC_MODE_EXTINT = 0x7;
+
+static u_int32_t mgns_threshold = 0;
+static u_int32_t MGNS_MAX_THRESHOLD = 1;
 
 static enum hv_register_name STANDARD_REGISTER_NAMES[18] = {
 	HV_X64_REGISTER_RAX,
@@ -631,7 +635,6 @@ int set_vcpu_mgns(int cpu_fd,
 	if (ret < 0) {
 		return ret;
 	}
-	printf("[mgns-qemu] set_vcpu_mgns() done\n");
 	return 0;
 }
 
@@ -1126,8 +1129,9 @@ int translate_gva_mgns(int cpu_fd,
 		return -errno;
 	}
 	if (result.result_code != HV_TRANSLATE_GVA_SUCCESS) {
-		perror("failed to translate gva to gpa");
+		error_report("failed to translate gva (" TARGET_FMT_lx ") to gpa", gva);
 		return -1;
+
 	}
 
 	return 0;
@@ -1187,6 +1191,10 @@ static int read_memory_mgns(int cpu_fd,
 			perror("failed to translate gva to gpa");
 			return -1;
 		}
+		if (mgns_threshold < MGNS_MAX_THRESHOLD) {
+			printf("[mgns-qemu] success to translate gva (" TARGET_FMT_lx ") to gpa (" TARGET_FMT_lx ") for reading\n", gva, gpa);
+		}
+
 		/* TODO: it's unfortunate that this fn doesn't fail
 		 * the rust code has a code path for failed reads at this point,
 		 * but it's dead code */
@@ -1215,6 +1223,9 @@ static int write_memory_mgns(int cpu_fd,
 			perror("failed to translate gva to gpa");
 			return -1;
 		}
+		if (mgns_threshold < MGNS_MAX_THRESHOLD) {
+			printf("[mgns-qemu] success to translate gva (" TARGET_FMT_lx ") to gpa (" TARGET_FMT_lx ") for writing\n", gva, gpa);
+		}
 	}
 	ret = guest_mem_write_fn(gpa, data, len, false);
 	if (ret != MEMTX_OK) {
@@ -1239,52 +1250,107 @@ static MshvOps emu_ops_ch = {
 	.translate_gva_fn   = translate_gva_mgns,
 };
 
-static int linearize_ds_ch(struct EmulatorPropsMgns *props,
-		                   uint64_t logical_addr)
+static int linearize_ds_ch(int cpu_fd, uint64_t logical_addr)
 {
-	return linearize_exported(props, DSRegister, logical_addr, &mshv_ops);
+	return linearize_segreg_ch(cpu_fd, DSRegister, logical_addr, &emu_ops_ch);
 }
 
-static int linearize_es_ch(struct EmulatorPropsMgns *props,
-		                   uint64_t logical_addr)
+static int linearize_es_ch(int cpu_fd, uint64_t logical_addr)
 {
-	return linearize_exported(props, ESRegister, logical_addr, &mshv_ops);
+	return linearize_segreg_ch(cpu_fd, ESRegister, logical_addr, &emu_ops_ch);
 }
 
-/* static const struct x86_emul_ops mshv_x86_emul_ops = { */
-/*     .read_mem = hvf_read_mem, */
-/*     /1* .write_mem = hvf_write_mem, *1/ */
-/*     /1* .read_segment_descriptor = hvf_read_segment_descriptor, *1/ */
-/*     /1* .handle_io = hvf_handle_io, *1/ */
-/*     /1* .simulate_rdmsr = hvf_simulate_rdmsr, *1/ */
-/*     /1* .simulate_wrmsr = hvf_simulate_wrmsr, *1/ */
-/* }; */
+static void read_mem_emu(CPUState *cpu, void *data, target_ulong addr, int bytes)
+{
+	if (guest_mem_read_mgns(cpu, addr, data, bytes) < 0) {
+		error_report("failed to read memory");
+		abort();
+	}
+}
 
-/* void (*read_mem)(CPUState *cpu, void *data, target_ulong addr, int bytes); */
+static void write_mem_emu(CPUState *cpu, void *data, target_ulong addr, int bytes)
+{
+	if (guest_mem_write_mgns(cpu, addr, data, bytes) < 0) {
+		error_report("failed to write memory");
+		abort();
+	}
+}
+
+static void handle_io_emu(CPUState *cpu, uint16_t port, void *data, int direction,
+                          int size, int count)
+{
+	error_report("handle_io_emu not implemented");
+	abort();
+}
+
+static void read_segment_descriptor_emu(CPUState *cpu,
+		                                struct x86_segment_descriptor *desc,
+										enum X86Seg seg_idx)
+{
+	bool ret;
+	X86CPU *x86_cpu = X86_CPU(cpu);
+	CPUX86State *env = &x86_cpu->env;
+	SegmentCache *seg = &env->segs[seg_idx];
+	x86_segment_selector sel = { .sel = seg->selector & 0xFFFF };
+
+	ret = x86_read_segment_descriptor(cpu, desc, sel);
+	if (ret == false) {
+		error_report("failed to read segment descriptor");
+		abort();
+	}
+}
+
+static void simulate_rdmsr_emu(CPUState *cpu)
+{
+	error_report("simulate_rdmsr_emu not implemented");
+	abort();
+}
+
+static void simulate_wrmsr_emu(CPUState *cpu)
+{
+	error_report("simulate_wrmsr_emu not implemented");
+	abort();
+}
+
+static const struct x86_emul_ops mshv_x86_emul_ops = {
+	.read_mem = read_mem_emu,
+	.write_mem = write_mem_emu,
+	.read_segment_descriptor = read_segment_descriptor_emu,
+	.handle_io = handle_io_emu,
+	.simulate_rdmsr = simulate_rdmsr_emu,
+	.simulate_wrmsr = simulate_wrmsr_emu,
+};
 
 static int emulate_local(CPUState *cpu, uint8_t *insn_bytes, size_t insn_len)
 {
     X86CPU *x86_cpu = X86_CPU(cpu);
     CPUX86State *env = &x86_cpu->env;
-	struct x86_decode decode;
+	struct x86_decode decode = { 0 };
 	int ret;
+	int cpu_fd = mshv_vcpufd(cpu);
 
+	/* hvf_load_regs(cpu); */
+	/* decode_instruction(env, &decode); */
+	/* exec_instruction(env, &decode); */
+	/* hvf_store_regs(cpu); */
 
-                /* hvf_load_regs(cpu); */
-                /* decode_instruction(env, &decode); */
-                /* exec_instruction(env, &decode); */
-                /* hvf_store_regs(cpu); */
+	init_emu(&mshv_x86_emul_ops);
+	init_decoder();
 
-	ret = mshv_load_regs(cpu);
+	ret = mshv_load_regs(cpu_fd, cpu);
 	if (ret < 0) {
+		error_report("failed to load registers");
 		return -1;
 	}
 
-	/* see above */
-	/* init_emu(&mshv_x86_emul_ops); */
-	init_decoder();
-
 	decode_instruction(env, &decode);
+	exec_instruction(env, &decode);
+
+	ret = mshv_store_regs(cpu_fd, cpu);
+	if (ret < 0) {
+		error_report("failed to store registers");
+		return -1;
+	}
 
 	return 0;
 }
@@ -1296,7 +1362,6 @@ static int handle_mmio_mgns(CPUState *cpu,
 	struct hv_x64_memory_intercept_message info = { 0 };
 	size_t insn_len;
 	uint8_t access_type;
-	/* uint64_t gva, gpa; */
 	uint8_t *instruction_bytes;
 	int ret;
 	int cpu_fd = mshv_vcpufd(cpu);
@@ -1324,6 +1389,10 @@ static int handle_mmio_mgns(CPUState *cpu,
 
 	instruction_bytes = info.instruction_bytes;
 
+	if (mgns_threshold < MGNS_MAX_THRESHOLD) {
+		printf("[mgns-qemu] start emulating instruction w/ insn_len %ld\n", insn_len);
+	}
+
 	if (getenv("USE_LOCAL_EMU") != NULL) {
 		ret = emulate_local(cpu, instruction_bytes, insn_len);
 		if (ret < 0) {
@@ -1335,6 +1404,11 @@ static int handle_mmio_mgns(CPUState *cpu,
 				   info.guest_virtual_address, info.guest_physical_address,
 				   instruction_bytes, insn_len,
 				   &emu_ops_ch);
+	}
+
+	if (mgns_threshold < MGNS_MAX_THRESHOLD) {
+		printf("[mgns-qemu] emulated instruction!\n");
+		mgns_threshold += 1;
 	}
 
 	*exit_reason = VmExitIgnore;
@@ -1374,7 +1448,7 @@ static int handle_unmapped_mem_mgns(int vm_fd,
 	return 0;
 }
 
-static int handle_pio_str_mgns(int cpu_fd,
+static int handle_pio_str_mgns(CPUState *cpu,
 							   struct hv_x64_io_port_intercept_message *info) {
 	size_t len = info->access_info.access_size;
 	uint8_t access_type = info->header.intercept_access_type;
@@ -1391,6 +1465,7 @@ static int handle_pio_str_mgns(int cpu_fd,
 	int ret;
 	uint64_t src, dst, rip, rax, rsi, rdi;
 	struct X64Registers x64_regs = { 0 };
+	int cpu_fd = mshv_vcpufd(cpu);
 
 	ret = get_cpu_state_mgns(cpu_fd, &standard_regs, &special_regs);
 	if (ret < 0) {
@@ -1401,7 +1476,11 @@ static int handle_pio_str_mgns(int cpu_fd,
 	direction_flag = (standard_regs.rflags & DF) != 0;
 
 	if (access_type == HV_X64_INTERCEPT_ACCESS_TYPE_WRITE) {
-		src = linearize_ds_ch(cpu_fd, info->rsi);
+		if (getenv("USE_LOCAL_EMU") != NULL) {
+			src = linear_addr(cpu, info->rsi, R_DS);
+		} else {
+			src = linearize_ds_ch(cpu_fd, info->rsi);
+		}
 
 		for (size_t i = 0; i < repeat; i++) {
 			ret = read_memory_mgns(cpu_fd, 0, 0, src, data, len);
@@ -1432,7 +1511,12 @@ static int handle_pio_str_mgns(int cpu_fd,
 		reg_names[2] = HV_X64_REGISTER_RSI;
 		reg_values[2] = rsi;
 	} else {
-		dst = linearize_es_ch(cpu_fd, info->rdi);
+		if (getenv("USE_LOCAL_EMU") != NULL) {
+			dst = linear_addr(cpu, info->rdi, R_ES);
+		} else {
+			dst = linearize_es_ch(cpu_fd, info->rdi);
+		}
+
 		for (size_t i = 0; i < repeat; i++) {
 			pio_read_fn(port, data, len, false);
 
@@ -1473,7 +1557,7 @@ static int handle_pio_str_mgns(int cpu_fd,
 	return 0;
 }
 
-static int handle_pio_non_str_mgns(int cpu_fd,
+static int handle_pio_non_str_mgns(CPUState *cpu,
                                    struct hv_x64_io_port_intercept_message *info) {
 	size_t len = info->access_info.access_size;
 	uint8_t access_type = info->header.intercept_access_type;
@@ -1486,6 +1570,7 @@ static int handle_pio_non_str_mgns(int cpu_fd,
 	uint64_t reg_values[2];
 	struct X64Registers x64_regs = { 0 };
 	uint16_t port = info->port_number;
+	int cpu_fd = mshv_vcpufd(cpu);
 
 	if (access_type == HV_X64_INTERCEPT_ACCESS_TYPE_WRITE) {
 		union {
@@ -1548,7 +1633,7 @@ static int set_ioport_info(const struct hyperv_message *msg,
 	return 0;
 }
 
-static int handle_pio_mgns(int cpu_fd, const struct hyperv_message *msg)
+static int handle_pio_mgns(CPUState *cpu, const struct hyperv_message *msg)
 {
 	struct hv_x64_io_port_intercept_message info = { 0 };
 	int ret;
@@ -1560,10 +1645,10 @@ static int handle_pio_mgns(int cpu_fd, const struct hyperv_message *msg)
 	}
 
 	if (info.access_info.string_op) {
-		return handle_pio_str_mgns(cpu_fd, &info);
+		return handle_pio_str_mgns(cpu, &info);
 	}
 
-	return handle_pio_non_str_mgns(cpu_fd, &info);
+	return handle_pio_non_str_mgns(cpu, &info);
 }
 
 enum VmExitMgns run_vcpu_mgns(int vm_fd, CPUState *cpu, hv_message *msg)
@@ -1598,7 +1683,7 @@ enum VmExitMgns run_vcpu_mgns(int vm_fd, CPUState *cpu, hv_message *msg)
 			}
 			return exit_reason;
 		case HVMSG_X64_IO_PORT_INTERCEPT:
-			ret = handle_pio_mgns(cpu_fd, &exit_msg);
+			ret = handle_pio_mgns(cpu, &exit_msg);
 			if (ret < 0) {
 				return VmExitSpecial;
 			}

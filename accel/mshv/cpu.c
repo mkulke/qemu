@@ -1260,22 +1260,6 @@ static int linearize_es_ch(int cpu_fd, uint64_t logical_addr)
 	return linearize_segreg_ch(cpu_fd, ESRegister, logical_addr, &emu_ops_ch);
 }
 
-static void read_mem_emu(CPUState *cpu, void *data, target_ulong addr, int bytes)
-{
-	if (guest_mem_read_mgns(cpu, addr, data, bytes) < 0) {
-		error_report("failed to read memory");
-		abort();
-	}
-}
-
-static void write_mem_emu(CPUState *cpu, void *data, target_ulong addr, int bytes)
-{
-	if (guest_mem_write_mgns(cpu, addr, data, bytes) < 0) {
-		error_report("failed to write memory");
-		abort();
-	}
-}
-
 static void handle_io_emu(CPUState *cpu, uint16_t port, void *data, int direction,
                           int size, int count)
 {
@@ -1311,6 +1295,65 @@ static void simulate_wrmsr_emu(CPUState *cpu)
 	error_report("simulate_wrmsr_emu not implemented");
 	abort();
 }
+
+static int guest_mem_read_mgns(CPUState *cpu, uint64_t gva, uint8_t *data,
+						uintptr_t size)
+{
+	int ret;
+	uint64_t gpa, flags;
+	int cpu_fd = mshv_vcpufd(cpu);
+
+	flags = HV_TRANSLATE_GVA_VALIDATE_READ;
+	ret = translate_gva_mgns(cpu_fd, gva, &gpa, flags);
+	if (ret < 0) {
+		perror("failed to translate gva to gpa");
+		return -1;
+	}
+	ret = guest_mem_read_fn(gpa, data, size, false);
+	if (ret < 0) {
+		perror("failed to read guest memory");
+		return -1;
+	}
+	return 0;
+}
+
+static int guest_mem_write_mgns(CPUState *cpu, uint64_t gva, const uint8_t *data,
+						uintptr_t size)
+{
+	int ret;
+	uint64_t gpa, flags;
+	int cpu_fd = mshv_vcpufd(cpu);
+
+	flags = HV_TRANSLATE_GVA_VALIDATE_WRITE;
+	ret = translate_gva_mgns(cpu_fd, gva, &gpa, flags);
+	if (ret < 0) {
+		perror("failed to translate gva to gpa");
+		return -1;
+	}
+	ret = guest_mem_write_fn(gpa, data, size, false);
+	if (ret < 0) {
+		perror("failed to write to guest memory");
+		return -1;
+	}
+	return 0;
+}
+
+static void read_mem_emu(CPUState *cpu, void *data, target_ulong addr, int bytes)
+{
+	if (guest_mem_read_mgns(cpu, addr, data, bytes) < 0) {
+		error_report("failed to read memory");
+		abort();
+	}
+}
+
+static void write_mem_emu(CPUState *cpu, void *data, target_ulong addr, int bytes)
+{
+	if (guest_mem_write_mgns(cpu, addr, data, bytes) < 0) {
+		error_report("failed to write memory");
+		abort();
+	}
+}
+
 
 static const struct x86_emul_ops mshv_x86_emul_ops = {
 	.read_mem = read_mem_emu,

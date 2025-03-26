@@ -94,7 +94,7 @@ static bool segment_type_code(const SegmentCache *seg)
     return (mshv_seg.type_ & CODE_SEGMENT_TYPE) != 0;
 }
 
-static bool segments_expands_down(const SegmentCache *seg)
+static bool segment_expands_down(const SegmentCache *seg)
 {
 	SegmentRegister mshv_seg = {0};
 
@@ -136,9 +136,8 @@ static int linearize(CPUState *cpu,
 	enum Mode mode;
     X86CPU *x86_cpu = X86_CPU(cpu);
     CPUX86State *env = &x86_cpu->env;
-	target_ulong base;
 	SegmentCache *seg = &env->segs[seg_idx];
-	base = seg->base;
+	target_ulong base = seg->base;
 	target_ulong logical_addr_32b;
 	uint32_t limit;
 	/* TODO: the emulator will not pass us "write" indicator yet */
@@ -163,11 +162,11 @@ static int linearize(CPUState *cpu,
 			perror("cannot write to read-only segment");
 			return -1;
 		}
-	
+
 		logical_addr_32b = logical_addr & 0xFFFFFFFF;
 		limit = segment_limit(seg);
 
-		if (segments_expands_down(seg)) {
+		if (segment_expands_down(seg)) {
 			if (logical_addr_32b >= limit) {
 				perror("address exceeds limit (expands down)");
 				return -1;
@@ -183,8 +182,8 @@ static int linearize(CPUState *cpu,
 		if (logical_addr_32b > limit) {
 			error_report("address exceeds limit %u", limit);
 			return -1;
-		} 
-		*linear_addr = logical_addr_32b + base;	
+		}
+		*linear_addr = logical_addr_32b + base;
 		break;
 	default:
 		perror("unknown cpu mode");
@@ -203,7 +202,7 @@ bool x86_read_segment_descriptor(CPUState *cpu,
     X86CPU *x86_cpu = X86_CPU(cpu);
     CPUX86State *env = &x86_cpu->env;
 	target_ulong gva;
-	int ret;
+	/* int ret; */
 
     memset(desc, 0, sizeof(*desc));
 
@@ -225,11 +224,13 @@ bool x86_read_segment_descriptor(CPUState *cpu,
     }
 
 	gva = base + sel.index * 8;
-    ret = guest_mem_read_mgns(cpu, gva, (void *)desc, sizeof(*desc));
-	if (ret < 0) {
-		perror("failed to read segment descriptor");
-		return false;
-	}
+	emul_ops->read_mem(cpu, desc, gva, sizeof(*desc));
+    /* void (*read_mem)(CPUState *cpu, void *data, target_ulong addr, int bytes); */
+    /* ret = guest_mem_read_mgns(cpu, gva, (void *)desc, sizeof(*desc)); */
+	/* if (ret < 0) { */
+	/* 	perror("failed to read segment descriptor"); */
+	/* 	return false; */
+	/* } */
 	return true;
 }
 
@@ -241,9 +242,9 @@ bool x86_write_segment_descriptor(CPUState *cpu,
     uint32_t limit;
     X86CPU *x86_cpu = X86_CPU(cpu);
     CPUX86State *env = &x86_cpu->env;
-	int ret;
+	/* int ret; */
 	target_ulong gva;
-    
+
     if (GDT_SEL == sel.ti) {
 		base = env->gdt.base;
 		limit = env->gdt.limit;
@@ -251,17 +252,20 @@ bool x86_write_segment_descriptor(CPUState *cpu,
 		base = env->ldt.base;
 		limit = env->ldt.limit;
     }
-    
+
     if (sel.index * 8 >= limit) {
         return false;
     }
 
 	gva = base + sel.index * 8;
-	ret = guest_mem_write_mgns(cpu, gva, (void*) desc, sizeof(*desc));
-	if (ret < 0) {
-		perror("failed to write segment descriptor");
-		return false;
-	}
+	emul_ops->write_mem(cpu, desc, gva, sizeof(*desc));
+    /* void (*write_mem)(CPUState *cpu, void *data, target_ulong addr, int bytes); */
+
+	/* ret = guest_mem_write_mgns(cpu, gva, (void*) desc, sizeof(*desc)); */
+	/* if (ret < 0) { */
+	/* 	perror("failed to write segment descriptor"); */
+	/* 	return false; */
+	/* } */
 
 	return true;
 }
@@ -273,7 +277,7 @@ bool x86_read_call_gate(CPUState *cpu, struct x86_call_gate *idt_desc,
 	uint32_t limit;
     X86CPU *x86_cpu = X86_CPU(cpu);
     CPUX86State *env = &x86_cpu->env;
-	int ret;
+	/* int ret; */
 	int gva;
 
 	base = env->idt.base;
@@ -286,11 +290,13 @@ bool x86_read_call_gate(CPUState *cpu, struct x86_call_gate *idt_desc,
     }
 
 	gva = base + gate * 8;
-	ret = guest_mem_read_mgns(cpu, gva, (void*)idt_desc, sizeof(*idt_desc));
-	if (ret < 0) {
-		perror("failed to read call gate");
-		return false;
-	}
+	/* ret = guest_mem_read_mgns(cpu, gva, (void*)idt_desc, sizeof(*idt_desc)); */
+	emul_ops->read_mem(cpu, idt_desc, gva, sizeof(*idt_desc));
+	/* void (*read_mem)(CPUState *cpu, void *data, target_ulong addr, int bytes); */
+	/* if (ret < 0) { */
+	/* 	perror("failed to read call gate"); */
+	/* 	return false; */
+	/* } */
 	return true;
 }
 

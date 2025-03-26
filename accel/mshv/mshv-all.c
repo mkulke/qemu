@@ -771,7 +771,7 @@ static int mshv_cpu_exec(CPUState *cpu)
          */
         smp_rmb();
 
-        exit_reason = run_vcpu_mgns(mshv_state->vm, cpu, &mshv_msg);
+        exit_reason = run_vcpu(mshv_state->vm, cpu, &mshv_msg);
 
         switch (exit_reason) {
         case VmExitIgnore:

@@ -212,7 +212,7 @@ int configure_vcpu_mgns(int cpu_fd,
 int get_standard_regs_mgns(int cpu_fd, struct StandardRegisters *regs);
 int get_special_regs_mgns(int cpu_fd, struct SpecialRegisters *regs);
 int set_x64_registers_mgns(int cpu_fd, const struct X64Registers *regs);
-enum VmExitMgns run_vcpu_mgns(int vm_fd, CPUState *cpu, hv_message *msg);
+enum VmExitMgns run_vcpu(int vm_fd, CPUState *cpu, hv_message *msg);
 
 /* for use in the local sw emu */
 int mshv_load_regs(int cpu_fd, CPUState *cpu);
@@ -223,7 +223,6 @@ int guest_mem_read_fn(uint64_t gpa, uint8_t *data, uintptr_t size,
 					  bool is_secure_mode);
 int guest_mem_write_fn(uint64_t gpa, const uint8_t *data, uintptr_t size,
 					   bool is_secure_mode);
-int translate_gva_mgns(int cpu_fd, uint64_t gva, uint64_t *gpa, uint64_t flags);
 
 /* pio */
 int pio_write_fn(uint64_t port, const uint8_t *data, uintptr_t size,

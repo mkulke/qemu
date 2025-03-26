@@ -320,4 +320,8 @@ void calc_modrm_operand64(CPUX86State *env, struct x86_decode *decode,
 void set_addressing_size(CPUX86State *env, struct x86_decode *decode);
 void set_operand_size(CPUX86State *env, struct x86_decode *decode);
 
+/* debug */
+
+void print_decoded_insn_mgns(const x86_decode *insn);
+
 #endif

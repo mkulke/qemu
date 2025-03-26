@@ -11,6 +11,7 @@
 
 #include "emulate/x86_decode.h"
 #include "emulate/x86_emu.h"
+#include "qemu/atomic.h"
 
 static GHashTable *cpu_db_mgns;
 static QemuMutex cpu_db_mutex_mgns;
@@ -24,8 +25,7 @@ static u_int64_t MTRR_MEM_TYPE_WB = 0x6;
 static u_int32_t APIC_MODE_NMI = 0x4;
 static u_int32_t APIC_MODE_EXTINT = 0x7;
 
-static u_int32_t mgns_threshold = 0;
-static u_int32_t MGNS_MAX_THRESHOLD = 1;
+static u_int32_t insn_counter_mgns = 0;
 
 static enum hv_register_name STANDARD_REGISTER_NAMES[18] = {
 	HV_X64_REGISTER_RAX,
@@ -1108,9 +1108,7 @@ static int get_cpu_state_mgns(int cpu_fd,
 return 0;
 }
 
-int translate_gva_mgns(int cpu_fd,
-					   uint64_t gva, uint64_t *gpa,
-					   uint64_t flags)
+static int translate_gva(int cpu_fd, uint64_t gva, uint64_t *gpa, uint64_t flags)
 {
 	int ret;
 	union hv_translate_gva_result result = { 0 };
@@ -1186,13 +1184,10 @@ static int read_memory_mgns(int cpu_fd,
 		gpa = initial_gpa;
 	} else {
 	    flags = HV_TRANSLATE_GVA_VALIDATE_READ;
-		ret = translate_gva_mgns(cpu_fd, gva, &gpa, flags);
+		ret = translate_gva(cpu_fd, gva, &gpa, flags);
 		if (ret < 0) {
 			perror("failed to translate gva to gpa");
 			return -1;
-		}
-		if (mgns_threshold < MGNS_MAX_THRESHOLD) {
-			printf("[mgns-qemu] success to translate gva (" TARGET_FMT_lx ") to gpa (" TARGET_FMT_lx ") for reading\n", gva, gpa);
 		}
 
 		/* TODO: it's unfortunate that this fn doesn't fail
@@ -1218,13 +1213,10 @@ static int write_memory_mgns(int cpu_fd,
 		gpa = initial_gpa;
 	} else {
 	    flags = HV_TRANSLATE_GVA_VALIDATE_WRITE;
-		ret = translate_gva_mgns(cpu_fd, gva, &gpa, flags);
+		ret = translate_gva(cpu_fd, gva, &gpa, flags);
 		if (ret < 0) {
 			perror("failed to translate gva to gpa");
 			return -1;
-		}
-		if (mgns_threshold < MGNS_MAX_THRESHOLD) {
-			printf("[mgns-qemu] success to translate gva (" TARGET_FMT_lx ") to gpa (" TARGET_FMT_lx ") for writing\n", gva, gpa);
 		}
 	}
 	ret = guest_mem_write_fn(gpa, data, len, false);
@@ -1247,7 +1239,7 @@ static MshvOps emu_ops_ch = {
 	.write_memory_fn	= write_memory_mgns,
 	.set_cpu_state_fn   = set_cpu_state_mgns,
 	.get_cpu_state_fn   = get_cpu_state_mgns,
-	.translate_gva_fn   = translate_gva_mgns,
+	.translate_gva_fn   = translate_gva,
 };
 
 static int linearize_ds_ch(int cpu_fd, uint64_t logical_addr)
@@ -1296,15 +1288,15 @@ static void simulate_wrmsr_emu(CPUState *cpu)
 	abort();
 }
 
-static int guest_mem_read_mgns(CPUState *cpu, uint64_t gva, uint8_t *data,
-						uintptr_t size)
+static int guest_mem_read_with_gva(CPUState *cpu, uint64_t gva, uint8_t *data,
+								   uintptr_t size)
 {
 	int ret;
 	uint64_t gpa, flags;
 	int cpu_fd = mshv_vcpufd(cpu);
 
 	flags = HV_TRANSLATE_GVA_VALIDATE_READ;
-	ret = translate_gva_mgns(cpu_fd, gva, &gpa, flags);
+	ret = translate_gva(cpu_fd, gva, &gpa, flags);
 	if (ret < 0) {
 		perror("failed to translate gva to gpa");
 		return -1;
@@ -1317,15 +1309,15 @@ static int guest_mem_read_mgns(CPUState *cpu, uint64_t gva, uint8_t *data,
 	return 0;
 }
 
-static int guest_mem_write_mgns(CPUState *cpu, uint64_t gva, const uint8_t *data,
-						uintptr_t size)
+static int guest_mem_write_with_gva(CPUState *cpu, uint64_t gva, const uint8_t *data,
+									uintptr_t size)
 {
 	int ret;
 	uint64_t gpa, flags;
 	int cpu_fd = mshv_vcpufd(cpu);
 
 	flags = HV_TRANSLATE_GVA_VALIDATE_WRITE;
-	ret = translate_gva_mgns(cpu_fd, gva, &gpa, flags);
+	ret = translate_gva(cpu_fd, gva, &gpa, flags);
 	if (ret < 0) {
 		perror("failed to translate gva to gpa");
 		return -1;
@@ -1340,7 +1332,7 @@ static int guest_mem_write_mgns(CPUState *cpu, uint64_t gva, const uint8_t *data
 
 static void read_mem_emu(CPUState *cpu, void *data, target_ulong addr, int bytes)
 {
-	if (guest_mem_read_mgns(cpu, addr, data, bytes) < 0) {
+	if (guest_mem_read_with_gva(cpu, addr, data, bytes) < 0) {
 		error_report("failed to read memory");
 		abort();
 	}
@@ -1348,7 +1340,7 @@ static void read_mem_emu(CPUState *cpu, void *data, target_ulong addr, int bytes
 
 static void write_mem_emu(CPUState *cpu, void *data, target_ulong addr, int bytes)
 {
-	if (guest_mem_write_mgns(cpu, addr, data, bytes) < 0) {
+	if (guest_mem_write_with_gva(cpu, addr, data, bytes) < 0) {
 		error_report("failed to write memory");
 		abort();
 	}
@@ -1398,9 +1390,8 @@ static int emulate_local(CPUState *cpu, uint8_t *insn_bytes, size_t insn_len)
 	return 0;
 }
 
-static int handle_mmio_mgns(CPUState *cpu,
-					        const struct hyperv_message *msg,
-					        enum VmExitMgns *exit_reason)
+static int handle_mmio(CPUState *cpu, const struct hyperv_message *msg,
+					   enum VmExitMgns *exit_reason)
 {
 	struct hv_x64_memory_intercept_message info = { 0 };
 	size_t insn_len;
@@ -1432,10 +1423,6 @@ static int handle_mmio_mgns(CPUState *cpu,
 
 	instruction_bytes = info.instruction_bytes;
 
-	if (mgns_threshold < MGNS_MAX_THRESHOLD) {
-		printf("[mgns-qemu] start emulating instruction w/ insn_len %ld\n", insn_len);
-	}
-
 	if (getenv("USE_LOCAL_EMU") != NULL) {
 		ret = emulate_local(cpu, instruction_bytes, insn_len);
 		if (ret < 0) {
@@ -1449,20 +1436,17 @@ static int handle_mmio_mgns(CPUState *cpu,
 				   &emu_ops_ch);
 	}
 
-	if (mgns_threshold < MGNS_MAX_THRESHOLD) {
-		printf("[mgns-qemu] emulated instruction!\n");
-		mgns_threshold += 1;
-	}
+	qatomic_inc(&insn_counter_mgns);
+	printf("[mgns-qemu] emulated mmio instruction\n");
 
 	*exit_reason = VmExitIgnore;
 
 	return 0;
 }
 
-static int handle_unmapped_mem_mgns(int vm_fd,
-									CPUState *cpu,
-									const struct hyperv_message *msg,
-									enum VmExitMgns *exit_reason)
+static int handle_unmapped_mem(int vm_fd, CPUState *cpu,
+							   const struct hyperv_message *msg,
+							   enum VmExitMgns *exit_reason)
 {
 	struct hv_x64_memory_intercept_message info = { 0 };
 	uint64_t gpa;
@@ -1478,7 +1462,7 @@ static int handle_unmapped_mem_mgns(int vm_fd,
 
     found = find_entry_idx_by_gpa_mgns(gpa, NULL);
 	if (!found) {
-		return handle_mmio_mgns(cpu, msg, exit_reason);
+		return handle_mmio(cpu, msg, exit_reason);
 	}
 
 	ret = map_overlapped_region_mgns(vm_fd, gpa);
@@ -1491,8 +1475,8 @@ static int handle_unmapped_mem_mgns(int vm_fd,
 	return 0;
 }
 
-static int handle_pio_str_mgns(CPUState *cpu,
-							   struct hv_x64_io_port_intercept_message *info) {
+static int handle_pio_str(CPUState *cpu,
+						  struct hv_x64_io_port_intercept_message *info) {
 	size_t len = info->access_info.access_size;
 	uint8_t access_type = info->header.intercept_access_type;
 	uint16_t port = info->port_number;
@@ -1600,8 +1584,8 @@ static int handle_pio_str_mgns(CPUState *cpu,
 	return 0;
 }
 
-static int handle_pio_non_str_mgns(CPUState *cpu,
-                                   struct hv_x64_io_port_intercept_message *info) {
+static int handle_pio_non_str(CPUState *cpu,
+                              struct hv_x64_io_port_intercept_message *info) {
 	size_t len = info->access_info.access_size;
 	uint8_t access_type = info->header.intercept_access_type;
 	int ret;
@@ -1676,7 +1660,7 @@ static int set_ioport_info(const struct hyperv_message *msg,
 	return 0;
 }
 
-static int handle_pio_mgns(CPUState *cpu, const struct hyperv_message *msg)
+static int handle_pio(CPUState *cpu, const struct hyperv_message *msg)
 {
 	struct hv_x64_io_port_intercept_message info = { 0 };
 	int ret;
@@ -1688,13 +1672,13 @@ static int handle_pio_mgns(CPUState *cpu, const struct hyperv_message *msg)
 	}
 
 	if (info.access_info.string_op) {
-		return handle_pio_str_mgns(cpu, &info);
+		return handle_pio_str(cpu, &info);
 	}
 
-	return handle_pio_non_str_mgns(cpu, &info);
+	return handle_pio_non_str(cpu, &info);
 }
 
-enum VmExitMgns run_vcpu_mgns(int vm_fd, CPUState *cpu, hv_message *msg)
+enum VmExitMgns run_vcpu(int vm_fd, CPUState *cpu, hv_message *msg)
 {
 	int ret;
 	hv_message exit_msg = { 0 };
@@ -1712,21 +1696,21 @@ enum VmExitMgns run_vcpu_mgns(int vm_fd, CPUState *cpu, hv_message *msg)
 			*msg = exit_msg;
 			return VmExitShutdown;
 		case HVMSG_UNMAPPED_GPA:
-			ret = handle_unmapped_mem_mgns(vm_fd, cpu, &exit_msg, &exit_reason);
+			ret = handle_unmapped_mem(vm_fd, cpu, &exit_msg, &exit_reason);
 			if (ret < 0) {
 				perror("failed to handle unmapped memory");
 				abort();
 			}
 			return exit_reason;
 		case HVMSG_GPA_INTERCEPT:
-			ret = handle_mmio_mgns(cpu, &exit_msg, &exit_reason);
+			ret = handle_mmio(cpu, &exit_msg, &exit_reason);
 			if (ret < 0) {
 				perror("failed to handle mmio");
 				abort();
 			}
 			return exit_reason;
 		case HVMSG_X64_IO_PORT_INTERCEPT:
-			ret = handle_pio_mgns(cpu, &exit_msg);
+			ret = handle_pio(cpu, &exit_msg);
 			if (ret < 0) {
 				return VmExitSpecial;
 			}

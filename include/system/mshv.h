@@ -215,10 +215,6 @@ int set_x64_registers_mgns(int cpu_fd, const struct X64Registers *regs);
 enum VmExitMgns run_vcpu_mgns(int vm_fd, CPUState *cpu, hv_message *msg);
 
 /* for use in the local sw emu */
-int guest_mem_read_mgns(CPUState *cpu, uint64_t gva, uint8_t *data,
-						uintptr_t size);
-int guest_mem_write_mgns(CPUState *cpu, uint64_t gva, const uint8_t *data,
-						uintptr_t size);
 int mshv_load_regs(int cpu_fd, CPUState *cpu);
 int mshv_store_regs(int cpu_fd, const CPUState *cpu);
 

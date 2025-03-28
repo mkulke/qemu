@@ -70,6 +70,14 @@ int mshv_store_regs(int cpu_fd, const CPUState *cpu)
 	regs.rdi = env->regs[R_EDI];
 	regs.rsp = env->regs[R_ESP];
 	regs.rbp = env->regs[R_EBP];
+	regs.r8  = env->regs[R_R8];
+	regs.r9  = env->regs[R_R9];
+	regs.r10 = env->regs[R_R10];
+	regs.r11 = env->regs[R_R11];
+	regs.r12 = env->regs[R_R12];
+	regs.r13 = env->regs[R_R13];
+	regs.r14 = env->regs[R_R14];
+	regs.r15 = env->regs[R_R15];
 	regs.rflags = env->eflags;
 	regs.rip = env->eip;
 
@@ -90,6 +98,7 @@ int mshv_store_regs(int cpu_fd, const CPUState *cpu)
 	sregs.cr3 = env->cr[3];
 	sregs.cr4 = env->cr[4];
 	sregs.efer = env->efer;
+	sregs.apic_base = cpu_get_apic_base(x86cpu->apic_state);
 
 	ret = set_vcpu_mgns(cpu_fd, &regs, &sregs, &fpu, env->xcr0);
 	if (ret < 0) {
@@ -122,6 +131,14 @@ int mshv_load_regs(int cpu_fd, CPUState *cpu)
 	env->regs[R_EDI] = regs.rdi;
 	env->regs[R_ESP] = regs.rsp;
 	env->regs[R_EBP] = regs.rbp;
+	env->regs[R_R8]  = regs.r8;
+	env->regs[R_R9]  = regs.r9;
+	env->regs[R_R10] = regs.r10;
+	env->regs[R_R11] = regs.r11;
+	env->regs[R_R12] = regs.r12;
+	env->regs[R_R13] = regs.r13;
+	env->regs[R_R14] = regs.r14;
+	env->regs[R_R15] = regs.r15;
 	env->eflags = regs.rflags;
 	env->eip = regs.rip;
 

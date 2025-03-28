@@ -2171,16 +2171,3 @@ target_ulong decode_linear_addr(CPUX86State *env, struct x86_decode *decode,
     }
     return linear_addr_size(env_cpu(env), addr, decode->addressing_size, seg);
 }
-
-void print_decoded_insn_mgns(const x86_decode *insn) {
-    // Ensure the buffer is large enough for your formatting.
-    static char buf[256];
-	printf(buf, sizeof(buf),
-		 "Decoded Instruction: opcode=%02x %02x %02x %02x, len=%u, cmd=%d",
-		 insn->opcode[0],
-		 insn->opcode[1],
-		 insn->opcode[2],
-		 insn->opcode[3],
-		 insn->len,
-		 insn->cmd);
-}

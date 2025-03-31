@@ -53,29 +53,19 @@ static void set_seg(struct SegmentRegister *lhs, const SegmentCache *rhs)
     lhs->padding = 0;
 }
 
-static int cpu_mode(const CPUState *cpu, enum Mode *mode)
+static enum Mode cpu_mode(CPUState *cpu)
 {
-    X86CPU *x86_cpu = X86_CPU(cpu);
-    CPUX86State *env = &x86_cpu->env;
-	uint64_t efer = env->efer;
-	uint64_t cr0 = env->cr[0];
 	enum Mode m = REAL_MODE;
 
-	if (cr0 & CR0_PE_MASK) {
+	if (x86_is_protected(cpu)) {
 		m = PROTECTED_MODE;
-	}
 
-	if (efer & MSR_EFER_LMA) {
-		if (m != PROTECTED_MODE) {
-			perror("protection must be enabled in long mode");
-			return -1;
+		if (x86_is_long_mode(cpu)) {
+			m = LONG_MODE;
 		}
-
-		m = LONG_MODE;
 	}
-	*mode = m;
 
-	return 0;
+	return m;
 }
 
 static bool segment_type_ro(const SegmentCache *seg)
@@ -132,7 +122,6 @@ static int linearize(CPUState *cpu,
 					 target_ulong logical_addr, target_ulong *linear_addr,
 					 X86Seg seg_idx)
 {
-	int ret;
 	enum Mode mode;
     X86CPU *x86_cpu = X86_CPU(cpu);
     CPUX86State *env = &x86_cpu->env;
@@ -143,11 +132,7 @@ static int linearize(CPUState *cpu,
 	/* TODO: the emulator will not pass us "write" indicator yet */
 	bool write = false;
 
-	ret = cpu_mode(cpu, &mode);
-	if (ret < 0) {
-		perror("failed to determine cpu mode");
-		return -1;
-	}
+	mode = cpu_mode(cpu);
 
 	switch (mode) {
 	case LONG_MODE:
@@ -302,15 +287,15 @@ bool x86_read_call_gate(CPUState *cpu, struct x86_call_gate *idt_desc,
 
 bool x86_is_protected(CPUState *cpu)
 {
-	enum Mode mode;
-	int ret;
+    X86CPU *x86_cpu = X86_CPU(cpu);
+    CPUX86State *env = &x86_cpu->env;
+	uint64_t cr0 = env->cr[0];
 
-	ret = cpu_mode(cpu, &mode);
-	if (ret < 0) {
-		perror("failed to determine cpu mode");
-		abort();
+	if (cr0 & CR0_PE_MASK) {
+		return true;
 	}
-	return mode == PROTECTED_MODE;
+
+	return false;
 }
 
 bool x86_is_real(CPUState *cpu)
@@ -327,15 +312,11 @@ bool x86_is_v8086(CPUState *cpu)
 
 bool x86_is_long_mode(CPUState *cpu)
 {
-	enum Mode mode;
-	int ret;
+    X86CPU *x86_cpu = X86_CPU(cpu);
+    CPUX86State *env = &x86_cpu->env;
+	uint64_t efer = env->efer;
 
-	ret = cpu_mode(cpu, &mode);
-	if (ret < 0) {
-		perror("failed to determine cpu mode");
-		abort();
-	}
-	return mode == LONG_MODE;
+	return ((efer & (EFER_LME | EFER_LMA)) == (EFER_LME | EFER_LMA));
 }
 
 bool x86_is_long64_mode(CPUState *cpu)

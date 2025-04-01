@@ -447,10 +447,16 @@ static inline MemTxAttrs mshv_get_mem_attrs(bool is_secure_mode)
 }
 
 int guest_mem_read_fn(uint64_t gpa, uint8_t *data, uintptr_t size,
-					   bool is_secure_mode)
+					   bool is_secure_mode, bool instruction_fetch)
 {
     int ret;
     MemTxAttrs memattr = mshv_get_mem_attrs(is_secure_mode);
+
+	if (instruction_fetch) {
+		trace_mcpu_insn_fetch(gpa, size);
+	} else {
+		trace_mcpu_mem_read(gpa, size);
+	}
 
     ret = address_space_rw(&address_space_memory, gpa, memattr, (void *)data,
                            size, false);
@@ -465,6 +471,7 @@ int guest_mem_read_fn(uint64_t gpa, uint8_t *data, uintptr_t size,
 int guest_mem_write_fn(uint64_t gpa, const uint8_t *data, uintptr_t size,
                        bool is_secure_mode)
 {
+	trace_mcpu_mem_write(gpa, size);
     int ret = 0;
     MemTxAttrs memattr = mshv_get_mem_attrs(is_secure_mode);
     ret = address_space_rw(&address_space_memory, gpa, memattr, (void *)data,

@@ -1246,16 +1246,6 @@ static MshvOps emu_ops_ch = {
 	.translate_gva_fn   = translate_gva,
 };
 
-static int linearize_ds_ch(int cpu_fd, uint64_t logical_addr)
-{
-	return linearize_segreg_ch(cpu_fd, DSRegister, logical_addr, &emu_ops_ch);
-}
-
-static int linearize_es_ch(int cpu_fd, uint64_t logical_addr)
-{
-	return linearize_segreg_ch(cpu_fd, ESRegister, logical_addr, &emu_ops_ch);
-}
-
 static void handle_io_emu(CPUState *cpu, uint16_t port, void *data, int direction,
                           int size, int count)
 {
@@ -1565,11 +1555,7 @@ static int handle_pio_str(CPUState *cpu,
 	direction_flag = (standard_regs.rflags & DF) != 0;
 
 	if (access_type == HV_X64_INTERCEPT_ACCESS_TYPE_WRITE) {
-		if (getenv("USE_LOCAL_EMU") != NULL) {
-			src = linear_addr(cpu, info->rsi, R_DS);
-		} else {
-			src = linearize_ds_ch(cpu_fd, info->rsi);
-		}
+		src = linear_addr(cpu, info->rsi, R_DS);
 
 		for (size_t i = 0; i < repeat; i++) {
 			ret = read_memory_mgns(cpu_fd, 0, 0, src, data, len);
@@ -1600,11 +1586,7 @@ static int handle_pio_str(CPUState *cpu,
 		reg_names[2] = HV_X64_REGISTER_RSI;
 		reg_values[2] = rsi;
 	} else {
-		if (getenv("USE_LOCAL_EMU") != NULL) {
-			dst = linear_addr(cpu, info->rdi, R_ES);
-		} else {
-			dst = linearize_es_ch(cpu_fd, info->rdi);
-		}
+		dst = linear_addr(cpu, info->rdi, R_ES);
 
 		for (size_t i = 0; i < repeat; i++) {
 			pio_read_fn(port, data, len, false);

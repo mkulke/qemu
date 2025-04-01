@@ -220,7 +220,7 @@ int mshv_store_regs(int cpu_fd, const CPUState *cpu);
 
 /* for use in the remote sw emu */
 int guest_mem_read_fn(uint64_t gpa, uint8_t *data, uintptr_t size,
-					  bool is_secure_mode);
+					  bool is_secure_mode, bool instruction_fetch);
 int guest_mem_write_fn(uint64_t gpa, const uint8_t *data, uintptr_t size,
 					   bool is_secure_mode);
 

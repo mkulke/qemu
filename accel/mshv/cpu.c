@@ -1197,7 +1197,7 @@ static int read_memory_mgns(int cpu_fd,
 		/* TODO: it's unfortunate that this fn doesn't fail
 		 * the rust code has a code path for failed reads at this point,
 		 * but it's dead code */
-		guest_mem_read_fn(gpa, data, len, false);
+		guest_mem_read_fn(gpa, data, len, false, false);
 	}
 
 	return 0;
@@ -1283,7 +1283,7 @@ static void simulate_wrmsr_emu(CPUState *cpu)
 }
 
 static int guest_mem_read_with_gva(CPUState *cpu, uint64_t gva, uint8_t *data,
-								   uintptr_t size)
+								   uintptr_t size, bool fetch_instruction)
 {
 	int ret;
 	uint64_t gpa, flags;
@@ -1295,7 +1295,7 @@ static int guest_mem_read_with_gva(CPUState *cpu, uint64_t gva, uint8_t *data,
 		perror("failed to translate gva to gpa");
 		return -1;
 	}
-	ret = guest_mem_read_fn(gpa, data, size, false);
+	ret = guest_mem_read_fn(gpa, data, size, false, fetch_instruction);
 	if (ret < 0) {
 		perror("failed to read guest memory");
 		return -1;
@@ -1326,7 +1326,7 @@ static int guest_mem_write_with_gva(CPUState *cpu, uint64_t gva, const uint8_t *
 
 static void read_mem_emu(CPUState *cpu, void *data, target_ulong addr, int bytes)
 {
-	if (guest_mem_read_with_gva(cpu, addr, data, bytes) < 0) {
+	if (guest_mem_read_with_gva(cpu, addr, data, bytes, false) < 0) {
 		error_report("failed to read memory");
 		abort();
 	}
@@ -1340,8 +1340,17 @@ static void write_mem_emu(CPUState *cpu, void *data, target_ulong addr, int byte
 	}
 }
 
+static void fetch_instruction_emu(CPUState *cpu, void *data, target_ulong addr,
+	                           int bytes)
+{
+	if (guest_mem_read_with_gva(cpu, addr, data, bytes, true) < 0) {
+		error_report("failed to fetch instruction");
+		abort();
+	}
+}
 
 static const struct x86_emul_ops mshv_x86_emul_ops = {
+	.fetch_instruction = fetch_instruction_emu,
 	.read_mem = read_mem_emu,
 	.write_mem = write_mem_emu,
 	.read_segment_descriptor = read_segment_descriptor_emu,

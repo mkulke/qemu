@@ -37,3 +37,7 @@ mcpu_sregs_efer_apic_bs(uint64_t efer, uint64_t apic_base) "efer=%lx,apic_base=%
 mcpu_sregs_irq_bitmap(uint64_t bitmap0, uint64_t bitmap1, uint64_t bitmap2, uint64_t bitmap3) "\tbitmap0=%lx,bitmap1=%lx,bitmap2=%lx,bitmap3=%lx"
 
 mcpu_decoded_x86_insn(const char *cmd, size_t len, uint8_t op0, uint8_t op1, uint8_t op2, uint8_t op3) "\tcmd=%s, len=%zu, opcode=%02x %02x %02x %02x"
+
+mcpu_insn_fetch(uint64_t addr, size_t size) "\tgpa=%lx size=%lu"
+mcpu_mem_write(uint64_t addr, size_t size) "\tgpa=%lx size=%lu"
+mcpu_mem_read(uint64_t addr, size_t size) "\tgpa=%lx size=%lu"

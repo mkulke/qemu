@@ -94,14 +94,18 @@ int mshv_load_regs(int cpu_fd, CPUState *cpu)
 {
     X86CPU *x86cpu = X86_CPU(cpu);
     CPUX86State *env = &x86cpu->env;
-    StandardRegisters regs;
-    SpecialRegisters sregs;
-    FloatingPointUnit fpu;
+    StandardRegisters regs = {0};
+    SpecialRegisters sregs = {0};
 	int ret;
 
-	ret = get_vcpu_mgns(cpu_fd, &regs, &sregs, &fpu);
+	ret = mshv_get_standard_regs(cpu_fd, &regs);
 	if (ret < 0) {
-		perror("Failed to load cpu registers");
+		perror("Failed to load standard registers");
+		return -1;
+	}
+	ret = mshv_get_special_regs(cpu_fd, &sregs);
+	if (ret < 0) {
+		perror("Failed to load special registers");
 		return -1;
 	}
 
@@ -156,13 +160,25 @@ static int mshv_getput_regs(MshvState *mshv_state, CPUState *cpu, bool set)
     X86CPU *x86cpu = X86_CPU(cpu);
     CPUX86State *env = &x86cpu->env;
 	X86CPUTopoInfo *topo_info = &env->topo_info;
-    StandardRegisters regs;
-    SpecialRegisters sregs;
-    FloatingPointUnit fpu;
+    StandardRegisters regs = {0};
+    SpecialRegisters sregs = {0};
+    FloatingPointUnit fpu = {0};
+	int cpu_fd = mshv_vcpufd(cpu);
     int ret = 0;
+	MshvCpuVendor cpu_vendor;
 
     if (!set) {
-        get_vcpu_mgns(mshv_vcpufd(cpu), &regs, &sregs, &fpu);
+		ret = mshv_get_standard_regs(cpu_fd, &regs);
+		if (ret < 0) {
+			perror("Failed to get standard registers");
+			return -1;
+		}
+
+		ret = mshv_get_special_regs(cpu_fd, &sregs);
+		if (ret < 0) {
+			perror("Failed to get special registers");
+			return -1;
+		}
     }
 
     mshv_getput_reg(&regs.rax, &env->regs[R_EAX], set);
@@ -201,13 +217,12 @@ static int mshv_getput_regs(MshvState *mshv_state, CPUState *cpu, bool set)
         memset(&sregs.interrupt_bitmap, 0, sizeof(sregs.interrupt_bitmap));
         memset(&fpu, 0, sizeof(fpu));
 
-		int cpu_fd = mshv_vcpufd(cpu);
-		MshvCpuVendor vendor = IS_AMD_CPU(env)
+		cpu_vendor = IS_AMD_CPU(env)
 			? AMD
 			: (IS_INTEL_CPU(env) ? Intel : Unknown);
 		configure_vcpu_mgns(cpu_fd,
 							cpu->cpu_index,
-						    vendor,
+						    cpu_vendor,
 						    topo_info->dies_per_pkg,
 						    topo_info->cores_per_module / topo_info->dies_per_pkg,
 						    cpu->nr_threads,

@@ -318,38 +318,6 @@ int get_standard_regs_mgns(int cpu_fd, struct StandardRegisters *regs)
 	return 0;
 }
 
-int set_rip_reg_mgns(int cpu_fd, uint64_t rip)
-{
-	int ret;
-	struct hv_register_assoc assoc = {
-		.name = HV_X64_REGISTER_RIP,
-		.value.reg64 = rip,
-	};
-
-	ret = set_generic_regs_mgns(cpu_fd, &assoc, 1);
-	if (ret < 0) {
-		perror("failed to set rip");
-		return -errno;
-	}
-	return 0;
-}
-
-int set_rflags_reg_mgns(int cpu_fd, uint64_t rflags)
-{
-        int ret;
-        struct hv_register_assoc assoc = {
-                .name = HV_X64_REGISTER_RFLAGS,
-                .value.reg64 = rflags,
-        };
-
-        ret = set_generic_regs_mgns(cpu_fd, &assoc, 1);
-        if (ret < 0) {
-                perror("failed to set rflags");
-                return -errno;
-        }
-        return 0;
-}
-
 int set_standard_regs_mgns(int cpu_fd, const struct StandardRegisters *regs)
 {
 	struct hv_register_assoc *assocs;

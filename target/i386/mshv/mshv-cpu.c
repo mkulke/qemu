@@ -77,23 +77,13 @@ int mshv_store_regs(int cpu_fd, const CPUState *cpu)
 	regs.r13 = env->regs[R_R13];
 	regs.r14 = env->regs[R_R14];
 	regs.r15 = env->regs[R_R15];
+    lflags_to_rflags(env);
+	regs.rflags = env->eflags;
+	regs.rip = env->eip;
 
 	ret = set_standard_regs_mgns(cpu_fd, &regs);
 	if (ret < 0) {
 		perror("Failed to store standard registers");
-		return -1;
-	}
-
-    lflags_to_rflags(env);
-	ret = set_rflags_reg_mgns(cpu_fd, env->eflags);
-	if (ret < 0) {
-		error_report("failed to store registers");
-		return -1;
-	}
-
-	ret = set_rip_reg_mgns(cpu_fd, env->eip);
-	if (ret < 0) {
-		error_report("failed to store registers");
 		return -1;
 	}
 

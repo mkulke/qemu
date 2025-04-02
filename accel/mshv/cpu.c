@@ -294,7 +294,7 @@ static void populate_special_regs_mgns(const struct hv_register_assoc *assocs,
 	populate_interrupt_bitmap_mgns(pending_reg, regs->interrupt_bitmap);
 }
 
-int get_standard_regs_mgns(int cpu_fd, struct StandardRegisters *regs)
+int mshv_get_standard_regs(int cpu_fd, struct StandardRegisters *regs)
 {
 	size_t n_regs = sizeof(STANDARD_REGISTER_NAMES) / sizeof(enum hv_register_name);
 	struct hv_register_assoc *assocs;
@@ -358,7 +358,7 @@ int set_standard_regs_mgns(int cpu_fd, const struct StandardRegisters *regs)
 	return 0;
 }
 
-int get_special_regs_mgns(int cpu_fd, struct SpecialRegisters *regs)
+int mshv_get_special_regs(int cpu_fd, struct SpecialRegisters *regs)
 {
 	size_t n_regs = sizeof(SPECIAL_REGISTER_NAMES) / sizeof(enum hv_register_name);
 	struct hv_register_assoc *assocs;
@@ -375,28 +375,7 @@ int get_special_regs_mgns(int cpu_fd, struct SpecialRegisters *regs)
 		return -errno;
 	}
 
-	/* size_t size = sizeof(struct hv_register_assoc) * n_regs; */
-	/* printf("[mgns-qemu] hv_register_assoc w/ size %zu", size); */
-	/* for (size_t i = 0; i < size; i++) { */
-	/* 	if (i % 16 == 0) { */
-	/* 		printf("\n"); */
-	/* 	} */
-	/* 	printf("%02x ", ((uint8_t *)assocs)[i]); */
-	/* } */
-	/* printf("\n"); */
-
 	populate_special_regs_mgns(assocs, regs);
-
-	/* size = sizeof(struct SpecialRegisters); */
-	/* printf("[mgns-qemu] regs w/ size %zu", size); */
-	/* // print 16 bytes in hex every line */
-	/* for (size_t i = 0; i < size; i++) { */
-	/* 	if (i % 16 == 0) { */
-	/* 		printf("\n"); */
-	/* 	} */
-	/* 	printf("%02x ", ((uint8_t *)assocs)[i]); */
-	/* } */
-	/* printf("\n"); */
 
 	g_free(assocs);
 	return 0;
@@ -524,27 +503,6 @@ inline static void populate_fpu_regs_mgns(struct hv_register_assoc *assocs,
 	}
 }
 
-static int get_fpu_regs_mgns(int cpu_fd, struct FloatingPointUnit *regs)
-{
-	size_t n_regs = sizeof(FPU_REGISTER_NAMES) / sizeof(enum hv_register_name);
-	struct hv_register_assoc *assocs;
-	int ret;
-
-	assocs = g_new0(struct hv_register_assoc, n_regs);
-	for (size_t i = 0; i < n_regs; i++) {
-		assocs[i].name = FPU_REGISTER_NAMES[i];
-	}
-	ret = get_generic_regs_mgns(cpu_fd, assocs, n_regs);
-	if (ret < 0) {
-		perror("failed to get fpu registers");
-		g_free(assocs);
-		return -errno;
-	}
-	populate_fpu_regs_mgns(assocs, regs);
-	g_free(assocs);
-	return 0;
-}
-
 static int set_fpu_regs_mgns(int cpu_fd, const struct FloatingPointUnit *regs)
 {
 	struct hv_register_assoc *assocs;
@@ -615,11 +573,11 @@ static int set_xc_reg_mgns(int cpu_fd, uint64_t xcr0)
 	return 0;
 }
 
-int set_vcpu_mgns(int cpu_fd,
-				  const struct StandardRegisters *standard_regs,
-				  const struct SpecialRegisters *special_regs,
-				  const struct FloatingPointUnit *fpu_regs,
-				  uint64_t xcr0)
+static int set_cpu_state(int cpu_fd,
+						 const struct StandardRegisters *standard_regs,
+						 const struct SpecialRegisters *special_regs,
+						 const struct FloatingPointUnit *fpu_regs,
+						 uint64_t xcr0)
 {
 	int ret;
 
@@ -639,29 +597,6 @@ int set_vcpu_mgns(int cpu_fd,
 	if (ret < 0) {
 		return ret;
 	}
-	return 0;
-}
-
-int get_vcpu_mgns(int cpu_fd,
-                  struct StandardRegisters *standard_regs,
-                  struct SpecialRegisters *special_regs,
-                  struct FloatingPointUnit *fpu_regs)
-{
-	int ret;
-
-	ret = get_standard_regs_mgns(cpu_fd, standard_regs);
-	if (ret < 0) {
-		return ret;
-	}
-	ret = get_special_regs_mgns(cpu_fd, special_regs);
-	if (ret < 0) {
-		return ret;
-	}
-	ret = get_fpu_regs_mgns(cpu_fd, fpu_regs);
-	if (ret < 0) {
-		return ret;
-	}
-
 	return 0;
 }
 
@@ -1051,7 +986,7 @@ int configure_vcpu_mgns(int cpu_fd,
 	/* TODO: mshv-c is setting lint twice, after setting msrs
 	 * should we do the same? */
 
-	ret = set_vcpu_mgns(cpu_fd,
+	ret = set_cpu_state(cpu_fd,
 						standard_regs,
 						special_regs,
 						fpu_regs,
@@ -1070,9 +1005,9 @@ int configure_vcpu_mgns(int cpu_fd,
 	return 0;
 }
 
-static int set_cpu_state_mgns(int cpu_fd,
-							  const StandardRegisters *standard_regs,
-							  const SpecialRegisters *special_regs)
+static int set_cpu_state_ch(int cpu_fd,
+							const StandardRegisters *standard_regs,
+							const SpecialRegisters *special_regs)
 {
 	int ret;
 
@@ -1091,20 +1026,19 @@ static int set_cpu_state_mgns(int cpu_fd,
 	return 0;
 }
 
-static int get_cpu_state_mgns(int cpu_fd,
-						      StandardRegisters *standard_regs,
-					          SpecialRegisters *special_regs)
+static int get_cpu_state_ch(int cpu_fd,
+						    StandardRegisters *standard_regs,
+					        SpecialRegisters *special_regs)
 {
-
 	int ret;
 
-	ret = get_standard_regs_mgns(cpu_fd, standard_regs);
+	ret = mshv_get_standard_regs(cpu_fd, standard_regs);
 	if (ret < 0) {
 		perror("failed to get cpu state");
 		return ret;
 	}
 
-	ret = get_special_regs_mgns(cpu_fd, special_regs);
+	ret = mshv_get_special_regs(cpu_fd, special_regs);
 	if (ret < 0) {
 		perror("failed to get cpu state");
 		return ret;
@@ -1241,8 +1175,8 @@ static MshvOps emu_ops_ch = {
 	/* cb's for the plaform in the emulator */
 	.read_memory_fn	    = read_memory_mgns,
 	.write_memory_fn	= write_memory_mgns,
-	.set_cpu_state_fn   = set_cpu_state_mgns,
-	.get_cpu_state_fn   = get_cpu_state_mgns,
+	.set_cpu_state_fn   = set_cpu_state_ch,
+	.get_cpu_state_fn   = get_cpu_state_ch,
 	.translate_gva_fn   = translate_gva,
 };
 
@@ -1426,7 +1360,7 @@ static void trace_cpu_state_mgns(int cpu_fd, bool prior) {
 	SpecialRegisters sregs = { 0 };
 	int ret;
 
-	ret = get_cpu_state_mgns(cpu_fd, &regs, &sregs);
+	ret = get_cpu_state_ch(cpu_fd, &regs, &sregs);
 	if (ret < 0) {
 		perror("failed to get cpu state");
 		abort();
@@ -1559,10 +1493,15 @@ static int handle_pio_str(CPUState *cpu,
 	struct X64Registers x64_regs = { 0 };
 	int cpu_fd = mshv_vcpufd(cpu);
 
-	ret = get_cpu_state_mgns(cpu_fd, &standard_regs, &special_regs);
+	ret = mshv_get_standard_regs(cpu_fd, &standard_regs);
 	if (ret < 0) {
-		perror("failed to get cpu state");
+		error_report("failed to get standard registers");
 		return -1;
+	}
+	ret = mshv_get_special_regs(cpu_fd, &special_regs);
+	if (ret < 0) {
+		error_report("failed to get special registers");
+		return ret;
 	}
 
 	direction_flag = (standard_regs.rflags & DF) != 0;

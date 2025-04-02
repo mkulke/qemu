@@ -28,8 +28,8 @@ static u_int32_t APIC_MODE_NMI = 0x4;
 static u_int32_t APIC_MODE_EXTINT = 0x7;
 
 static u_int32_t insn_counter_mgns = 0;
-static uint64_t INSN_COUNTER_START = 1510;
-static uint64_t INSN_COUNTER_END   = 1520;
+static uint64_t INSN_COUNTER_START = 0000;
+static uint64_t INSN_COUNTER_END   = 0100;
 
 static enum hv_register_name STANDARD_REGISTER_NAMES[18] = {
 	HV_X64_REGISTER_RAX,
@@ -318,7 +318,39 @@ int get_standard_regs_mgns(int cpu_fd, struct StandardRegisters *regs)
 	return 0;
 }
 
-static int set_standard_regs_mgns(int cpu_fd, const struct StandardRegisters *regs)
+int set_rip_reg_mgns(int cpu_fd, uint64_t rip)
+{
+	int ret;
+	struct hv_register_assoc assoc = {
+		.name = HV_X64_REGISTER_RIP,
+		.value.reg64 = rip,
+	};
+
+	ret = set_generic_regs_mgns(cpu_fd, &assoc, 1);
+	if (ret < 0) {
+		perror("failed to set rip");
+		return -errno;
+	}
+	return 0;
+}
+
+int set_rflags_reg_mgns(int cpu_fd, uint64_t rflags)
+{
+        int ret;
+        struct hv_register_assoc assoc = {
+                .name = HV_X64_REGISTER_RFLAGS,
+                .value.reg64 = rflags,
+        };
+
+        ret = set_generic_regs_mgns(cpu_fd, &assoc, 1);
+        if (ret < 0) {
+                perror("failed to set rflags");
+                return -errno;
+        }
+        return 0;
+}
+
+int set_standard_regs_mgns(int cpu_fd, const struct StandardRegisters *regs)
 {
 	struct hv_register_assoc *assocs;
 	size_t n_regs = sizeof(STANDARD_REGISTER_NAMES) / sizeof(enum hv_register_name);
@@ -1447,6 +1479,11 @@ static void trace_cpu_state_mgns(int cpu_fd, bool prior) {
 							   sregs.interrupt_bitmap[3]);
 }
 
+static bool use_local_emu(void)
+{
+	return getenv("USE_LOCAL_EMU") != NULL;
+}
+
 static int handle_mmio(CPUState *cpu, const struct hyperv_message *msg,
 					   enum VmExitMgns *exit_reason)
 {
@@ -1484,12 +1521,11 @@ static int handle_mmio(CPUState *cpu, const struct hyperv_message *msg,
 	trace_cpu_state_mgns(cpu_fd, true);
 	/* print_decoded_insn(instruction_bytes, insn_len); */
 
-	uint64_t c = qatomic_read(&insn_counter_mgns);
-	if (getenv("USE_LOCAL_EMU") != NULL && c > 1510) {
+	if (use_local_emu()) {
 		ret = emulate_local(cpu, instruction_bytes, insn_len);
 		if (ret < 0) {
-			perror("failed to emulate mmio w/ local emulator");
-			abort();
+			error_report("failed to emulate mmio");
+			return -1;
 		}
 	} else {
 		emulate_ch(cpu_fd,

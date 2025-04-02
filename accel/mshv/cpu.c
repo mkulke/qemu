@@ -27,10 +27,6 @@ static u_int64_t MTRR_MEM_TYPE_WB = 0x6;
 static u_int32_t APIC_MODE_NMI = 0x4;
 static u_int32_t APIC_MODE_EXTINT = 0x7;
 
-static u_int32_t insn_counter_mgns = 0;
-static uint64_t INSN_COUNTER_START = 0000;
-static uint64_t INSN_COUNTER_END   = 0100;
-
 static enum hv_register_name STANDARD_REGISTER_NAMES[18] = {
 	HV_X64_REGISTER_RAX,
 	HV_X64_REGISTER_RBX,
@@ -1301,11 +1297,6 @@ static int emulate_local(CPUState *cpu, uint8_t *insn_bytes, size_t insn_len)
 	int ret;
 	int cpu_fd = mshv_vcpufd(cpu);
 
-	/* hvf_load_regs(cpu); */
-	/* decode_instruction(env, &decode); */
-	/* exec_instruction(env, &decode); */
-	/* hvf_store_regs(cpu); */
-
 	init_emu(&mshv_x86_emul_ops);
 	init_decoder();
 
@@ -1315,23 +1306,7 @@ static int emulate_local(CPUState *cpu, uint8_t *insn_bytes, size_t insn_len)
 		return -1;
 	}
 
-	/* uint64_t c = qatomic_fetch_inc(&insn_counter_mgns); */
 	decode_instruction(env, &decode);
-
-	int c = qatomic_read(&insn_counter_mgns);
-	if (c >= INSN_COUNTER_START && c < INSN_COUNTER_END) {
-		trace_mcpu_decoded_x86_insn(decode_cmd_to_string(decode.cmd),
-								    decode.len,
-								    decode.opcode[0],
-								    decode.opcode[1],
-								    decode.opcode[2],
-								    decode.opcode[3]);
-	}
-
-	/* if (c >= 1500 && c < 1510) { */
-	/* 	printf("#%lu: ", c); */
-	/* 	print_decoded_insn_mgns(&decode); */
-	/* } */
 
 	exec_instruction(env, &decode);
 
@@ -1342,43 +1317,6 @@ static int emulate_local(CPUState *cpu, uint8_t *insn_bytes, size_t insn_len)
 	}
 
 	return 0;
-}
-
-static void trace_cpu_state_mgns(int cpu_fd, bool prior) {
-	int c = qatomic_read(&insn_counter_mgns);
-	if (c < INSN_COUNTER_START || c >= INSN_COUNTER_END) {
-		return;
-	}
-
-	if (prior) {
-		trace_mcpu_prior(c);
-	} else {
-		trace_mcpu_after(c);
-	}
-
-	StandardRegisters regs = { 0 };
-	SpecialRegisters sregs = { 0 };
-	int ret;
-
-	ret = get_cpu_state_ch(cpu_fd, &regs, &sregs);
-	if (ret < 0) {
-		perror("failed to get cpu state");
-		abort();
-	}
-	trace_mcpu_regs_rax_rbp(regs.rax, regs.rbx, regs.rcx, regs.rdx,
-						   regs.rsi, regs.rdi, regs.rsp, regs.rbp);
-	trace_mcpu_regs_r8_r15(regs.r8, regs.r9, regs.r10, regs.r11,
-						  regs.r12, regs.r13, regs.r14, regs.r15);
-	trace_mcpu_regs_rip_rflags(regs.rip, regs.rflags);
-	trace_mcpu_sregs_cs_ss(sregs.cs.selector, sregs.ds.selector, sregs.es.selector,
-						  sregs.fs.selector, sregs.gs.selector, sregs.ss.selector);
-	trace_mcpu_sregs_gdt_idt(sregs.gdt.base, sregs.gdt.limit, sregs.idt.base, sregs.idt.limit);
-	trace_mcpu_sregs_cr0_cr8(sregs.cr0, sregs.cr2, sregs.cr3, sregs.cr4, sregs.cr8);
-	trace_mcpu_sregs_efer_apic_bs(sregs.efer, sregs.apic_base);
-	trace_mcpu_sregs_irq_bitmap(sregs.interrupt_bitmap[0],
-							   sregs.interrupt_bitmap[1],
-							   sregs.interrupt_bitmap[2],
-							   sregs.interrupt_bitmap[3]);
 }
 
 static bool use_local_emu(void)
@@ -1419,10 +1357,6 @@ static int handle_mmio(CPUState *cpu, const struct hyperv_message *msg,
 
 	instruction_bytes = info.instruction_bytes;
 
-	qatomic_inc(&insn_counter_mgns);
-	trace_cpu_state_mgns(cpu_fd, true);
-	/* print_decoded_insn(instruction_bytes, insn_len); */
-
 	if (use_local_emu()) {
 		ret = emulate_local(cpu, instruction_bytes, insn_len);
 		if (ret < 0) {
@@ -1435,8 +1369,6 @@ static int handle_mmio(CPUState *cpu, const struct hyperv_message *msg,
 				   instruction_bytes, insn_len,
 				   &emu_ops_ch);
 	}
-
-	trace_cpu_state_mgns(cpu_fd, false);
 
 	*exit_reason = VmExitIgnore;
 

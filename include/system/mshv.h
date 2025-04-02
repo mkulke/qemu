@@ -218,8 +218,6 @@ enum VmExitMgns run_vcpu(int vm_fd, CPUState *cpu, hv_message *msg);
 int mshv_load_regs(int cpu_fd, CPUState *cpu);
 int mshv_store_regs(int cpu_fd, const CPUState *cpu);
 int set_standard_regs_mgns(int cpu_fd, const struct StandardRegisters *regs);
-int set_rip_reg_mgns(int cpu_fd, uint64_t rip);
-int set_rflags_reg_mgns(int cpu_fd, uint64_t rflags);
 
 /* for use in the remote sw emu */
 int guest_mem_read_fn(uint64_t gpa, uint8_t *data, uintptr_t size,

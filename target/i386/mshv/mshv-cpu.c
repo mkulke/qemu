@@ -2,6 +2,7 @@
 #include "cpu.h"
 #include "system/mshv.h"
 #include "emulate/x86_flags.h"
+#include "qemu/error-report.h"
 #include <qemu-mshv.h>
 
 static void set_seg(struct SegmentRegister *lhs, const SegmentCache *rhs)
@@ -58,8 +59,6 @@ int mshv_store_regs(int cpu_fd, const CPUState *cpu)
     X86CPU *x86cpu = X86_CPU(cpu);
     CPUX86State *env = &x86cpu->env;
     StandardRegisters regs = {0};
-    SpecialRegisters sregs = {0};
-    FloatingPointUnit fpu = {0};
 	int ret;
 
 	regs.rax = env->regs[R_EAX];
@@ -78,33 +77,26 @@ int mshv_store_regs(int cpu_fd, const CPUState *cpu)
 	regs.r13 = env->regs[R_R13];
 	regs.r14 = env->regs[R_R14];
 	regs.r15 = env->regs[R_R15];
-	regs.rflags = env->eflags;
-	regs.rip = env->eip;
 
-	set_seg(&sregs.cs, &env->segs[R_CS]);
-	set_seg(&sregs.ds, &env->segs[R_DS]);
-	set_seg(&sregs.es, &env->segs[R_ES]);
-	set_seg(&sregs.fs, &env->segs[R_FS]);
-	set_seg(&sregs.gs, &env->segs[R_GS]);
-	set_seg(&sregs.ss, &env->segs[R_SS]);
-
-	sregs.idt.limit = env->idt.limit;
-	sregs.idt.base = env->idt.base;
-	sregs.gdt.limit = env->gdt.limit;
-	sregs.gdt.base = env->gdt.base;
-
-	sregs.cr0 = env->cr[0];
-	sregs.cr2 = env->cr[2];
-	sregs.cr3 = env->cr[3];
-	sregs.cr4 = env->cr[4];
-	sregs.efer = env->efer;
-	sregs.apic_base = cpu_get_apic_base(x86cpu->apic_state);
-
-	ret = set_vcpu_mgns(cpu_fd, &regs, &sregs, &fpu, env->xcr0);
+	ret = set_standard_regs_mgns(cpu_fd, &regs);
 	if (ret < 0) {
-		perror("Failed to store cpu registers");
+		perror("Failed to store standard registers");
 		return -1;
 	}
+
+    lflags_to_rflags(env);
+	ret = set_rflags_reg_mgns(cpu_fd, env->eflags);
+	if (ret < 0) {
+		error_report("failed to store registers");
+		return -1;
+	}
+
+	ret = set_rip_reg_mgns(cpu_fd, env->eip);
+	if (ret < 0) {
+		error_report("failed to store registers");
+		return -1;
+	}
+
 	return 0;
 }
 
@@ -139,7 +131,10 @@ int mshv_load_regs(int cpu_fd, CPUState *cpu)
 	env->regs[R_R13] = regs.r13;
 	env->regs[R_R14] = regs.r14;
 	env->regs[R_R15] = regs.r15;
+
 	env->eflags = regs.rflags;
+    rflags_to_lflags(env);
+
 	env->eip = regs.rip;
 
 	get_seg(&env->segs[R_CS], &sregs.cs);

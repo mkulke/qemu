@@ -189,15 +189,6 @@ void init_cpu_db_mgns(void);
 int new_vcpu_mgns(int mshv_fd, uint8_t vp_index, MshvOps *ops);
 int create_vcpu_mgns(int vm_fd, uint8_t vp_index);
 void remove_vcpu_mgns(int mshv_fd);
-int get_vcpu_mgns(int cpufd,
-                  struct StandardRegisters *raw_regs,
-                  struct SpecialRegisters *raw_sregs,
-                  struct FloatingPointUnit *raw_fpu);
-int set_vcpu_mgns(int cpu_fd,
-				  const struct StandardRegisters *standard_regs,
-				  const struct SpecialRegisters *special_regs,
-				  const struct FloatingPointUnit *fpu_regs,
-				  uint64_t xcr0);
 int configure_msr_mgns(int cpu_fd, msr_entry *msrs, size_t n_msrs);
 int configure_vcpu_mgns(int cpu_fd,
 						uint8_t id,
@@ -209,8 +200,8 @@ int configure_vcpu_mgns(int cpu_fd,
 						struct SpecialRegisters *special_regs,
 						uint64_t xcr0,
 						struct FloatingPointUnit *fpu_regs);
-int get_standard_regs_mgns(int cpu_fd, struct StandardRegisters *regs);
-int get_special_regs_mgns(int cpu_fd, struct SpecialRegisters *regs);
+int mshv_get_standard_regs(int cpu_fd, struct StandardRegisters *regs);
+int mshv_get_special_regs(int cpu_fd, struct SpecialRegisters *regs);
 int set_x64_registers_mgns(int cpu_fd, const struct X64Registers *regs);
 enum VmExitMgns run_vcpu(int vm_fd, CPUState *cpu, hv_message *msg);
 

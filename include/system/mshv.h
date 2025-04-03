@@ -204,6 +204,7 @@ int mshv_get_standard_regs(int cpu_fd, struct StandardRegisters *regs);
 int mshv_get_special_regs(int cpu_fd, struct SpecialRegisters *regs);
 int set_x64_registers_mgns(int cpu_fd, const struct X64Registers *regs);
 enum VmExitMgns run_vcpu(int vm_fd, CPUState *cpu, hv_message *msg);
+int translate_gva(int cpu_fd, uint64_t gva, uint64_t *gpa, uint64_t flags);
 
 /* for use in the local sw emu */
 int mshv_load_regs(int cpu_fd, CPUState *cpu);

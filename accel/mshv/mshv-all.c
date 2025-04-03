@@ -22,6 +22,7 @@
 #include <sys/ioctl.h>
 
 #include "emulate/x86_decode.h"
+#include "emulate/x86_emu.h"
 
 #define TYPE_MSHV_ACCEL ACCEL_CLASS_NAME("mshv")
 
@@ -499,6 +500,120 @@ int pio_write_fn(uint64_t port, const uint8_t *data, uintptr_t size,
     return ret;
 }
 
+static int guest_mem_read_with_gva(CPUState *cpu, uint64_t gva, uint8_t *data,
+								   uintptr_t size, bool fetch_instruction)
+{
+	int ret;
+	uint64_t gpa, flags;
+	int cpu_fd = mshv_vcpufd(cpu);
+
+	flags = HV_TRANSLATE_GVA_VALIDATE_READ;
+	ret = translate_gva(cpu_fd, gva, &gpa, flags);
+	if (ret < 0) {
+		perror("failed to translate gva to gpa");
+		return -1;
+	}
+	ret = guest_mem_read_fn(gpa, data, size, false, fetch_instruction);
+	if (ret < 0) {
+		perror("failed to read guest memory");
+		return -1;
+	}
+	return 0;
+}
+
+static int guest_mem_write_with_gva(CPUState *cpu, uint64_t gva, const uint8_t *data,
+									uintptr_t size)
+{
+	int ret;
+	uint64_t gpa, flags;
+	int cpu_fd = mshv_vcpufd(cpu);
+
+	flags = HV_TRANSLATE_GVA_VALIDATE_WRITE;
+	ret = translate_gva(cpu_fd, gva, &gpa, flags);
+	if (ret < 0) {
+		perror("failed to translate gva to gpa");
+		return -1;
+	}
+	ret = guest_mem_write_fn(gpa, data, size, false);
+	if (ret < 0) {
+		perror("failed to write to guest memory");
+		return -1;
+	}
+	return 0;
+}
+
+
+static void write_mem_emu(CPUState *cpu, void *data, target_ulong addr, int bytes)
+{
+	if (guest_mem_write_with_gva(cpu, addr, data, bytes) < 0) {
+		error_report("failed to write memory");
+		abort();
+	}
+}
+
+static void read_mem_emu(CPUState *cpu, void *data, target_ulong addr, int bytes)
+{
+	if (guest_mem_read_with_gva(cpu, addr, data, bytes, false) < 0) {
+		error_report("failed to read memory");
+		abort();
+	}
+}
+
+static void fetch_instruction_emu(CPUState *cpu, void *data, target_ulong addr,
+	                           int bytes)
+{
+	if (guest_mem_read_with_gva(cpu, addr, data, bytes, true) < 0) {
+		error_report("failed to fetch instruction");
+		abort();
+	}
+}
+
+static void read_segment_descriptor_emu(CPUState *cpu,
+		                                struct x86_segment_descriptor *desc,
+										enum X86Seg seg_idx)
+{
+	bool ret;
+	X86CPU *x86_cpu = X86_CPU(cpu);
+	CPUX86State *env = &x86_cpu->env;
+	SegmentCache *seg = &env->segs[seg_idx];
+	x86_segment_selector sel = { .sel = seg->selector & 0xFFFF };
+
+	ret = x86_read_segment_descriptor(cpu, desc, sel);
+	if (ret == false) {
+		error_report("failed to read segment descriptor");
+		abort();
+	}
+}
+
+static void handle_io_emu(CPUState *cpu, uint16_t port, void *data, int direction,
+                          int size, int count)
+{
+	error_report("handle_io_emu not implemented");
+	abort();
+}
+static void simulate_rdmsr_emu(CPUState *cpu)
+{
+	error_report("simulate_rdmsr_emu not implemented");
+	abort();
+}
+
+static void simulate_wrmsr_emu(CPUState *cpu)
+{
+	error_report("simulate_wrmsr_emu not implemented");
+	abort();
+}
+
+
+static const struct x86_emul_ops mshv_x86_emul_ops = {
+	.fetch_instruction = fetch_instruction_emu,
+	.read_mem = read_mem_emu,
+	.write_mem = write_mem_emu,
+	.read_segment_descriptor = read_segment_descriptor_emu,
+	.handle_io = handle_io_emu,
+	.simulate_rdmsr = simulate_rdmsr_emu,
+	.simulate_wrmsr = simulate_wrmsr_emu,
+};
+
 static int mshv_init_vcpu(CPUState *cpu)
 {
     X86CPU *x86_cpu = X86_CPU(cpu);
@@ -506,6 +621,9 @@ static int mshv_init_vcpu(CPUState *cpu)
 
     env->emu_mmio_buf = g_new(char, 4096);
     cpu->accel = g_new0(AccelCPUState, 1);
+
+	init_decoder();
+	init_emu(&mshv_x86_emul_ops);
 
 	int vm_fd = mshv_state->vm;
 	uint8_t id = cpu->cpu_index;

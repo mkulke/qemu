@@ -169,7 +169,6 @@ typedef struct DirtyLogSlotMgns {
 typedef struct PerCpuInfoMgns {
 	int vp_fd;
 	uint8_t vp_index;
-	MshvOps *ops;
 } PerCpuInfoMgns;
 
 /* cpu */
@@ -188,10 +187,9 @@ enum VmExitMgns {
 void mshv_init_cpu_logic(void);
 int mshv_create_vcpu(int vm_fd, uint8_t vp_index, int *cpu_fd);
 void mshv_remove_vcpu(int vm_fd, int cpu_fd);
-int configure_msr_mgns(int cpu_fd, msr_entry *msrs, size_t n_msrs);
-int configure_vcpu_mgns(int cpu_fd,
+int mshv_configure_vcpu(CPUState *cpu,
+		                int cpu_fd,
 						uint8_t id,
-						enum MshvCpuVendor cpu_vendor,
 						uint8_t ndies,
 						uint8_t ncores_per_die,
 						uint8_t nthreads_per_core,
@@ -223,6 +221,7 @@ void pio_read_fn(uint64_t port, uint8_t *data, uintptr_t size,
                  bool is_secure_mode);
 
 /* msr */
+int configure_msr_mgns(int cpu_fd, msr_entry *msrs, size_t n_msrs);
 int is_supported_msr_mgns(uint32_t msr);
 int msr_to_hv_reg_name_mgns(uint32_t msr, uint32_t *hv_reg);
 

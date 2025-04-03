@@ -186,8 +186,7 @@ enum VmExitMgns {
 };
 
 void init_cpu_db_mgns(void);
-int new_vcpu_mgns(int mshv_fd, uint8_t vp_index, MshvOps *ops);
-int create_vcpu_mgns(int vm_fd, uint8_t vp_index);
+int mshv_create_vcpu(int vm_fd, uint8_t vp_index, int *vcpu_fd);
 void remove_vcpu_mgns(int mshv_fd);
 int configure_msr_mgns(int cpu_fd, msr_entry *msrs, size_t n_msrs);
 int configure_vcpu_mgns(int cpu_fd,

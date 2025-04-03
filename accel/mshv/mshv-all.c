@@ -361,6 +361,85 @@ static void mshv_reset(void *param)
 
 static void mshv_init_irq(MshvState *s) {}
 
+static inline MemTxAttrs mshv_get_mem_attrs(bool is_secure_mode)
+{
+    return ((MemTxAttrs){ .secure = is_secure_mode });
+}
+
+int guest_mem_read_fn(uint64_t gpa, uint8_t *data, uintptr_t size,
+					   bool is_secure_mode, bool instruction_fetch)
+{
+    int ret;
+    MemTxAttrs memattr = mshv_get_mem_attrs(is_secure_mode);
+
+	if (instruction_fetch) {
+		trace_mcpu_insn_fetch(gpa, size);
+	} else {
+		trace_mcpu_mem_read(gpa, size);
+	}
+
+    ret = address_space_rw(&address_space_memory, gpa, memattr, (void *)data,
+                           size, false);
+	if (ret != MEMTX_OK) {
+		perror("Failed to read guest memory");
+		return -1;
+	}
+
+	return 0;
+}
+
+int guest_mem_write_fn(uint64_t gpa, const uint8_t *data, uintptr_t size,
+                       bool is_secure_mode)
+{
+	trace_mcpu_mem_write(gpa, size);
+    int ret = 0;
+    MemTxAttrs memattr = mshv_get_mem_attrs(is_secure_mode);
+    ret = address_space_rw(&address_space_memory, gpa, memattr, (void *)data,
+                           size, true);
+    return ret;
+}
+
+void pio_read_fn(uint64_t port, uint8_t *data, uintptr_t size,
+                 bool is_secure_mode)
+{
+    int ret = 0;
+    MemTxAttrs memattr = mshv_get_mem_attrs(is_secure_mode);
+    ret = address_space_rw(&address_space_io, port, memattr, (void *)data, size,
+                           false);
+    assert(ret == MEMTX_OK);
+}
+
+int pio_write_fn(uint64_t port, const uint8_t *data, uintptr_t size,
+			     bool is_secure_mode)
+{
+    int ret = 0;
+    MemTxAttrs memattr = mshv_get_mem_attrs(is_secure_mode);
+    ret = address_space_rw(&address_space_io, port, memattr, (void *)data, size,
+                           true);
+    return ret;
+}
+
+static int mshv_init_vcpu(CPUState *cpu)
+{
+    X86CPU *x86_cpu = X86_CPU(cpu);
+    CPUX86State *env = &x86_cpu->env;
+	int vm_fd = mshv_state->vm;
+	uint8_t vp_index = cpu->cpu_index;
+	int ret;
+
+    env->emu_mmio_buf = g_new(char, 4096);
+    cpu->accel = g_new0(AccelCPUState, 1);
+
+    ret = mshv_create_vcpu(vm_fd, vp_index, &cpu->accel->cpufd);
+	if (ret < 0) {
+		return -1;
+	}
+
+    cpu->vcpu_dirty = false;
+
+    return 0;
+}
+
 static int mshv_init(MachineState *ms)
 {
     MshvState *s;
@@ -381,7 +460,7 @@ static int mshv_init(MachineState *ms)
 	}
 	mshv_fd = ret;
 	// cpu
-	init_cpu_db_mgns();
+	mshv_init_cpu_logic();
 	// irq
 	init_msicontrol_mgns();
 	// memory
@@ -442,202 +521,6 @@ static const TypeInfo mshv_accel_type = {
     .instance_size = sizeof(MshvState),
 };
 
-static inline MemTxAttrs mshv_get_mem_attrs(bool is_secure_mode)
-{
-    return ((MemTxAttrs){ .secure = is_secure_mode });
-}
-
-int guest_mem_read_fn(uint64_t gpa, uint8_t *data, uintptr_t size,
-					   bool is_secure_mode, bool instruction_fetch)
-{
-    int ret;
-    MemTxAttrs memattr = mshv_get_mem_attrs(is_secure_mode);
-
-	if (instruction_fetch) {
-		trace_mcpu_insn_fetch(gpa, size);
-	} else {
-		trace_mcpu_mem_read(gpa, size);
-	}
-
-    ret = address_space_rw(&address_space_memory, gpa, memattr, (void *)data,
-                           size, false);
-	if (ret != MEMTX_OK) {
-		perror("Failed to read guest memory");
-		return -1;
-	}
-
-	return 0;
-}
-
-int guest_mem_write_fn(uint64_t gpa, const uint8_t *data, uintptr_t size,
-                       bool is_secure_mode)
-{
-	trace_mcpu_mem_write(gpa, size);
-    int ret = 0;
-    MemTxAttrs memattr = mshv_get_mem_attrs(is_secure_mode);
-    ret = address_space_rw(&address_space_memory, gpa, memattr, (void *)data,
-                           size, true);
-    return ret;
-}
-
-void pio_read_fn(uint64_t port, uint8_t *data, uintptr_t size,
-                 bool is_secure_mode)
-{
-    int ret = 0;
-    MemTxAttrs memattr = mshv_get_mem_attrs(is_secure_mode);
-    ret = address_space_rw(&address_space_io, port, memattr, (void *)data, size,
-                           false);
-    assert(ret == MEMTX_OK);
-}
-
-int pio_write_fn(uint64_t port, const uint8_t *data, uintptr_t size,
-			     bool is_secure_mode)
-{
-    int ret = 0;
-    MemTxAttrs memattr = mshv_get_mem_attrs(is_secure_mode);
-    ret = address_space_rw(&address_space_io, port, memattr, (void *)data, size,
-                           true);
-    return ret;
-}
-
-static int guest_mem_read_with_gva(CPUState *cpu, uint64_t gva, uint8_t *data,
-								   uintptr_t size, bool fetch_instruction)
-{
-	int ret;
-	uint64_t gpa, flags;
-	int cpu_fd = mshv_vcpufd(cpu);
-
-	flags = HV_TRANSLATE_GVA_VALIDATE_READ;
-	ret = translate_gva(cpu_fd, gva, &gpa, flags);
-	if (ret < 0) {
-		perror("failed to translate gva to gpa");
-		return -1;
-	}
-	ret = guest_mem_read_fn(gpa, data, size, false, fetch_instruction);
-	if (ret < 0) {
-		perror("failed to read guest memory");
-		return -1;
-	}
-	return 0;
-}
-
-static int guest_mem_write_with_gva(CPUState *cpu, uint64_t gva, const uint8_t *data,
-									uintptr_t size)
-{
-	int ret;
-	uint64_t gpa, flags;
-	int cpu_fd = mshv_vcpufd(cpu);
-
-	flags = HV_TRANSLATE_GVA_VALIDATE_WRITE;
-	ret = translate_gva(cpu_fd, gva, &gpa, flags);
-	if (ret < 0) {
-		perror("failed to translate gva to gpa");
-		return -1;
-	}
-	ret = guest_mem_write_fn(gpa, data, size, false);
-	if (ret < 0) {
-		perror("failed to write to guest memory");
-		return -1;
-	}
-	return 0;
-}
-
-
-static void write_mem_emu(CPUState *cpu, void *data, target_ulong addr, int bytes)
-{
-	if (guest_mem_write_with_gva(cpu, addr, data, bytes) < 0) {
-		error_report("failed to write memory");
-		abort();
-	}
-}
-
-static void read_mem_emu(CPUState *cpu, void *data, target_ulong addr, int bytes)
-{
-	if (guest_mem_read_with_gva(cpu, addr, data, bytes, false) < 0) {
-		error_report("failed to read memory");
-		abort();
-	}
-}
-
-static void fetch_instruction_emu(CPUState *cpu, void *data, target_ulong addr,
-	                           int bytes)
-{
-	if (guest_mem_read_with_gva(cpu, addr, data, bytes, true) < 0) {
-		error_report("failed to fetch instruction");
-		abort();
-	}
-}
-
-static void read_segment_descriptor_emu(CPUState *cpu,
-		                                struct x86_segment_descriptor *desc,
-										enum X86Seg seg_idx)
-{
-	bool ret;
-	X86CPU *x86_cpu = X86_CPU(cpu);
-	CPUX86State *env = &x86_cpu->env;
-	SegmentCache *seg = &env->segs[seg_idx];
-	x86_segment_selector sel = { .sel = seg->selector & 0xFFFF };
-
-	ret = x86_read_segment_descriptor(cpu, desc, sel);
-	if (ret == false) {
-		error_report("failed to read segment descriptor");
-		abort();
-	}
-}
-
-static void handle_io_emu(CPUState *cpu, uint16_t port, void *data, int direction,
-                          int size, int count)
-{
-	error_report("handle_io_emu not implemented");
-	abort();
-}
-static void simulate_rdmsr_emu(CPUState *cpu)
-{
-	error_report("simulate_rdmsr_emu not implemented");
-	abort();
-}
-
-static void simulate_wrmsr_emu(CPUState *cpu)
-{
-	error_report("simulate_wrmsr_emu not implemented");
-	abort();
-}
-
-
-static const struct x86_emul_ops mshv_x86_emul_ops = {
-	.fetch_instruction = fetch_instruction_emu,
-	.read_mem = read_mem_emu,
-	.write_mem = write_mem_emu,
-	.read_segment_descriptor = read_segment_descriptor_emu,
-	.handle_io = handle_io_emu,
-	.simulate_rdmsr = simulate_rdmsr_emu,
-	.simulate_wrmsr = simulate_wrmsr_emu,
-};
-
-static int mshv_init_vcpu(CPUState *cpu)
-{
-    X86CPU *x86_cpu = X86_CPU(cpu);
-    CPUX86State *env = &x86_cpu->env;
-	int ret;
-
-    env->emu_mmio_buf = g_new(char, 4096);
-    cpu->accel = g_new0(AccelCPUState, 1);
-
-	init_decoder();
-	init_emu(&mshv_x86_emul_ops);
-
-	int vm_fd = mshv_state->vm;
-	uint8_t id = cpu->cpu_index;
-
-    ret = mshv_create_vcpu(vm_fd, id, &cpu->accel->cpufd);
-	if (ret < 0) {
-		return -1;
-	}
-
-    cpu->vcpu_dirty = false;
-
-    return 0;
-}
 
 /* returns vm_fd on success, -errno on failure */
 int create_partition_mgns(int mshv_fd)
@@ -867,8 +750,10 @@ static int mshv_destroy_vcpu(CPUState *cpu)
 {
     X86CPU *x86_cpu = X86_CPU(cpu);
     CPUX86State *env = &x86_cpu->env;
+	int cpu_fd = mshv_vcpufd(cpu);
+	int vm_fd = mshv_state->vm;
 
-    remove_vcpu_mgns(mshv_vcpufd(cpu));
+    mshv_remove_vcpu(vm_fd, cpu_fd);
     mshv_vcpufd(cpu) = 0;
 
     g_free(env->emu_mmio_buf);

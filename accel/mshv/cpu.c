@@ -1121,47 +1121,6 @@ int configure_vcpu_mgns(int cpu_fd,
 	return 0;
 }
 
-static int set_cpu_state_ch(int cpu_fd,
-							const StandardRegisters *standard_regs,
-							const SpecialRegisters *special_regs)
-{
-	int ret;
-
-	ret = set_standard_regs_mgns(cpu_fd, standard_regs);
-	if (ret < 0) {
-		perror("failed to set standard registers");
-		return ret;
-	}
-
-	ret = set_special_regs_mgns(cpu_fd, special_regs);
-	if (ret < 0) {
-		perror("failed to set special registers");
-		return ret;
-	}
-
-	return 0;
-}
-
-static int get_cpu_state_ch(int cpu_fd,
-						    StandardRegisters *standard_regs,
-					        SpecialRegisters *special_regs)
-{
-	int ret;
-
-	ret = mshv_get_standard_regs(cpu_fd, standard_regs);
-	if (ret < 0) {
-		perror("failed to get cpu state");
-		return ret;
-	}
-
-	ret = mshv_get_special_regs(cpu_fd, special_regs);
-	if (ret < 0) {
-		perror("failed to get cpu state");
-		return ret;
-	}
-return 0;
-}
-
 int set_x64_registers_mgns(int cpu_fd, const struct X64Registers *regs)
 {
 	size_t n_regs = regs->count;
@@ -1282,21 +1241,9 @@ static int write_memory_mgns(int cpu_fd,
 	return 0;
 }
 
-static MshvOps emu_ops_ch = {
-	/* trait impls for the emulator */
-	.guest_mem_write_fn = guest_mem_write_fn,
-	.guest_mem_read_fn  = guest_mem_read_fn,
-	.pio_read_fn        = pio_read_fn,
-	.pio_write_fn       = pio_write_fn,
-	/* cb's for the plaform in the emulator */
-	.read_memory_fn	    = read_memory_mgns,
-	.write_memory_fn	= write_memory_mgns,
-	.set_cpu_state_fn   = set_cpu_state_ch,
-	.get_cpu_state_fn   = get_cpu_state_ch,
-	.translate_gva_fn   = translate_gva,
-};
-
-static int emulate_local(CPUState *cpu, uint8_t *insn_bytes, size_t insn_len)
+static int emulate_insn(CPUState *cpu,
+						uint8_t *insn_bytes, size_t insn_len,
+						uint64_t gva, uint64_t gpa)
 {
     X86CPU *x86_cpu = X86_CPU(cpu);
     CPUX86State *env = &x86_cpu->env;
@@ -1304,6 +1251,9 @@ static int emulate_local(CPUState *cpu, uint8_t *insn_bytes, size_t insn_len)
 	int ret;
 	int cpu_fd = mshv_vcpufd(cpu);
 	QemuMutex *guard;
+
+	/* TODO: use initial gva and gpa */
+	/* TODO: use instruction_bytes for emu */
 
 	guard = g_hash_table_lookup(cpu_guards, GUINT_TO_POINTER(cpu_fd));
 	if (!guard) {
@@ -1331,11 +1281,6 @@ static int emulate_local(CPUState *cpu, uint8_t *insn_bytes, size_t insn_len)
 	return 0;
 }
 
-static bool use_local_emu(void)
-{
-	return getenv("USE_LOCAL_EMU") != NULL;
-}
-
 static int handle_mmio(CPUState *cpu, const struct hyperv_message *msg,
 					   enum VmExitMgns *exit_reason)
 {
@@ -1344,7 +1289,6 @@ static int handle_mmio(CPUState *cpu, const struct hyperv_message *msg,
 	uint8_t access_type;
 	uint8_t *instruction_bytes;
 	int ret;
-	int cpu_fd = mshv_vcpufd(cpu);
 
 	ret = set_memory_info(msg, &info);
 	if (ret < 0) {
@@ -1369,17 +1313,12 @@ static int handle_mmio(CPUState *cpu, const struct hyperv_message *msg,
 
 	instruction_bytes = info.instruction_bytes;
 
-	if (use_local_emu()) {
-		ret = emulate_local(cpu, instruction_bytes, insn_len);
-		if (ret < 0) {
-			error_report("failed to emulate mmio");
-			return -1;
-		}
-	} else {
-		emulate_ch(cpu_fd,
-				   info.guest_virtual_address, info.guest_physical_address,
-				   instruction_bytes, insn_len,
-				   &emu_ops_ch);
+	ret = emulate_insn(cpu,
+					   instruction_bytes, insn_len,
+					   info.guest_virtual_address, info.guest_physical_address);
+	if (ret < 0) {
+		error_report("failed to emulate mmio");
+		return -1;
 	}
 
 	*exit_reason = VmExitIgnore;

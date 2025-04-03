@@ -618,6 +618,7 @@ static int mshv_init_vcpu(CPUState *cpu)
 {
     X86CPU *x86_cpu = X86_CPU(cpu);
     CPUX86State *env = &x86_cpu->env;
+	int ret;
 
     env->emu_mmio_buf = g_new(char, 4096);
     cpu->accel = g_new0(AccelCPUState, 1);
@@ -627,7 +628,12 @@ static int mshv_init_vcpu(CPUState *cpu)
 
 	int vm_fd = mshv_state->vm;
 	uint8_t id = cpu->cpu_index;
-    mshv_vcpufd(cpu) = create_vcpu_mgns(vm_fd, id);
+
+    ret = mshv_create_vcpu(vm_fd, id, &cpu->accel->cpufd);
+	if (ret < 0) {
+		return -1;
+	}
+
     cpu->vcpu_dirty = false;
 
     return 0;

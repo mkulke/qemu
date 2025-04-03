@@ -805,53 +805,103 @@ static int register_intercept_result_cpuid(int cpu_fd, struct hv_cpuid *cpuid)
 
 	return ret;
 }
-
-static int set_cpuid2(int cpu_fd, struct hv_cpuid *cpuid)
+static void add_cpuid_entry(GList *cpuid_entries,
+							uint32_t function, uint32_t index,
+							uint32_t eax, uint32_t ebx,
+							uint32_t ecx, uint32_t edx)
 {
-	int ret;
+	struct hv_cpuid_entry *entry;
 
-	ret = register_intercept_result_cpuid(cpu_fd, cpuid);
-	if (ret < 0) {
-		return ret;
-	}
+	entry = g_malloc0(sizeof(struct hv_cpuid_entry));
+	entry->function = function;
+	entry->index = index;
+	entry->eax = eax;
+	entry->ebx = ebx;
+	entry->ecx = ecx;
+	entry->edx = edx;
 
-	return 0;
+	cpuid_entries = g_list_append(cpuid_entries, entry);
 }
 
-/* TODO: Note this function is still using the cpuid impl from mshv-c */
-static int set_cpuid2_mgns(int cpu_fd, struct CpuId *cpuid_mgns)
+static void collect_cpuid_entries(CPUState *cpu, GList *cpuid_entries)
+{
+    X86CPU *x86_cpu = X86_CPU(cpu);
+    CPUX86State *env = &x86_cpu->env;
+    uint32_t eax, ebx, ecx, edx;
+    uint32_t leaf, subleaf;
+	const size_t max_leaf = 0x1F;
+	const size_t max_subleaf = 0x20;
+
+    // Example leaves to iterate through
+    const uint32_t leaves_with_subleaves[] = {0x4, 0x7, 0xD, 0xF, 0x10};
+    const int num_subleaf_leaves = sizeof(leaves_with_subleaves)/sizeof(leaves_with_subleaves[0]);
+
+    // Regular leaves without subleaves
+    for (leaf = 0; leaf <= max_leaf; leaf++) {
+        bool has_subleaves = false;
+        for (int i = 0; i < num_subleaf_leaves; i++) {
+            if (leaf == leaves_with_subleaves[i]) {
+                has_subleaves = true;
+                break;
+            }
+        }
+
+        if (!has_subleaves) {
+            cpu_x86_cpuid(env, leaf, 0, &eax, &ebx, &ecx, &edx);
+            if (eax == 0 && ebx == 0 && ecx == 0 && edx == 0) {
+				/* all zeroes indicates no more leaves */
+                continue;
+			}
+
+			add_cpuid_entry(cpuid_entries, leaf, 0, eax, ebx, ecx, edx);
+            continue;
+        }
+
+        subleaf = 0;
+        while (subleaf < max_subleaf) {
+            cpu_x86_cpuid(env, leaf, subleaf, &eax, &ebx, &ecx, &edx);
+
+            if (eax == 0 && ebx == 0 && ecx == 0 && edx == 0) {
+				/* all zeroes indicates no more leaves */
+                break;
+			}
+			add_cpuid_entry(cpuid_entries, leaf, 0, eax, ebx, ecx, edx);
+        }
+    }
+}
+
+/* cstatic int set_cpuid2(int cpu_fd, struct hv_cpuid *cpuid) */
+static int set_cpuid2(CPUState *cpu)
 {
 	int ret;
-	size_t n_entries = cpuid_mgns->len;
-    size_t cpuid_size = sizeof(struct hv_cpuid)
-		+ n_entries * sizeof(struct hv_cpuid_entry);
+	size_t n_entries, cpuid_size;
 	struct hv_cpuid *cpuid;
 	struct hv_cpuid_entry *entry;
-	struct CpuIdEntry *mgns_entry;
+	GList *entries = NULL;
+	int cpu_fd = mshv_vcpufd(cpu);
+
+	collect_cpuid_entries(cpu, entries);
+	n_entries = g_list_length(entries);
+
+    cpuid_size = sizeof(struct hv_cpuid)
+		+ n_entries * sizeof(struct hv_cpuid_entry);
 
 	cpuid = g_malloc0(cpuid_size);
 	cpuid->nent = n_entries;
 	cpuid->padding = 0;
-	for (size_t i = 0; i < n_entries; i++) {
-		mgns_entry = &cpuid_mgns->entries[i];
-		entry = &cpuid->entries[i];
-		entry->function = mgns_entry->function;
-		entry->index = mgns_entry->index;
-		entry->flags = mgns_entry->flags;
-		entry->eax = mgns_entry->eax;
-		entry->ebx = mgns_entry->ebx;
-		entry->ecx = mgns_entry->ecx;
-		entry->edx = mgns_entry->edx;
-		/* padding is covered, due to 0ing  */
-	}
 
-	ret = set_cpuid2(cpu_fd, cpuid);
+	for (size_t i = 0; i < n_entries; i++) {
+		entry = g_list_nth_data(entries, i);
+		cpuid->entries[i] = *entry;
+		g_free(entry);
+	}
+	g_list_free(entries);
+
+	ret = register_intercept_result_cpuid(cpu_fd, cpuid);
 	g_free(cpuid);
 	if (ret < 0) {
 		return ret;
 	}
-
-	printf("[mgns-qemu] set_cpuid2_mgns2() done\n");
 
 	return 0;
 }
@@ -1056,18 +1106,11 @@ static int set_lint_mgns(int cpu_fd)
 	return 0;
 }
 
-static void free_cpuid_mgns(CpuId *cpu_id) {
-    if (cpu_id != NULL) {
-        if (cpu_id->entries != NULL) {
-            g_free(cpu_id->entries);
-        }
-        g_free(cpu_id);
-    }
-}
-
-int configure_vcpu_mgns(int cpu_fd,
+/* TODO: consolidate arguments */
+/* TODO: populate topology info */
+int mshv_configure_vcpu(CPUState *cpu,
+						int cpu_fd,
 						uint8_t id,
-						enum MshvCpuVendor cpu_vendor,
 						uint8_t ndies,
 						uint8_t ncores_per_die,
 						uint8_t nthreads_per_core,
@@ -1077,17 +1120,8 @@ int configure_vcpu_mgns(int cpu_fd,
 						struct FloatingPointUnit *fpu_regs)
 {
 	int ret;
-	struct CpuId *cpuid_mshvc;
 
-	/* TODO: we create the cpuid data in mshv-c for the time being
-	 * we need to port it or consolidate with existing qemu facilities */
-	cpuid_mshvc = create_cpuid_ch(id,
-								  cpu_vendor,
-								  ndies,
-								  ncores_per_die / ndies,
-								  nthreads_per_core);
-	ret = set_cpuid2_mgns(cpu_fd, cpuid_mshvc);
-	free_cpuid_mgns(cpuid_mshvc);
+	ret = set_cpuid2(cpu);
 	if (ret < 0) {
 		perror("failed to set cpuid");
 		return ret;

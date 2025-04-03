@@ -165,7 +165,6 @@ static int mshv_getput_regs(MshvState *mshv_state, CPUState *cpu, bool set)
     FloatingPointUnit fpu = {0};
 	int cpu_fd = mshv_vcpufd(cpu);
     int ret = 0;
-	MshvCpuVendor cpu_vendor;
 
     if (!set) {
 		ret = mshv_get_standard_regs(cpu_fd, &regs);
@@ -217,12 +216,9 @@ static int mshv_getput_regs(MshvState *mshv_state, CPUState *cpu, bool set)
         memset(&sregs.interrupt_bitmap, 0, sizeof(sregs.interrupt_bitmap));
         memset(&fpu, 0, sizeof(fpu));
 
-		cpu_vendor = IS_AMD_CPU(env)
-			? AMD
-			: (IS_INTEL_CPU(env) ? Intel : Unknown);
-		configure_vcpu_mgns(cpu_fd,
+		mshv_configure_vcpu(cpu,
+							cpu_fd,
 							cpu->cpu_index,
-						    cpu_vendor,
 						    topo_info->dies_per_pkg,
 						    topo_info->cores_per_module / topo_info->dies_per_pkg,
 						    cpu->nr_threads,

@@ -878,12 +878,11 @@ if get_option('kvm').allowed() and host_os == 'linux'
   accelerators += 'CONFIG_KVM'
 endif
 
-mshv = not_found
 if get_option('mshv').allowed() and host_os == 'linux'
-  mshv = cc.find_library('mshv', required: get_option('mshv'))
-  if cc.has_header('qemu-mshv.h', required: get_option('mshv')) and mshv.found()
-    accelerators += 'CONFIG_MSHV'
+  if get_option('mshv').enabled() and host_machine.cpu() != 'x86_64'
+    error('mshv accelerator requires x64_64 host')
   endif
+  accelerators += 'CONFIG_MSHV'
 endif
 
 if get_option('whpx').allowed() and host_os == 'windows'

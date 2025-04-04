@@ -3,7 +3,6 @@
 #include "system/mshv.h"
 #include "emulate/x86_flags.h"
 #include "qemu/error-report.h"
-#include <qemu-mshv.h>
 
 static void set_seg(struct SegmentRegister *lhs, const SegmentCache *rhs)
 {

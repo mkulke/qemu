@@ -4,7 +4,6 @@
 #include "qemu/error-report.h"
 #include "qemu/memalign.h"
 #include "system/mshv.h"
-#include <qemu-mshv.h>
 #include <stdint.h>
 #include <sys/ioctl.h>
 #include <sys/types.h>

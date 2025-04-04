@@ -50,7 +50,6 @@ typedef struct hyperv_message hv_message;
 #endif
 
 #ifdef CONFIG_MSHV_IS_POSSIBLE
-#include <qemu-mshv.h>
 extern bool mshv_allowed;
 #define mshv_enabled() (mshv_allowed)
 
@@ -173,6 +172,89 @@ typedef struct PerCpuInfoMgns {
 
 /* cpu */
 
+typedef struct StandardRegisters {
+  uint64_t rax;
+  uint64_t rbx;
+  uint64_t rcx;
+  uint64_t rdx;
+  uint64_t rsi;
+  uint64_t rdi;
+  uint64_t rsp;
+  uint64_t rbp;
+  uint64_t r8;
+  uint64_t r9;
+  uint64_t r10;
+  uint64_t r11;
+  uint64_t r12;
+  uint64_t r13;
+  uint64_t r14;
+  uint64_t r15;
+  uint64_t rip;
+  uint64_t rflags;
+} StandardRegisters;
+
+typedef struct SegmentRegister {
+  uint64_t base;
+  uint32_t limit;
+  uint16_t selector;
+  uint8_t type_;
+  uint8_t present;
+  uint8_t dpl;
+  uint8_t db;
+  uint8_t s;
+  uint8_t l;
+  uint8_t g;
+  uint8_t avl;
+  __u8 unusable;
+  __u8 padding;
+} SegmentRegister;
+
+typedef struct TableRegister {
+  uint64_t base;
+  uint16_t limit;
+} TableRegister;
+
+typedef struct SpecialRegisters {
+  struct SegmentRegister cs;
+  struct SegmentRegister ds;
+  struct SegmentRegister es;
+  struct SegmentRegister fs;
+  struct SegmentRegister gs;
+  struct SegmentRegister ss;
+  struct SegmentRegister tr;
+  struct SegmentRegister ldt;
+  struct TableRegister gdt;
+  struct TableRegister idt;
+  uint64_t cr0;
+  uint64_t cr2;
+  uint64_t cr3;
+  uint64_t cr4;
+  uint64_t cr8;
+  uint64_t efer;
+  uint64_t apic_base;
+  uint64_t interrupt_bitmap[4];
+} SpecialRegisters;
+
+typedef struct FloatingPointUnit {
+  uint8_t fpr[8][16];
+  uint16_t fcw;
+  uint16_t fsw;
+  uint8_t ftwx;
+  uint8_t pad1;
+  uint16_t last_opcode;
+  uint64_t last_ip;
+  uint64_t last_dp;
+  uint8_t xmm[16][16];
+  uint32_t mxcsr;
+  uint32_t pad2;
+} FloatingPointUnit;
+
+typedef struct X64Registers {
+  const uint32_t *names;
+  const uint64_t *values;
+  uintptr_t count;
+} X64Registers;
+
 typedef struct CpuStateMgns {
 	StandardRegisters standard_regs;
 	SpecialRegisters special_regs;
@@ -221,6 +303,12 @@ void pio_read_fn(uint64_t port, uint8_t *data, uintptr_t size,
                  bool is_secure_mode);
 
 /* msr */
+typedef struct msr_entry {
+  uint32_t index;
+  uint32_t reserved;
+  uint64_t data;
+} msr_entry;
+
 int configure_msr_mgns(int cpu_fd, msr_entry *msrs, size_t n_msrs);
 int is_supported_msr_mgns(uint32_t msr);
 int msr_to_hv_reg_name_mgns(uint32_t msr, uint32_t *hv_reg);

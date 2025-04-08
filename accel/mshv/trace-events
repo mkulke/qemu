@@ -38,6 +38,6 @@ mcpu_sregs_irq_bitmap(uint64_t bitmap0, uint64_t bitmap1, uint64_t bitmap2, uint
 
 mcpu_decoded_x86_insn(const char *cmd, size_t len, uint8_t op0, uint8_t op1, uint8_t op2, uint8_t op3) "\tcmd=%s, len=%zu, opcode=%02x %02x %02x %02x"
 
-mcpu_insn_fetch(uint64_t addr, size_t size) "\tgpa=%lx size=%lu"
+mcpu_insn_fetch(uint64_t addr, size_t size) "gpa=%lx size=%lu"
 mcpu_mem_write(uint64_t addr, size_t size) "\tgpa=%lx size=%lu"
 mcpu_mem_read(uint64_t addr, size_t size) "\tgpa=%lx size=%lu"

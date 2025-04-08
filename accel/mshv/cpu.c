@@ -1275,7 +1275,7 @@ static int write_memory_mgns(int cpu_fd,
 }
 
 static int emulate_insn(CPUState *cpu,
-						uint8_t *insn_bytes, size_t insn_len,
+						const uint8_t *insn_bytes, size_t insn_len,
 						uint64_t gva, uint64_t gpa)
 {
     X86CPU *x86_cpu = X86_CPU(cpu);
@@ -1284,9 +1284,7 @@ static int emulate_insn(CPUState *cpu,
 	int ret;
 	int cpu_fd = mshv_vcpufd(cpu);
 	QemuMutex *guard;
-
-	/* TODO: use initial gva and gpa */
-	/* TODO: use instruction_bytes for emu */
+	x86_insn_stream stream = { .bytes = insn_bytes, .len = insn_len };
 
 	guard = g_hash_table_lookup(cpu_guards, GUINT_TO_POINTER(cpu_fd));
 	if (!guard) {
@@ -1301,7 +1299,7 @@ static int emulate_insn(CPUState *cpu,
 			return -1;
 		}
 
-		decode_instruction(env, &decode);
+		decode_instruction_stream(env, &decode, &stream);
 		exec_instruction(env, &decode);
 
 		ret = mshv_store_regs(cpu_fd, cpu);

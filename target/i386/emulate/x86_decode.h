@@ -269,6 +269,11 @@ typedef struct x86_decode_op {
     target_ulong ptr;
 } x86_decode_op;
 
+typedef struct x86_insn_stream {
+	const uint8_t *bytes;
+	size_t len;
+} x86_insn_stream;
+
 typedef struct x86_decode {
     int len;
     uint8_t opcode[4];
@@ -295,11 +300,17 @@ typedef struct x86_decode {
     struct x86_modrm modrm;
     struct x86_decode_op op[4];
     bool is_fpu;
+
+	x86_insn_stream *stream;
 } x86_decode;
 
 uint64_t sign(uint64_t val, int size);
 
 uint32_t decode_instruction(CPUX86State *env, struct x86_decode *decode);
+
+uint32_t decode_instruction_stream(CPUX86State *env,
+								   struct x86_decode *decode,
+		                           struct x86_insn_stream *stream);
 
 target_ulong get_reg_ref(CPUX86State *env, int reg, int rex_present,
                          int is_extended, int size);

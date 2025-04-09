@@ -80,14 +80,14 @@ struct MsiControlMgns {
 	GHashTable *gsi_routes;
 };
 
-typedef struct MshvVmMgns {
-    int fd;
-} MshvVmMgns;
-
 typedef struct MshvCreatePartitionArgsMgns {
 	uint64_t pt_flags;
 	uint64_t pt_isolation;
 } MshvCreatePartitionArgsMgns;
+
+typedef enum MshvVmType {
+	MSHV_VM_TYPE_DEFAULT = 0,
+} MshvVmType;
 
 #define mshv_vcpufd(cpu) (cpu->accel->cpufd)
 
@@ -143,22 +143,22 @@ typedef struct {
     } value;
 } DatamatchMgns;
 
-typedef struct MemoryRegionMgns {
+typedef struct MshvMemoryRegion {
 	uint64_t guest_phys_addr;
 	uint64_t memory_size;
 	uint64_t userspace_addr;
 	bool readonly;
-} MemoryRegionMgns;
+} MshvMemoryRegion;
 
-typedef struct MemEntryMgns {
-	MemoryRegionMgns mr;
+typedef struct MshvMemoryEntry {
+	MshvMemoryRegion mr;
 	bool mapped;
-} MemEntryMgns;
+} MshvMemoryEntry;
 
-typedef struct MemManagerMgns {
+typedef struct MshvMemManager {
 	GList *mem_entries;
  	QemuMutex mutex;
-} MemManagerMgns;
+} MshvMemManager;
 
 typedef struct DirtyLogSlotMgns {
 	uint64_t guest_pfn;
@@ -318,10 +318,10 @@ void init_dirty_log_slots_mgns(void);
 void init_mem_manager_mgns(void);
 int set_dirty_log_slot_mgns(uint64_t guest_pfn, uint64_t memory_size);
 int remove_dirty_log_slot_mgns(uint64_t guest_pfn);
-int add_mem_mgns(int vm_fd, const MemoryRegionMgns *mr);
-int remove_mem_mgns(int vm_fd, const MemoryRegionMgns *mr);
-bool find_entry_idx_by_gpa_mgns(uint64_t addr, size_t *index);
-bool map_overlapped_region_mgns(int vm_fd, uint64_t gpa);
+int add_mem_mgns(int vm_fd, const MshvMemoryRegion *mr);
+int remove_mem_mgns(int vm_fd, const MshvMemoryRegion *mr);
+bool find_entry_idx_by_gpa(uint64_t addr, size_t *index);
+bool map_overlapped_region(int vm_fd, uint64_t gpa);
 
 /* interrupt */
 void init_msicontrol_mgns(void);
@@ -338,17 +338,9 @@ int register_irqfd_with_resample_mgns(int vm_fd, int event_fd, int resample_fd,
 									  uint32_t gsi);
 int unregister_irqfd_mgns(int vm_fd, int event_fd, uint32_t gsi);
 
-void init_vm_db_mgns(void);
-void update_vm_db_mgns(int vm_fd, MshvVmMgns *vm);
-MshvVmMgns *get_vm_from_db_mgns(int vm_fd);
-// dead fn
-void update_cpu_db_mgns(int vm_fd, MshvVmMgns *vm);
-int create_vm_with_type_mgns(uint64_t vm_type, int mshv_fd);
 int create_partition_mgns(int mshv_fd);
-int hvcall_mgns(int mshv_fd, const struct mshv_root_hvcall *args);
+int mshv_hvcall(int mshv_fd, const struct mshv_root_hvcall *args);
 int initialize_vm_mgns(int vm_fd);
-int pause_vm_mgns(int vm_fd);
-int resume_vm_mgns(int vm_fd);
 int set_synthetic_proc_features_mgns(int vm_fd);
 int set_unimplemented_msr_action_mgns(int vm_fd);
 int register_ioevent_mgns(int vm_fd, int event_fd, uint64_t mmio_addr, uint64_t val, bool is_64bit, bool is_datamatch);

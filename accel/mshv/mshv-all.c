@@ -32,61 +32,111 @@ bool mshv_allowed;
 
 MshvState *mshv_state;
 
-static GHashTable *vm_db_mgns;
-static QemuMutex vm_db_mutex_mgns;
-
-static GHashTable *cpu_db_mgns;
-static QemuMutex cpu_db_mutex_mgns;
-
-void init_vm_db_mgns(void) {
-	trace_mgns_init_vm_db();
-
-    vm_db_mgns = g_hash_table_new(g_direct_hash, g_direct_equal);
-    qemu_mutex_init(&vm_db_mutex_mgns);
-}
-
-static int init_mshv_mgns(void) {
-    // Open /dev/mshv device (hypervisor initialization)
+static int init_mshv(void) {
     int mshv_fd = open("/dev/mshv", O_RDWR | O_CLOEXEC);
     if (mshv_fd < 0) {
-        perror("[mshv] Failed to open /dev/mshv");
+        perror("Failed to open /dev/mshv");
         return -errno;
     }
-	return mshv_fd;
+    return mshv_fd;
 }
 
-void update_vm_db_mgns(int vm_fd, MshvVmMgns *vm)
+/* freeze 1 to pause, 0 to resume */
+static int set_time_freeze(int vm_fd, int freeze)
 {
-	trace_mgns_update_vm_db(vm_fd);
+    int ret;
 
-	qemu_mutex_lock(&vm_db_mutex_mgns);
-	g_hash_table_insert(vm_db_mgns, GINT_TO_POINTER(vm_fd), vm);
-	qemu_mutex_unlock(&vm_db_mutex_mgns);
+    if (freeze != 0 && freeze != 1) {
+        error_report("Invalid time freeze value");
+        return -1;
+    }
+
+    struct hv_input_set_partition_property in = {0};
+    in.property_code = HV_PARTITION_PROPERTY_TIME_FREEZE;
+    in.property_value = freeze;
+
+    struct mshv_root_hvcall args = {0};
+    args.code = HVCALL_SET_PARTITION_PROPERTY;
+    args.in_sz = sizeof(in);
+    args.in_ptr = (uint64_t)&in;
+
+    ret = mshv_hvcall(vm_fd, &args);
+    if (ret < 0) {
+        error_report("Failed to set time freeze");
+        return -1;
+    }
+
+    return 0;
 }
 
-MshvVmMgns *get_vm_from_db_mgns(int vm_fd)
+static int pause_vm(int vm_fd)
 {
-	trace_mgns_get_vm_from_db(vm_fd);
+    int ret;
 
-    MshvVmMgns *vm = NULL;
+    ret = set_time_freeze(vm_fd, 1);
+    if (ret < 0) {
+        perror("Failed to pause partition");
+        ret = -errno;
+    }
 
-    qemu_mutex_lock(&vm_db_mutex_mgns);
-    vm = g_hash_table_lookup(vm_db_mgns, GINT_TO_POINTER(vm_fd));
-    qemu_mutex_unlock(&vm_db_mutex_mgns);
-
-    return vm;
+    return 0;
 }
 
-void update_cpu_db_mgns(int vm_fd, MshvVmMgns *vm)
+static int resume_vm(int vm_fd)
 {
-	trace_mgns_update_vm_db(vm_fd);
+    int ret;
 
-	qemu_mutex_lock(&cpu_db_mutex_mgns);
-	g_hash_table_insert(cpu_db_mgns, GINT_TO_POINTER(vm_fd), vm);
-	qemu_mutex_unlock(&cpu_db_mutex_mgns);
+    ret = set_time_freeze(vm_fd, 0);
+    if (ret < 0) {
+        error_report("Failed to resume partition");
+        ret = -errno;
+    }
+
+    return 0;
 }
 
-static int do_mshv_set_memory_mgns(const MemoryRegionMgns *mshv_mr, bool add)
+
+static int create_vm_with_type(MshvVmType vm_type, int mshv_fd)
+{
+    int vm_fd;
+
+    if (vm_type != MSHV_VM_TYPE_DEFAULT) {
+        error_report("Invalid VM type: %d", vm_type);
+        return -EINVAL;
+    }
+
+    /* Create partition */
+    int ret = create_partition_mgns(mshv_fd);
+    if (ret < 0) {
+        close(mshv_fd);
+        return -errno;
+    }
+    vm_fd = ret;
+
+    /* Set synthetic proc features */
+    ret = set_synthetic_proc_features_mgns(vm_fd);
+    if (ret < 0) {
+        return -errno;
+    }
+
+    /* Initialize partition */
+    ret = initialize_vm_mgns(vm_fd);
+    if (ret < 0) {
+        return -1;
+    }
+
+    ret = set_unimplemented_msr_action_mgns(vm_fd);
+    if (ret < 0) {
+        return -1;
+    }
+
+    /* Always create a frozen partition */
+    pause_vm(vm_fd);
+
+    return vm_fd;
+}
+
+static int do_mshv_set_memory(const MshvMemoryRegion *mshv_mr, bool add)
 {
     int ret = 0;
 
@@ -94,12 +144,14 @@ static int do_mshv_set_memory_mgns(const MemoryRegionMgns *mshv_mr, bool add)
         return -1;
     }
 
-    trace_mshv_set_memory(add, mshv_mr->guest_phys_addr, mshv_mr->memory_size,
-                          mshv_mr->userspace_addr, mshv_mr->readonly, ret);
+    trace_mshv_set_memory(add, mshv_mr->guest_phys_addr,
+                          mshv_mr->memory_size,
+                          mshv_mr->userspace_addr, mshv_mr->readonly,
+                          ret);
     if (add) {
         return add_mem_mgns(mshv_state->vm, mshv_mr);
     }
-	return remove_mem_mgns(mshv_state->vm, mshv_mr);
+    return remove_mem_mgns(mshv_state->vm, mshv_mr);
 }
 
 /*
@@ -134,16 +186,16 @@ static int mshv_set_phys_mem(MshvMemoryListener *mml,
     bool writable = !area->readonly && !area->rom_device;
     hwaddr start_addr, mr_offset, size;
     void *ram;
-    /* MshvMemoryRegion tmp, *mshv_mr = &tmp; */
-    MemoryRegionMgns tmp, *mshv_mr = &tmp;
+    MshvMemoryRegion tmp, *mshv_mr = &tmp;
 
     if (!memory_region_is_ram(area)) {
         if (writable) {
             return ret;
         } else if (!memory_region_is_romd(area)) {
             /*
-             * If the memory device is not in romd_mode, then we actually want
-             * to remove the memory slot so all accesses will trap.
+             * If the memory device is not in romd_mode, then we
+             * actually want to remove the memory slot so all accesses
+             * will trap.
              */
             add = false;
         }
@@ -165,8 +217,7 @@ static int mshv_set_phys_mem(MshvMemoryListener *mml,
     mshv_mr->readonly = !writable;
     mshv_mr->userspace_addr = (uint64_t)ram;
 
-    /* ret = do_mshv_set_memory(mshv_mr, add); */
-    ret = do_mshv_set_memory_mgns(mshv_mr, add);
+    ret = do_mshv_set_memory(mshv_mr, add);
     if (add && (ret == 17)) {
         // qemu may create a memory alias as rom.
         // However, mshv may not support the overlapped regions.
@@ -210,67 +261,67 @@ void dump_user_ioeventfd_mgns(const struct mshv_user_ioeventfd *ioevent)
 
 /* flags: determine whether to de/assign */
 static int ioeventfd_mgns(int vm_fd,
-						  int event_fd,
-						  uint64_t addr,
-						  DatamatchMgns dm,
-						  uint32_t flags)
+                          int event_fd,
+                          uint64_t addr,
+                          DatamatchMgns dm,
+                          uint32_t flags)
 {
-	int ret = 0;
-	struct mshv_user_ioeventfd args = {0};
-	args.fd = event_fd;
-	args.addr = addr;
-	args.flags = flags;
+    int ret = 0;
+    struct mshv_user_ioeventfd args = {0};
+    args.fd = event_fd;
+    args.addr = addr;
+    args.flags = flags;
 
-	if (dm.tag == DATAMATCH_NONE) {
-		args.datamatch = 0;
-	} else {
-		flags |= BIT(MSHV_IOEVENTFD_BIT_DATAMATCH);
-		args.flags = flags;
-		if (dm.tag == DATAMATCH_U64) {
-			args.len = sizeof(uint64_t);
-			args.datamatch = dm.value.u64;
-		} else {
-			args.len = sizeof(uint32_t);
-			args.datamatch = dm.value.u32;
-		}
-	}
+    if (dm.tag == DATAMATCH_NONE) {
+        args.datamatch = 0;
+    } else {
+        flags |= BIT(MSHV_IOEVENTFD_BIT_DATAMATCH);
+        args.flags = flags;
+        if (dm.tag == DATAMATCH_U64) {
+            args.len = sizeof(uint64_t);
+            args.datamatch = dm.value.u64;
+        } else {
+            args.len = sizeof(uint32_t);
+            args.datamatch = dm.value.u32;
+        }
+    }
 
-	/* dump_mshv_user_ioeventfd_mgns(&args); */
+    /* dump_mshv_user_ioeventfd_mgns(&args); */
 
-	ret = ioctl(vm_fd, MSHV_IOEVENTFD, &args);
-	return ret;
+    ret = ioctl(vm_fd, MSHV_IOEVENTFD, &args);
+    return ret;
 }
 
 int unregister_ioevent_mgns(int vm_fd,
-						    int event_fd,
-						    uint64_t mmio_addr)
+                            int event_fd,
+                            uint64_t mmio_addr)
 {
-	uint32_t flags = 0;
-	flags |= BIT(MSHV_IOEVENTFD_BIT_DEASSIGN);
-	DatamatchMgns dm = {0};
-	dm.tag = DATAMATCH_NONE;
-	return ioeventfd_mgns(vm_fd, event_fd, mmio_addr, dm, flags);
+    uint32_t flags = 0;
+    flags |= BIT(MSHV_IOEVENTFD_BIT_DEASSIGN);
+    DatamatchMgns dm = {0};
+    dm.tag = DATAMATCH_NONE;
+    return ioeventfd_mgns(vm_fd, event_fd, mmio_addr, dm, flags);
 }
 
 int register_ioevent_mgns(int vm_fd,
-						  int event_fd,
-						  uint64_t mmio_addr,
-						  uint64_t val,
-						  bool is_64bit,
-						  bool is_datamatch)
+                          int event_fd,
+                          uint64_t mmio_addr,
+                          uint64_t val,
+                          bool is_64bit,
+                          bool is_datamatch)
 {
-	uint32_t flags = 0;
-	DatamatchMgns dm = {0};
-	if (!is_datamatch) {
-		dm.tag = DATAMATCH_NONE;
-	} else if (is_64bit) {
-		dm.tag = DATAMATCH_U64;
-		dm.value.u64 = val;
-	} else {
-		dm.tag = DATAMATCH_U32;
-		dm.value.u32 = val;
-	}
-	return ioeventfd_mgns(vm_fd, event_fd, mmio_addr, dm, flags);
+    uint32_t flags = 0;
+    DatamatchMgns dm = {0};
+    if (!is_datamatch) {
+        dm.tag = DATAMATCH_NONE;
+    } else if (is_64bit) {
+        dm.tag = DATAMATCH_U64;
+        dm.value.u64 = val;
+    } else {
+        dm.tag = DATAMATCH_U32;
+        dm.value.u32 = val;
+    }
+    return ioeventfd_mgns(vm_fd, event_fd, mmio_addr, dm, flags);
 }
 
 static void mshv_mem_ioeventfd_add(MemoryListener *listener,
@@ -280,22 +331,22 @@ static void mshv_mem_ioeventfd_add(MemoryListener *listener,
 {
     int fd = event_notifier_get_fd(e);
     int r;
-	/* TODO: mgns does this really matter if we 0 out the ioctl
-	 * arg anyway?
-	 */
+    /* TODO: mgns does this really matter if we 0 out the ioctl
+     * arg anyway?
+     */
     bool is_64 = int128_get64(section->size) == 8;
-	uint64_t addr = section->offset_within_address_space
-							 & 0xffffffff;
+    uint64_t addr = section->offset_within_address_space
+                             & 0xffffffff;
 
     trace_mshv_mem_ioeventfd_add(addr,
                                  int128_get64(section->size),
-								 data);
-	r = register_ioevent_mgns(mshv_state->vm, fd, addr, data,
-							  is_64, match_data);
+                                 data);
+    r = register_ioevent_mgns(mshv_state->vm, fd, addr, data,
+                              is_64, match_data);
 
     if (r < 0) {
         mshv_err("%s: error adding ioeventfd: %s (%d)\n",
-				 __func__,
+                 __func__,
                  strerror(-r), -r);
         abort();
     }
@@ -311,7 +362,7 @@ static void mshv_mem_ioeventfd_del(MemoryListener *listener,
 
     trace_mshv_mem_ioeventfd_del(section->offset_within_address_space,
                                  int128_get64(section->size), data);
-	uint64_t addr = section->offset_within_address_space & 0xffffffff;
+    uint64_t addr = section->offset_within_address_space & 0xffffffff;
     r = unregister_ioevent_mgns(mshv_state->vm, fd, addr);
     if (r < 0) {
         mshv_err("%s: error adding ioeventfd: %s (%d)\n", __func__,
@@ -353,7 +404,6 @@ static void mshv_memory_listener_register(MshvState *s, MshvMemoryListener *mml,
         }
     }
 }
-
 static void mshv_reset(void *param)
 {
     fprintf(stderr, "mshv_reset\n");
@@ -366,32 +416,44 @@ static inline MemTxAttrs mshv_get_mem_attrs(bool is_secure_mode)
     return ((MemTxAttrs){ .secure = is_secure_mode });
 }
 
+int mshv_hvcall(int mshv_fd, const struct mshv_root_hvcall *args)
+{
+    int ret = 0;
+
+    ret = ioctl(mshv_fd, MSHV_ROOT_HVCALL, args);
+    if (ret < 0) {
+        perror("[mshv] Failed to perform hvcall");
+        return -errno;
+    }
+    return ret;
+}
+
 int guest_mem_read_fn(uint64_t gpa, uint8_t *data, uintptr_t size,
-					   bool is_secure_mode, bool instruction_fetch)
+                       bool is_secure_mode, bool instruction_fetch)
 {
     int ret;
     MemTxAttrs memattr = mshv_get_mem_attrs(is_secure_mode);
 
-	if (instruction_fetch) {
-		trace_mcpu_insn_fetch(gpa, size);
-	} else {
-		trace_mcpu_mem_read(gpa, size);
-	}
+    if (instruction_fetch) {
+        trace_mcpu_insn_fetch(gpa, size);
+    } else {
+        trace_mcpu_mem_read(gpa, size);
+    }
 
     ret = address_space_rw(&address_space_memory, gpa, memattr, (void *)data,
                            size, false);
-	if (ret != MEMTX_OK) {
-		perror("Failed to read guest memory");
-		return -1;
-	}
+    if (ret != MEMTX_OK) {
+        perror("Failed to read guest memory");
+        return -1;
+    }
 
-	return 0;
+    return 0;
 }
 
 int guest_mem_write_fn(uint64_t gpa, const uint8_t *data, uintptr_t size,
                        bool is_secure_mode)
 {
-	trace_mcpu_mem_write(gpa, size);
+    trace_mcpu_mem_write(gpa, size);
     int ret = 0;
     MemTxAttrs memattr = mshv_get_mem_attrs(is_secure_mode);
     ret = address_space_rw(&address_space_memory, gpa, memattr, (void *)data,
@@ -410,7 +472,7 @@ void pio_read_fn(uint64_t port, uint8_t *data, uintptr_t size,
 }
 
 int pio_write_fn(uint64_t port, const uint8_t *data, uintptr_t size,
-			     bool is_secure_mode)
+                 bool is_secure_mode)
 {
     int ret = 0;
     MemTxAttrs memattr = mshv_get_mem_attrs(is_secure_mode);
@@ -423,17 +485,17 @@ static int mshv_init_vcpu(CPUState *cpu)
 {
     X86CPU *x86_cpu = X86_CPU(cpu);
     CPUX86State *env = &x86_cpu->env;
-	int vm_fd = mshv_state->vm;
-	uint8_t vp_index = cpu->cpu_index;
-	int ret;
+    int vm_fd = mshv_state->vm;
+    uint8_t vp_index = cpu->cpu_index;
+    int ret;
 
     env->emu_mmio_buf = g_new(char, 4096);
     cpu->accel = g_new0(AccelCPUState, 1);
 
     ret = mshv_create_vcpu(vm_fd, vp_index, &cpu->accel->cpufd);
-	if (ret < 0) {
-		return -1;
-	}
+    if (ret < 0) {
+        return -1;
+    }
 
     cpu->vcpu_dirty = false;
 
@@ -443,8 +505,8 @@ static int mshv_init_vcpu(CPUState *cpu)
 static int mshv_init(MachineState *ms)
 {
     MshvState *s;
-    uint64_t vm_type;
-	int mshv_fd, ret;
+    MshvVmType vm_type;
+    int mshv_fd, ret;
 
     s = MSHV_STATE(ms->accelerator);
 
@@ -453,30 +515,29 @@ static int mshv_init(MachineState *ms)
     /* mshv_new(); */
     s->vm = 0;
 
-	init_vm_db_mgns();
-	ret = init_mshv_mgns();
-	if (ret < 0) {
-		return -errno;
-	}
-	mshv_fd = ret;
-	// cpu
-	mshv_init_cpu_logic();
-	// irq
-	init_msicontrol_mgns();
-	// memory
-	init_mem_manager_mgns();
+    ret = init_mshv();
+    if (ret < 0) {
+        return -errno;
+    }
+    mshv_fd = ret;
+    // cpu
+    mshv_init_cpu_logic();
+    // irq
+    init_msicontrol_mgns();
+    // memory
+    init_mem_manager_mgns();
 
     // TODO: object_property_find(OBJECT(current_machine), "mshv-type")
     vm_type = 0;
     do {
-		// this creates an internal entry in the VM_DB hash table as a side
-		// effect, we can make the fn return the PerVMInfo struct instead and
-		// store it ourselves
-		int vm_fd = create_vm_with_type_mgns(vm_type, mshv_fd);
-		s->vm = vm_fd;
+        // this creates an internal entry in the VM_DB hash table as a side
+        // effect, we can make the fn return the PerVMInfo struct instead and
+        // store it ourselves
+        int vm_fd = create_vm_with_type(vm_type, mshv_fd);
+        s->vm = vm_fd;
     } while (!s->vm);
 
-	resume_vm_mgns(s->vm);
+    resume_vm(s->vm);
 
     // MAX number of address spaces:
     // address_space_memory
@@ -525,114 +586,44 @@ static const TypeInfo mshv_accel_type = {
 /* returns vm_fd on success, -errno on failure */
 int create_partition_mgns(int mshv_fd)
 {
-	int ret;
-	struct mshv_create_partition args = {0};
+    int ret;
+    struct mshv_create_partition args = {0};
 
-	// Initialize pt_flags with the desired features
-	uint64_t pt_flags = (1ULL << MSHV_PT_BIT_LAPIC) |
-						(1ULL << MSHV_PT_BIT_X2APIC) |
-						(1ULL << MSHV_PT_BIT_GPA_SUPER_PAGES);
+    // Initialize pt_flags with the desired features
+    uint64_t pt_flags = (1ULL << MSHV_PT_BIT_LAPIC) |
+                        (1ULL << MSHV_PT_BIT_X2APIC) |
+                        (1ULL << MSHV_PT_BIT_GPA_SUPER_PAGES);
 
-	// Set default isolation type
-	uint64_t pt_isolation = MSHV_PT_ISOLATION_NONE;
+    // Set default isolation type
+    uint64_t pt_isolation = MSHV_PT_ISOLATION_NONE;
 
-	args.pt_flags = pt_flags;
-	args.pt_isolation = pt_isolation;
+    args.pt_flags = pt_flags;
+    args.pt_isolation = pt_isolation;
 
-	ret = ioctl(mshv_fd, MSHV_CREATE_PARTITION, &args);
-	if (ret < 0) {
-		perror("[mshv] Failed to create partition");
-		return -errno;
-	}
-	return ret;
-}
-
-int initialize_vm_mgns(int vm_fd) {
-	int ret = ioctl(vm_fd, MSHV_INITIALIZE_PARTITION);
-	if (ret < 0) {
-		perror("[mshv] Failed to initialize partition");
-		return -errno;
-	}
-	return 0;
-}
-
-int hvcall_mgns(int mshv_fd, const struct mshv_root_hvcall *args) {
-	int ret = 0;
-
-	/* printf("args->code: %d\n", args->code); */
-	/* printf("args->in_sz: %d\n", args->in_sz); */
-	/* printf("args->in_ptr: %llu\n", args->in_ptr); */
-
-	ret = ioctl(mshv_fd, MSHV_ROOT_HVCALL, args);
-	if (ret < 0) {
-		perror("[mshv] Failed to perform hvcall");
-		return -errno;
-	}
-	return ret;
-}
-
-int create_vm_with_type_mgns(uint64_t vm_type, int mshv_fd) {
-    MshvVmMgns *vm;
-	int vm_fd;
-
-	/* return error if vm_type is not 0 */
-	if (vm_type != 0) {
-		perror("[mgns] Invalid VM type");
-		return -EINVAL;
-	}
-
-    /* Allocate and initialize MshvVm structure */
-	vm = g_new0(MshvVmMgns, 1);
-    if (!vm) {
-        perror("[mgns] Failed to allocate memory for VM struct");
-        close(mshv_fd);
-        return -ENOMEM;
+    ret = ioctl(mshv_fd, MSHV_CREATE_PARTITION, &args);
+    if (ret < 0) {
+        perror("[mshv] Failed to create partition");
+        return -errno;
     }
-    vm->fd = mshv_fd;
+    return ret;
+}
 
-	/* Create partition */
-	int ret = create_partition_mgns(mshv_fd);
-	if (ret < 0) {
-		close(mshv_fd);
-		return -errno;
-	}
-	vm_fd = ret;
-	printf("[mgns] Partition created w/ fd %d\n", vm_fd);
-
-	/* Set synthetic proc features */
-	ret = set_synthetic_proc_features_mgns(vm_fd);
-	if (ret < 0) {
-		return -errno;
-	}
-	printf("[mgns] Synthetic proc features set for fd %d\n", vm_fd);
-
-	/* Initialize partition */
-	ret = initialize_vm_mgns(vm_fd);
-	if (ret < 0) {
-		perror("[mgns] Failed to initialize partition");
-		return -errno;
-	}
-
-	ret = set_unimplemented_msr_action_mgns(vm_fd);
-	if (ret < 0) {
-		return -errno;
-	}
-
-	/* Always create a frozen partition */
-	pause_vm_mgns(vm_fd);
-	printf("[mgns] Partition half-initialized for fd %d\n", vm_fd);
-
-    /* Store VM in a global hash table (similar to VM_DB in Rust) */
-	update_vm_db_mgns(vm_fd, vm);
-
-    return vm_fd;
+int initialize_vm_mgns(int vm_fd)
+{
+    int ret = ioctl(vm_fd, MSHV_INITIALIZE_PARTITION);
+    if (ret < 0) {
+        perror("[mshv] Failed to initialize partition");
+        return -errno;
+    }
+    return 0;
 }
 
 /* Default Microsoft Hypervisor behavior for unimplemented MSR is to  send a
  * fault to the guest if it tries to access it. It is possible to override
  * this behavior with a more suitable option i.e., ignore writes from the guest
  * and return zero in attempt to read unimplemented */
-int set_unimplemented_msr_action_mgns(int vm_fd) {
+int set_unimplemented_msr_action_mgns(int vm_fd)
+{
     struct hv_input_set_partition_property in = {0};
     struct mshv_root_hvcall args = {0};
 
@@ -643,115 +634,63 @@ int set_unimplemented_msr_action_mgns(int vm_fd) {
     args.in_sz  = sizeof(in);
     args.in_ptr = (uint64_t)&in;
 
-	trace_mgns_hvcall_args("unimplemented_msr_action", args.code, args.in_sz);
+    trace_mgns_hvcall_args("unimplemented_msr_action", args.code, args.in_sz);
 
-	int ret = hvcall_mgns(vm_fd, &args);
+    int ret = mshv_hvcall(vm_fd, &args);
     if (ret < 0) {
-        perror("[mgns] Failed to set unimplemented MSR action");
+        perror("Failed to set unimplemented MSR action");
         return -errno;
     }
     return 0;
 }
 
 int set_synthetic_proc_features_mgns(int vm_fd) {
-	int ret;
+    int ret;
 
-	struct hv_input_set_partition_property in = {0};
+    struct hv_input_set_partition_property in = {0};
 
-	union hv_partition_synthetic_processor_features features = {0};
+    union hv_partition_synthetic_processor_features features = {0};
 
     // Access the bitfield and set the desired features
-	features.hypervisor_present = 1;
-	features.hv1 = 1;
-	features.access_partition_reference_counter = 1;
-	features.access_synic_regs = 1;
-	features.access_synthetic_timer_regs = 1;
-	features.access_partition_reference_tsc = 1;
-	features.access_frequency_regs = 1;
-	features.access_intr_ctrl_regs = 1;
-	features.access_vp_index = 1;
-	features.access_hypercall_regs = 1;
-	features.access_guest_idle_reg = 1;
-	features.tb_flush_hypercalls = 1;
-	features.synthetic_cluster_ipi = 1;
-	features.direct_synthetic_timers = 1;
+    features.hypervisor_present = 1;
+    features.hv1 = 1;
+    features.access_partition_reference_counter = 1;
+    features.access_synic_regs = 1;
+    features.access_synthetic_timer_regs = 1;
+    features.access_partition_reference_tsc = 1;
+    features.access_frequency_regs = 1;
+    features.access_intr_ctrl_regs = 1;
+    features.access_vp_index = 1;
+    features.access_hypercall_regs = 1;
+    features.access_guest_idle_reg = 1;
+    features.tb_flush_hypercalls = 1;
+    features.synthetic_cluster_ipi = 1;
+    features.direct_synthetic_timers = 1;
 
-	in.property_code = HV_PARTITION_PROPERTY_SYNTHETIC_PROC_FEATURES;
-	in.property_value = features.as_uint64[0];
+    in.property_code = HV_PARTITION_PROPERTY_SYNTHETIC_PROC_FEATURES;
+    in.property_value = features.as_uint64[0];
 
-	struct mshv_root_hvcall args = {0};
-	args.code = HVCALL_SET_PARTITION_PROPERTY;
-	args.in_sz = sizeof(in);
-	args.in_ptr = (uint64_t)&in;
+    struct mshv_root_hvcall args = {0};
+    args.code = HVCALL_SET_PARTITION_PROPERTY;
+    args.in_sz = sizeof(in);
+    args.in_ptr = (uint64_t)&in;
 
     trace_mgns_hvcall_args("synthetic_proc_features", args.code, args.in_sz);
 
-	ret = hvcall_mgns(vm_fd, &args);
-	if (ret < 0) {
-		perror("[mgns] Failed to set synthethic proc features");
-		return -errno;
-	}
-	return 0;
-}
-
-/* freeze 1 to pause, 0 to resume */
-static inline int set_time_freeze_mgns(int vm_fd, int freeze) {
-	int ret;
-
-	if (freeze != 0 && freeze != 1) {
-		perror("[mshv] Invalid time freeze value");
-		return -1;
-	}
-
-	struct hv_input_set_partition_property in = {0};
-	in.property_code = HV_PARTITION_PROPERTY_TIME_FREEZE;
-	in.property_value = freeze;
-
-	struct mshv_root_hvcall args = {0};
-	args.code = HVCALL_SET_PARTITION_PROPERTY;
-	args.in_sz = sizeof(in);
-	args.in_ptr = (uint64_t)&in;
-
-	ret = hvcall_mgns(vm_fd, &args);
-	if (ret < 0) {
-		perror("[mgns] Failed to set time freeze");
-		return -errno;
-	}
-
-	return 0;
-}
-
-int pause_vm_mgns(int vm_fd) {
-	int ret;
-
-	ret = set_time_freeze_mgns(vm_fd, 1);
-	if (ret < 0) {
-		perror("[mgns] Failed to pause partition");
-		ret = -errno;
-	}
-
-	return 0;
-}
-
-
-int resume_vm_mgns(int vm_fd) {
-	int ret;
-
-	ret = set_time_freeze_mgns(vm_fd, 0);
-	if (ret < 0) {
-		perror("[mgns] Failed to resume partition");
-		ret = -errno;
-	}
-
-	return 0;
+    ret = mshv_hvcall(vm_fd, &args);
+    if (ret < 0) {
+        perror("[mgns] Failed to set synthethic proc features");
+        return -errno;
+    }
+    return 0;
 }
 
 static int mshv_destroy_vcpu(CPUState *cpu)
 {
     X86CPU *x86_cpu = X86_CPU(cpu);
     CPUX86State *env = &x86_cpu->env;
-	int cpu_fd = mshv_vcpufd(cpu);
-	int vm_fd = mshv_state->vm;
+    int cpu_fd = mshv_vcpufd(cpu);
+    int vm_fd = mshv_state->vm;
 
     mshv_remove_vcpu(vm_fd, cpu_fd);
     mshv_vcpufd(cpu) = 0;

@@ -1373,12 +1373,12 @@ static int handle_unmapped_mem(int vm_fd, CPUState *cpu,
 	}
 	gpa = info.guest_physical_address;
 
-    found = find_entry_idx_by_gpa_mgns(gpa, NULL);
+    found = find_entry_idx_by_gpa(gpa, NULL);
 	if (!found) {
 		return handle_mmio(cpu, msg, exit_reason);
 	}
 
-	ret = map_overlapped_region_mgns(vm_fd, gpa);
+	ret = map_overlapped_region(vm_fd, gpa);
 	if (ret < 0) {
 		*exit_reason = VmExitSpecial;
 	} else {
@@ -1389,7 +1389,7 @@ static int handle_unmapped_mem(int vm_fd, CPUState *cpu,
 }
 
 static int handle_pio_str(CPUState *cpu,
-						  struct hv_x64_io_port_intercept_message *info) {
+						  hv_x64_io_port_intercept_message *info) {
 	size_t len = info->access_info.access_size;
 	uint8_t access_type = info->header.intercept_access_type;
 	uint16_t port = info->port_number;

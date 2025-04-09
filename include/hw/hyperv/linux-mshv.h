@@ -457,13 +457,13 @@ struct mshv_vp_registers {
  * Mappings can't overlap in GPA space or userspace.
  * To unmap, these fields must match an existing mapping.
  */
-struct mshv_user_mem_region {
+typedef struct mshv_user_mem_region {
 	__u64 size;
 	__u64 guest_pfn;
 	__u64 userspace_addr;
 	__u8 flags;
 	__u8 rsvd[7];
-};
+} mshv_user_mem_region;
 
 enum {
 	MSHV_SET_MEM_BIT_WRITABLE,
@@ -895,7 +895,7 @@ union hv_x64_io_port_access_info {
 	};
 };
 
-struct hv_x64_io_port_intercept_message {
+typedef struct hv_x64_io_port_intercept_message {
 	struct hv_x64_intercept_message_header header;
 	__u16 port_number;
 	union hv_x64_io_port_access_info access_info;
@@ -908,7 +908,7 @@ struct hv_x64_io_port_intercept_message {
 	__u64 rcx;
 	__u64 rsi;
 	__u64 rdi;
-};
+} hv_x64_io_port_intercept_message;
 
 union hv_x64_memory_access_info {
 	__u8 as_uint8;

@@ -270,7 +270,7 @@ int request_interrupt_mgns(int vm_fd, uint32_t interrupt_type, uint32_t vector,
     args.in_sz  = sizeof(arg);
     args.in_ptr = (uint64_t)&arg;
 
-	ret = hvcall_mgns(vm_fd, &args);
+	ret = mshv_hvcall(vm_fd, &args);
     if (ret < 0) {
         perror("[mgns] failed to request interrupt");
         return -errno;

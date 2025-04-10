@@ -170,69 +170,6 @@ typedef struct PerCpuInfoMgns {
 
 /* cpu */
 
-typedef struct StandardRegisters {
-  uint64_t rax;
-  uint64_t rbx;
-  uint64_t rcx;
-  uint64_t rdx;
-  uint64_t rsi;
-  uint64_t rdi;
-  uint64_t rsp;
-  uint64_t rbp;
-  uint64_t r8;
-  uint64_t r9;
-  uint64_t r10;
-  uint64_t r11;
-  uint64_t r12;
-  uint64_t r13;
-  uint64_t r14;
-  uint64_t r15;
-  uint64_t rip;
-  uint64_t rflags;
-} StandardRegisters;
-
-typedef struct SegmentRegister {
-  uint64_t base;
-  uint32_t limit;
-  uint16_t selector;
-  uint8_t type_;
-  uint8_t present;
-  uint8_t dpl;
-  uint8_t db;
-  uint8_t s;
-  uint8_t l;
-  uint8_t g;
-  uint8_t avl;
-  __u8 unusable;
-  __u8 padding;
-} SegmentRegister;
-
-typedef struct TableRegister {
-  uint64_t base;
-  uint16_t limit;
-} TableRegister;
-
-typedef struct SpecialRegisters {
-  struct SegmentRegister cs;
-  struct SegmentRegister ds;
-  struct SegmentRegister es;
-  struct SegmentRegister fs;
-  struct SegmentRegister gs;
-  struct SegmentRegister ss;
-  struct SegmentRegister tr;
-  struct SegmentRegister ldt;
-  struct TableRegister gdt;
-  struct TableRegister idt;
-  uint64_t cr0;
-  uint64_t cr2;
-  uint64_t cr3;
-  uint64_t cr4;
-  uint64_t cr8;
-  uint64_t efer;
-  uint64_t apic_base;
-  uint64_t interrupt_bitmap[4];
-} SpecialRegisters;
-
 typedef struct FloatingPointUnit {
   uint8_t fpr[8][16];
   uint16_t fcw;
@@ -253,12 +190,6 @@ typedef struct X64Registers {
   uintptr_t count;
 } X64Registers;
 
-typedef struct MshvCpuState {
-	StandardRegisters *regs;
-	SpecialRegisters *sregs;
-    FloatingPointUnit *fpu;
-} MshvCpuState;
-
 typedef struct MshvCpuTopology {
     uint8_t id;
     uint8_t n_dies;
@@ -275,7 +206,7 @@ typedef enum MshvVmExit {
 void mshv_init_cpu_logic(void);
 int mshv_create_vcpu(int vm_fd, uint8_t vp_index, int *cpu_fd);
 void mshv_remove_vcpu(int vm_fd, int cpu_fd);
-int mshv_configure_vcpu(CPUState *cpu, const MshvCpuState *state,
+int mshv_configure_vcpu(CPUState *cpu, const FloatingPointUnit *fpu,
                         uint64_t xcr0);
 int mshv_get_standard_regs(CPUState *cpu);
 int mshv_get_special_regs(CPUState *cpu);
@@ -283,8 +214,8 @@ int mshv_run_vcpu(int vm_fd, CPUState *cpu, hv_message *msg, MshvVmExit *exit);
 
 /* TODO: for use in the local sw emu, can probably become static */
 int mshv_load_regs(CPUState *cpu);
-int mshv_store_regs(int cpu_fd, const CPUState *cpu);
-int mshv_set_standard_regs(int cpu_fd, const struct StandardRegisters *regs);
+int mshv_store_regs(CPUState *cpu);
+int mshv_set_standard_regs(CPUState *cpu);
 
 /* for use in the remote sw emu */
 int guest_mem_read_fn(uint64_t gpa, uint8_t *data, uintptr_t size,

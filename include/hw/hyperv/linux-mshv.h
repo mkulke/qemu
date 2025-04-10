@@ -560,12 +560,12 @@ typedef struct mshv_user_ioeventfd {
 	__u8  rsvd[4];
 } mshv_user_ioeventfd;
 
-struct mshv_user_irq_entry {
+typedef struct mshv_user_irq_entry {
 	__u32 gsi;
 	__u32 address_lo;
 	__u32 address_hi;
 	__u32 data;
-};
+} mshv_user_irq_entry;
 
 struct mshv_user_irq_table {
 	__u32 nr;

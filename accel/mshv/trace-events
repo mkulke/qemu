@@ -14,12 +14,11 @@ mgns_update_vm_db(int fd) "update vm db entry for fd %d"
 
 mshv_hvcall_args(const char* hvcall, uint16_t code, uint16_t in_sz) "built args for '%s' code: %d in_sz: %d"
 
-# mgns irq
-mgns_set_msi_routing(uint32_t gsi, uint64_t addr, uint32_t data) "gsi %d addr %lx data %x"
-mgns_remove_msi_routing(uint32_t gsi) "gsi %d"
-mgns_add_msi_routing(uint64_t addr, uint32_t data) "addr %lx data %x"
-mgns_commit_msi_routing_table(int vm_fd, int len) "vm_fd %d table_size %d"
-mgns_register_irqfd(int vm_fd, int event_fd, uint32_t gsi) "vm_fd %d event_fd %d gsi %d"
+mshv_set_msi_routing(uint32_t gsi, uint64_t addr, uint32_t data) "gsi %d addr %lx data %x"
+mshv_remove_msi_routing(uint32_t gsi) "gsi %d"
+mshv_add_msi_routing(uint64_t addr, uint32_t data) "addr %lx data %x"
+mshv_commit_msi_routing_table(int vm_fd, int len) "vm_fd %d table_size %d"
+mshv_register_irqfd(int vm_fd, int event_fd, uint32_t gsi) "vm_fd %d event_fd %d gsi %d"
 mshv_irqchip_update_irqfd_notifier_gsi(int event_fd, int resample_fd, int virq, bool add) "event_fd %d resample_fd %d virq %d add %d"
 
 # mgns cpu state

@@ -936,7 +936,8 @@ static void apic_send_msi(MSIMessage *msi)
 #ifdef CONFIG_MSHV
     if (mshv_enabled()) {
 		/* TODO: error handling? */
-        request_interrupt_mgns(mshv_state->vm, delivery, vector, dest, dest_mode, trigger_mode);
+        mshv_request_interrupt(mshv_state->vm, delivery, vector, dest,
+                               dest_mode, trigger_mode);
         return;
     }
 #endif

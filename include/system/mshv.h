@@ -75,10 +75,10 @@ struct AccelCPUState {
   int cpufd;
 };
 
-struct MsiControlMgns {
+typedef struct MshvMsiControl {
 	bool updated;
 	GHashTable *gsi_routes;
-};
+} MshvMsiControl;
 
 typedef struct MshvCreatePartitionArgsMgns {
 	uint64_t pt_flags;
@@ -325,18 +325,9 @@ bool map_overlapped_region(int vm_fd, uint64_t gpa);
 
 /* interrupt */
 void mshv_init_msicontrol(void);
-int set_msi_routing_mgns(uint32_t gsi, uint64_t addr, uint32_t data);
-int remove_msi_routing_mgns(uint32_t gsi);
-int add_msi_routing_mgns(uint64_t addr, uint32_t data);
-int commit_msi_routing_table_mgns(int vm_fd);
-int irqfd_mgns(int vm_fd, int fd, int resample_fd, uint32_t gsi, uint32_t flags);
-int request_interrupt_mgns(int vm_fd, uint32_t interrupt_type, uint32_t vector,
+int mshv_request_interrupt(int vm_fd, uint32_t interrupt_type, uint32_t vector,
 						   uint32_t vp_index, bool logical_destination_mode,
 						   bool level_triggered);
-int register_irqfd_mgns(int vm_fd, int event_fd, uint32_t gsi);
-int register_irqfd_with_resample_mgns(int vm_fd, int event_fd, int resample_fd,
-									  uint32_t gsi);
-int unregister_irqfd_mgns(int vm_fd, int event_fd, uint32_t gsi);
 
 int mshv_hvcall(int mshv_fd, const struct mshv_root_hvcall *args);
 int init_vcpu_mgns(CPUState *cpu);

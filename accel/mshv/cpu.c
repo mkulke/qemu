@@ -1313,7 +1313,7 @@ static int emulate_insn(CPUState *cpu,
 }
 
 static int handle_mmio(CPUState *cpu, const struct hyperv_message *msg,
-					   enum VmExitMgns *exit_reason)
+					   enum MshvVmExit *exit_reason)
 {
 	struct hv_x64_memory_intercept_message info = { 0 };
 	size_t insn_len;
@@ -1352,14 +1352,14 @@ static int handle_mmio(CPUState *cpu, const struct hyperv_message *msg,
 		return -1;
 	}
 
-	*exit_reason = VmExitIgnore;
+	*exit_reason = MshvVmExitIgnore;
 
 	return 0;
 }
 
 static int handle_unmapped_mem(int vm_fd, CPUState *cpu,
 							   const struct hyperv_message *msg,
-							   enum VmExitMgns *exit_reason)
+							   enum MshvVmExit *exit_reason)
 {
 	struct hv_x64_memory_intercept_message info = { 0 };
 	uint64_t gpa;
@@ -1380,9 +1380,9 @@ static int handle_unmapped_mem(int vm_fd, CPUState *cpu,
 
 	ret = map_overlapped_region(vm_fd, gpa);
 	if (ret < 0) {
-		*exit_reason = VmExitSpecial;
+		*exit_reason = MshvVmExitSpecial;
 	} else {
-		*exit_reason = VmExitIgnore;
+		*exit_reason = MshvVmExitIgnore;
 	}
 
 	return 0;
@@ -1588,23 +1588,23 @@ static int handle_pio(CPUState *cpu, const struct hyperv_message *msg)
 	return handle_pio_non_str(cpu, &info);
 }
 
-enum VmExitMgns run_vcpu(int vm_fd, CPUState *cpu, hv_message *msg)
+enum MshvVmExit run_vcpu(int vm_fd, CPUState *cpu, hv_message *msg)
 {
 	int ret;
 	hv_message exit_msg = { 0 };
-	enum VmExitMgns exit_reason;
+	enum MshvVmExit exit_reason;
 	int cpu_fd = mshv_vcpufd(cpu);
 
 	ret = ioctl(cpu_fd, MSHV_RUN_VP, &exit_msg);
 	if (ret < 0) {
 		perror("failed to run vcpu");
-		return VmExitShutdown;
+		return MshvVmExitShutdown;
 	}
 
 	switch(exit_msg.header.message_type) {
 		case HVMSG_UNRECOVERABLE_EXCEPTION:
 			*msg = exit_msg;
-			return VmExitShutdown;
+			return MshvVmExitShutdown;
 		case HVMSG_UNMAPPED_GPA:
 			ret = handle_unmapped_mem(vm_fd, cpu, &exit_msg, &exit_reason);
 			if (ret < 0) {
@@ -1622,9 +1622,9 @@ enum VmExitMgns run_vcpu(int vm_fd, CPUState *cpu, hv_message *msg)
 		case HVMSG_X64_IO_PORT_INTERCEPT:
 			ret = handle_pio(cpu, &exit_msg);
 			if (ret < 0) {
-				return VmExitSpecial;
+				return MshvVmExitSpecial;
 			}
-			return VmExitIgnore;
+			return MshvVmExitIgnore;
 		default:
 			msg = &exit_msg;
 	}

@@ -133,15 +133,15 @@ typedef enum {
     DATAMATCH_NONE,
     DATAMATCH_U32,
     DATAMATCH_U64,
-} DatamatchTagMgns;
+} MshvDatamatchTag;
 
 typedef struct {
-    DatamatchTagMgns tag;
+    MshvDatamatchTag tag;
     union {
         uint32_t u32;
         uint64_t u64;
     } value;
-} DatamatchMgns;
+} MshvDatamatch;
 
 typedef struct MshvMemoryRegion {
 	uint64_t guest_phys_addr;
@@ -260,10 +260,10 @@ typedef struct CpuStateMgns {
 	SpecialRegisters special_regs;
 } CpuStateMgns;
 
-enum VmExitMgns {
-	VmExitIgnore   = 0,
-	VmExitShutdown = 1,
-	VmExitSpecial  = 2,
+enum MshvVmExit {
+	MshvVmExitIgnore   = 0,
+	MshvVmExitShutdown = 1,
+	MshvVmExitSpecial  = 2,
 };
 
 void mshv_init_cpu_logic(void);
@@ -282,7 +282,7 @@ int mshv_configure_vcpu(CPUState *cpu,
 int mshv_get_standard_regs(int cpu_fd, struct StandardRegisters *regs);
 int mshv_get_special_regs(int cpu_fd, struct SpecialRegisters *regs);
 int set_x64_registers_mgns(int cpu_fd, const struct X64Registers *regs);
-enum VmExitMgns run_vcpu(int vm_fd, CPUState *cpu, hv_message *msg);
+enum MshvVmExit run_vcpu(int vm_fd, CPUState *cpu, hv_message *msg);
 int translate_gva(int cpu_fd, uint64_t gva, uint64_t *gpa, uint64_t flags);
 
 /* for use in the local sw emu */
@@ -315,16 +315,16 @@ int msr_to_hv_reg_name_mgns(uint32_t msr, uint32_t *hv_reg);
 
 /* memory */
 void init_dirty_log_slots_mgns(void);
-void init_mem_manager_mgns(void);
+void mshv_init_mem_manager(void);
 int set_dirty_log_slot_mgns(uint64_t guest_pfn, uint64_t memory_size);
 int remove_dirty_log_slot_mgns(uint64_t guest_pfn);
-int add_mem_mgns(int vm_fd, const MshvMemoryRegion *mr);
-int remove_mem_mgns(int vm_fd, const MshvMemoryRegion *mr);
+int mshv_add_mem(int vm_fd, const MshvMemoryRegion *mr);
+int mshv_remove_mem(int vm_fd, const MshvMemoryRegion *mr);
 bool find_entry_idx_by_gpa(uint64_t addr, size_t *index);
 bool map_overlapped_region(int vm_fd, uint64_t gpa);
 
 /* interrupt */
-void init_msicontrol_mgns(void);
+void mshv_init_msicontrol(void);
 int set_msi_routing_mgns(uint32_t gsi, uint64_t addr, uint32_t data);
 int remove_msi_routing_mgns(uint32_t gsi);
 int add_msi_routing_mgns(uint64_t addr, uint32_t data);
@@ -338,14 +338,7 @@ int register_irqfd_with_resample_mgns(int vm_fd, int event_fd, int resample_fd,
 									  uint32_t gsi);
 int unregister_irqfd_mgns(int vm_fd, int event_fd, uint32_t gsi);
 
-int create_partition_mgns(int mshv_fd);
 int mshv_hvcall(int mshv_fd, const struct mshv_root_hvcall *args);
-int initialize_vm_mgns(int vm_fd);
-int set_synthetic_proc_features_mgns(int vm_fd);
-int set_unimplemented_msr_action_mgns(int vm_fd);
-int register_ioevent_mgns(int vm_fd, int event_fd, uint64_t mmio_addr, uint64_t val, bool is_64bit, bool is_datamatch);
-int unregister_ioevent_mgns(int vm_fd, int event_fd, uint64_t mmio_addr);
-void dump_user_ioeventfd_mgns(const struct mshv_user_ioeventfd *ioevent);
 int init_vcpu_mgns(CPUState *cpu);
 
 int mshv_irqchip_add_msi_route(int vector, PCIDevice *dev);

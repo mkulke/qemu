@@ -551,14 +551,14 @@ struct mshv_register_intercept_result {
 	union hv_register_intercept_result_parameters parameters;
 };
 
-struct mshv_user_ioeventfd {
+typedef struct mshv_user_ioeventfd {
 	__u64 datamatch;
 	__u64 addr;	   /* legal pio/mmio address */
 	__u32 len;	   /* 1, 2, 4, or 8 bytes    */
 	__s32 fd;
 	__u32 flags;
 	__u8  rsvd[4];
-};
+} mshv_user_ioeventfd;
 
 struct mshv_user_irq_entry {
 	__u32 gsi;

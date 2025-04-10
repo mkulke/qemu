@@ -1,4 +1,3 @@
-#include "hw/hyperv/linux-mshv.h"
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
@@ -95,6 +94,107 @@ static int resume_vm(int vm_fd)
     return 0;
 }
 
+/* returns vm_fd on success, -errno on failure */
+static int create_partition(int mshv_fd)
+{
+    int ret;
+    struct mshv_create_partition args = {0};
+
+    // Initialize pt_flags with the desired features
+    uint64_t pt_flags = (1ULL << MSHV_PT_BIT_LAPIC) |
+                        (1ULL << MSHV_PT_BIT_X2APIC) |
+                        (1ULL << MSHV_PT_BIT_GPA_SUPER_PAGES);
+
+    // Set default isolation type
+    uint64_t pt_isolation = MSHV_PT_ISOLATION_NONE;
+
+    args.pt_flags = pt_flags;
+    args.pt_isolation = pt_isolation;
+
+    ret = ioctl(mshv_fd, MSHV_CREATE_PARTITION, &args);
+    if (ret < 0) {
+        perror("[mshv] Failed to create partition");
+        return -errno;
+    }
+    return ret;
+}
+
+static int set_synthetic_proc_features(int vm_fd) {
+    int ret;
+
+    struct hv_input_set_partition_property in = {0};
+
+    union hv_partition_synthetic_processor_features features = {0};
+
+    // Access the bitfield and set the desired features
+    features.hypervisor_present = 1;
+    features.hv1 = 1;
+    features.access_partition_reference_counter = 1;
+    features.access_synic_regs = 1;
+    features.access_synthetic_timer_regs = 1;
+    features.access_partition_reference_tsc = 1;
+    features.access_frequency_regs = 1;
+    features.access_intr_ctrl_regs = 1;
+    features.access_vp_index = 1;
+    features.access_hypercall_regs = 1;
+    features.access_guest_idle_reg = 1;
+    features.tb_flush_hypercalls = 1;
+    features.synthetic_cluster_ipi = 1;
+    features.direct_synthetic_timers = 1;
+
+    in.property_code = HV_PARTITION_PROPERTY_SYNTHETIC_PROC_FEATURES;
+    in.property_value = features.as_uint64[0];
+
+    struct mshv_root_hvcall args = {0};
+    args.code = HVCALL_SET_PARTITION_PROPERTY;
+    args.in_sz = sizeof(in);
+    args.in_ptr = (uint64_t)&in;
+
+    trace_mshv_hvcall_args("synthetic_proc_features", args.code, args.in_sz);
+
+    ret = mshv_hvcall(vm_fd, &args);
+    if (ret < 0) {
+        error_report("Failed to set synthethic proc features");
+        return -errno;
+    }
+    return 0;
+}
+
+static int initialize_vm(int vm_fd)
+{
+    int ret = ioctl(vm_fd, MSHV_INITIALIZE_PARTITION);
+    if (ret < 0) {
+        error_report("Failed to initialize partition");
+        return -errno;
+    }
+    return 0;
+}
+
+/* Default Microsoft Hypervisor behavior for unimplemented MSR is to  send a
+ * fault to the guest if it tries to access it. It is possible to override
+ * this behavior with a more suitable option i.e., ignore writes from the guest
+ * and return zero in attempt to read unimplemented */
+static int set_unimplemented_msr_action(int vm_fd)
+{
+    struct hv_input_set_partition_property in = {0};
+    struct mshv_root_hvcall args = {0};
+
+    in.property_code  = HV_PARTITION_PROPERTY_UNIMPLEMENTED_MSR_ACTION;
+    in.property_value = HV_UNIMPLEMENTED_MSR_ACTION_IGNORE_WRITE_READ_ZERO;
+
+    args.code   = HVCALL_SET_PARTITION_PROPERTY;
+    args.in_sz  = sizeof(in);
+    args.in_ptr = (uint64_t)&in;
+
+    trace_mshv_hvcall_args("unimplemented_msr_action", args.code, args.in_sz);
+
+    int ret = mshv_hvcall(vm_fd, &args);
+    if (ret < 0) {
+        perror("Failed to set unimplemented MSR action");
+        return -errno;
+    }
+    return 0;
+}
 
 static int create_vm_with_type(MshvVmType vm_type, int mshv_fd)
 {
@@ -105,27 +205,24 @@ static int create_vm_with_type(MshvVmType vm_type, int mshv_fd)
         return -EINVAL;
     }
 
-    /* Create partition */
-    int ret = create_partition_mgns(mshv_fd);
+    int ret = create_partition(mshv_fd);
     if (ret < 0) {
         close(mshv_fd);
         return -errno;
     }
     vm_fd = ret;
 
-    /* Set synthetic proc features */
-    ret = set_synthetic_proc_features_mgns(vm_fd);
+    ret = set_synthetic_proc_features(vm_fd);
     if (ret < 0) {
         return -errno;
     }
 
-    /* Initialize partition */
-    ret = initialize_vm_mgns(vm_fd);
+    ret = initialize_vm(vm_fd);
     if (ret < 0) {
         return -1;
     }
 
-    ret = set_unimplemented_msr_action_mgns(vm_fd);
+    ret = set_unimplemented_msr_action(vm_fd);
     if (ret < 0) {
         return -1;
     }
@@ -136,11 +233,12 @@ static int create_vm_with_type(MshvVmType vm_type, int mshv_fd)
     return vm_fd;
 }
 
-static int do_mshv_set_memory(const MshvMemoryRegion *mshv_mr, bool add)
+static int set_memory(const MshvMemoryRegion *mshv_mr, bool add)
 {
     int ret = 0;
 
     if (!mshv_mr) {
+        error_report("Invalid mshv_mr");
         return -1;
     }
 
@@ -149,9 +247,9 @@ static int do_mshv_set_memory(const MshvMemoryRegion *mshv_mr, bool add)
                           mshv_mr->userspace_addr, mshv_mr->readonly,
                           ret);
     if (add) {
-        return add_mem_mgns(mshv_state->vm, mshv_mr);
+        return mshv_add_mem(mshv_state->vm, mshv_mr);
     }
-    return remove_mem_mgns(mshv_state->vm, mshv_mr);
+    return mshv_remove_mem(mshv_state->vm, mshv_mr);
 }
 
 /*
@@ -177,9 +275,8 @@ static hwaddr align_section(MemoryRegionSection *section, hwaddr *start)
     return (size - delta) & qemu_real_host_page_mask();
 }
 
-static int mshv_set_phys_mem(MshvMemoryListener *mml,
-                             MemoryRegionSection *section, bool add,
-                             const char *name)
+static int set_phys_mem(MshvMemoryListener *mml, MemoryRegionSection *section,
+                        bool add, const char *name)
 {
     int ret = 0;
     MemoryRegion *area = section->mr;
@@ -192,8 +289,7 @@ static int mshv_set_phys_mem(MshvMemoryListener *mml,
         if (writable) {
             return ret;
         } else if (!memory_region_is_romd(area)) {
-            /*
-             * If the memory device is not in romd_mode, then we
+            /* If the memory device is not in romd_mode, then we
              * actually want to remove the memory slot so all accesses
              * will trap.
              */
@@ -217,57 +313,43 @@ static int mshv_set_phys_mem(MshvMemoryListener *mml,
     mshv_mr->readonly = !writable;
     mshv_mr->userspace_addr = (uint64_t)ram;
 
-    ret = do_mshv_set_memory(mshv_mr, add);
+    ret = set_memory(mshv_mr, add);
     if (add && (ret == 17)) {
-        // qemu may create a memory alias as rom.
-        // However, mshv may not support the overlapped regions.
-        // the mshv-qemu shim will handle the overlapped issue.
+        /* TODO: Qemu may create a memory alias as rom. However, mshv may not
+         * support the overlapped regions. We'll have to handle it in upper
+         * layers.
+         */
         return ret;
     }
     assert(ret == 0);
+
     return ret;
 }
 
-static void mshv_region_add(MemoryListener *listener,
-                            MemoryRegionSection *section)
+static void mem_region_add(MemoryListener *listener,
+                           MemoryRegionSection *section)
 {
-    MshvMemoryListener *mml =
-        container_of(listener, MshvMemoryListener, listener);
+    MshvMemoryListener *mml;
+    mml = container_of(listener, MshvMemoryListener, listener);
     memory_region_ref(section->mr);
-    mshv_set_phys_mem(mml, section, true, "add");
+    set_phys_mem(mml, section, true, "add");
 }
 
-static void mshv_region_del(MemoryListener *listener,
-                            MemoryRegionSection *section)
+static void mem_region_del(MemoryListener *listener,
+                           MemoryRegionSection *section)
 {
-    MshvMemoryListener *mml =
-        container_of(listener, MshvMemoryListener, listener);
-    mshv_set_phys_mem(mml, section, false, "remove");
+    MshvMemoryListener *mml;
+    mml = container_of(listener, MshvMemoryListener, listener);
+    set_phys_mem(mml, section, false, "remove");
     memory_region_unref(section->mr);
 }
 
-void dump_user_ioeventfd_mgns(const struct mshv_user_ioeventfd *ioevent)
-{
-    printf("mshv_user_ioeventfd:\n");
-    printf("  fd: %d\n", ioevent->fd);
-    printf("  addr: %llu\n", ioevent->addr);
-    printf("  datamatch: %llu\n", ioevent->datamatch);
-    printf("  len: %u\n", ioevent->len);
-    printf("  flags: %u\n", ioevent->flags);
-    printf("  rsvd: %u %u %u %u\n",
-           ioevent->rsvd[0], ioevent->rsvd[1],
-           ioevent->rsvd[2], ioevent->rsvd[3]);
-}
-
 /* flags: determine whether to de/assign */
-static int ioeventfd_mgns(int vm_fd,
-                          int event_fd,
-                          uint64_t addr,
-                          DatamatchMgns dm,
-                          uint32_t flags)
+static int ioeventfd(int vm_fd, int event_fd, uint64_t addr, MshvDatamatch dm,
+                     uint32_t flags)
 {
     int ret = 0;
-    struct mshv_user_ioeventfd args = {0};
+    mshv_user_ioeventfd args = {0};
     args.fd = event_fd;
     args.addr = addr;
     args.flags = flags;
@@ -286,32 +368,27 @@ static int ioeventfd_mgns(int vm_fd,
         }
     }
 
-    /* dump_mshv_user_ioeventfd_mgns(&args); */
-
     ret = ioctl(vm_fd, MSHV_IOEVENTFD, &args);
     return ret;
 }
 
-int unregister_ioevent_mgns(int vm_fd,
-                            int event_fd,
-                            uint64_t mmio_addr)
+static int unregister_ioevent(int vm_fd, int event_fd, uint64_t mmio_addr)
 {
     uint32_t flags = 0;
+    MshvDatamatch dm = {0};
+
     flags |= BIT(MSHV_IOEVENTFD_BIT_DEASSIGN);
-    DatamatchMgns dm = {0};
     dm.tag = DATAMATCH_NONE;
-    return ioeventfd_mgns(vm_fd, event_fd, mmio_addr, dm, flags);
+
+    return ioeventfd(vm_fd, event_fd, mmio_addr, dm, flags);
 }
 
-int register_ioevent_mgns(int vm_fd,
-                          int event_fd,
-                          uint64_t mmio_addr,
-                          uint64_t val,
-                          bool is_64bit,
-                          bool is_datamatch)
+static int register_ioevent(int vm_fd, int event_fd, uint64_t mmio_addr,
+                            uint64_t val, bool is_64bit, bool is_datamatch)
 {
     uint32_t flags = 0;
-    DatamatchMgns dm = {0};
+    MshvDatamatch dm = {0};
+
     if (!is_datamatch) {
         dm.tag = DATAMATCH_NONE;
     } else if (is_64bit) {
@@ -321,52 +398,47 @@ int register_ioevent_mgns(int vm_fd,
         dm.tag = DATAMATCH_U32;
         dm.value.u32 = val;
     }
-    return ioeventfd_mgns(vm_fd, event_fd, mmio_addr, dm, flags);
+
+    return ioeventfd(vm_fd, event_fd, mmio_addr, dm, flags);
 }
 
-static void mshv_mem_ioeventfd_add(MemoryListener *listener,
-                                   MemoryRegionSection *section,
-                                   bool match_data, uint64_t data,
-                                   EventNotifier *e)
+static void mem_ioeventfd_add(MemoryListener *listener,
+                              MemoryRegionSection *section,
+                              bool match_data, uint64_t data,
+                              EventNotifier *e)
 {
     int fd = event_notifier_get_fd(e);
-    int r;
-    /* TODO: mgns does this really matter if we 0 out the ioctl
-     * arg anyway?
-     */
+    int ret;
     bool is_64 = int128_get64(section->size) == 8;
-    uint64_t addr = section->offset_within_address_space
-                             & 0xffffffff;
+    uint64_t addr = section->offset_within_address_space & 0xffffffff;
 
-    trace_mshv_mem_ioeventfd_add(addr,
-                                 int128_get64(section->size),
-                                 data);
-    r = register_ioevent_mgns(mshv_state->vm, fd, addr, data,
-                              is_64, match_data);
+    trace_mshv_mem_ioeventfd_add(addr, int128_get64(section->size), data);
 
-    if (r < 0) {
-        mshv_err("%s: error adding ioeventfd: %s (%d)\n",
-                 __func__,
-                 strerror(-r), -r);
+    ret = register_ioevent(mshv_state->vm, fd, addr, data, is_64, match_data);
+
+    if (ret < 0) {
+        error_report("Failed to register ioeventfd: %s (%d)\n", strerror(-ret),
+                     -ret);
         abort();
     }
 }
 
-static void mshv_mem_ioeventfd_del(MemoryListener *listener,
-                                   MemoryRegionSection *section,
-                                   bool match_data, uint64_t data,
-                                   EventNotifier *e)
+static void mem_ioeventfd_del(MemoryListener *listener,
+                              MemoryRegionSection *section,
+                              bool match_data, uint64_t data,
+                              EventNotifier *e)
 {
     int fd = event_notifier_get_fd(e);
-    int r = 0;
+    int ret;
+    uint64_t addr = section->offset_within_address_space & 0xffffffff;
 
     trace_mshv_mem_ioeventfd_del(section->offset_within_address_space,
                                  int128_get64(section->size), data);
-    uint64_t addr = section->offset_within_address_space & 0xffffffff;
-    r = unregister_ioevent_mgns(mshv_state->vm, fd, addr);
-    if (r < 0) {
-        mshv_err("%s: error adding ioeventfd: %s (%d)\n", __func__,
-                 strerror(-r), -r);
+
+    ret = unregister_ioevent(mshv_state->vm, fd, addr);
+    if (ret < 0) {
+        error_report("Failed to unregister ioeventfd: %s (%d)\n",
+                     strerror(-ret), -ret);
         abort();
     }
 }
@@ -374,20 +446,20 @@ static void mshv_mem_ioeventfd_del(MemoryListener *listener,
 static MemoryListener mshv_memory_listener = {
     .name = "mshv",
     .priority = MEMORY_LISTENER_PRIORITY_ACCEL,
-    .region_add = mshv_region_add,
-    .region_del = mshv_region_del,
+    .region_add = mem_region_add,
+    .region_del = mem_region_del,
 #ifdef MSHV_USE_IOEVENTFD
-    .eventfd_add = mshv_mem_ioeventfd_add,
-    .eventfd_del = mshv_mem_ioeventfd_del,
+    .eventfd_add = mem_ioeventfd_add,
+    .eventfd_del = mem_ioeventfd_del,
 #endif
 };
 
 static MemoryListener mshv_io_listener = {
     .name = "mshv", .priority = MEMORY_LISTENER_PRIORITY_DEV_BACKEND,
-    // MSHV does not support PIO eventfd
+    /* MSHV does not support PIO eventfd */
 };
 
-static void mshv_memory_listener_register(MshvState *s, MshvMemoryListener *mml,
+static void register_mshv_memory_listener(MshvState *s, MshvMemoryListener *mml,
                                           AddressSpace *as, int as_id,
                                           const char *name)
 {
@@ -512,7 +584,6 @@ static int mshv_init(MachineState *ms)
 
     accel_blocker_init();
 
-    /* mshv_new(); */
     s->vm = 0;
 
     ret = init_mshv();
@@ -520,12 +591,15 @@ static int mshv_init(MachineState *ms)
         return -errno;
     }
     mshv_fd = ret;
+
     // cpu
     mshv_init_cpu_logic();
+
     // irq
-    init_msicontrol_mgns();
+    mshv_init_msicontrol();
+
     // memory
-    init_mem_manager_mgns();
+    mshv_init_mem_manager();
 
     // TODO: object_property_find(OBJECT(current_machine), "mshv-type")
     vm_type = 0;
@@ -550,138 +624,10 @@ static int mshv_init(MachineState *ms)
 
     mshv_init_irq(s);
 
-    // register memory listener
-    mshv_memory_listener_register(s, &s->memory_listener, &address_space_memory,
+    register_mshv_memory_listener(s, &s->memory_listener, &address_space_memory,
                                   0, "mshv-memory");
     memory_listener_register(&mshv_io_listener, &address_space_io);
 
-    return 0;
-}
-
-static void mshv_accel_class_init(ObjectClass *oc, void *data)
-{
-    AccelClass *ac = ACCEL_CLASS(oc);
-
-    ac->name = "MSHV";
-    ac->init_machine = mshv_init;
-    ac->allowed = &mshv_allowed;
-}
-
-static void mshv_accel_instance_init(Object *obj)
-{
-    MshvState *s = MSHV_STATE(obj);
-
-    s->vm = 0;
-}
-
-static const TypeInfo mshv_accel_type = {
-    .name = TYPE_MSHV_ACCEL,
-    .parent = TYPE_ACCEL,
-    .instance_init = mshv_accel_instance_init,
-    .class_init = mshv_accel_class_init,
-    .instance_size = sizeof(MshvState),
-};
-
-
-/* returns vm_fd on success, -errno on failure */
-int create_partition_mgns(int mshv_fd)
-{
-    int ret;
-    struct mshv_create_partition args = {0};
-
-    // Initialize pt_flags with the desired features
-    uint64_t pt_flags = (1ULL << MSHV_PT_BIT_LAPIC) |
-                        (1ULL << MSHV_PT_BIT_X2APIC) |
-                        (1ULL << MSHV_PT_BIT_GPA_SUPER_PAGES);
-
-    // Set default isolation type
-    uint64_t pt_isolation = MSHV_PT_ISOLATION_NONE;
-
-    args.pt_flags = pt_flags;
-    args.pt_isolation = pt_isolation;
-
-    ret = ioctl(mshv_fd, MSHV_CREATE_PARTITION, &args);
-    if (ret < 0) {
-        perror("[mshv] Failed to create partition");
-        return -errno;
-    }
-    return ret;
-}
-
-int initialize_vm_mgns(int vm_fd)
-{
-    int ret = ioctl(vm_fd, MSHV_INITIALIZE_PARTITION);
-    if (ret < 0) {
-        perror("[mshv] Failed to initialize partition");
-        return -errno;
-    }
-    return 0;
-}
-
-/* Default Microsoft Hypervisor behavior for unimplemented MSR is to  send a
- * fault to the guest if it tries to access it. It is possible to override
- * this behavior with a more suitable option i.e., ignore writes from the guest
- * and return zero in attempt to read unimplemented */
-int set_unimplemented_msr_action_mgns(int vm_fd)
-{
-    struct hv_input_set_partition_property in = {0};
-    struct mshv_root_hvcall args = {0};
-
-    in.property_code  = HV_PARTITION_PROPERTY_UNIMPLEMENTED_MSR_ACTION;
-    in.property_value = HV_UNIMPLEMENTED_MSR_ACTION_IGNORE_WRITE_READ_ZERO;
-
-    args.code   = HVCALL_SET_PARTITION_PROPERTY;
-    args.in_sz  = sizeof(in);
-    args.in_ptr = (uint64_t)&in;
-
-    trace_mgns_hvcall_args("unimplemented_msr_action", args.code, args.in_sz);
-
-    int ret = mshv_hvcall(vm_fd, &args);
-    if (ret < 0) {
-        perror("Failed to set unimplemented MSR action");
-        return -errno;
-    }
-    return 0;
-}
-
-int set_synthetic_proc_features_mgns(int vm_fd) {
-    int ret;
-
-    struct hv_input_set_partition_property in = {0};
-
-    union hv_partition_synthetic_processor_features features = {0};
-
-    // Access the bitfield and set the desired features
-    features.hypervisor_present = 1;
-    features.hv1 = 1;
-    features.access_partition_reference_counter = 1;
-    features.access_synic_regs = 1;
-    features.access_synthetic_timer_regs = 1;
-    features.access_partition_reference_tsc = 1;
-    features.access_frequency_regs = 1;
-    features.access_intr_ctrl_regs = 1;
-    features.access_vp_index = 1;
-    features.access_hypercall_regs = 1;
-    features.access_guest_idle_reg = 1;
-    features.tb_flush_hypercalls = 1;
-    features.synthetic_cluster_ipi = 1;
-    features.direct_synthetic_timers = 1;
-
-    in.property_code = HV_PARTITION_PROPERTY_SYNTHETIC_PROC_FEATURES;
-    in.property_value = features.as_uint64[0];
-
-    struct mshv_root_hvcall args = {0};
-    args.code = HVCALL_SET_PARTITION_PROPERTY;
-    args.in_sz = sizeof(in);
-    args.in_ptr = (uint64_t)&in;
-
-    trace_mgns_hvcall_args("synthetic_proc_features", args.code, args.in_sz);
-
-    ret = mshv_hvcall(vm_fd, &args);
-    if (ret < 0) {
-        perror("[mgns] Failed to set synthethic proc features");
-        return -errno;
-    }
     return 0;
 }
 
@@ -703,7 +649,7 @@ static int mshv_destroy_vcpu(CPUState *cpu)
 static int mshv_cpu_exec(CPUState *cpu)
 {
     hv_message mshv_msg;
-    enum VmExitMgns exit_reason;
+    enum MshvVmExit exit_reason;
     int ret = 0;
 
     bql_unlock();
@@ -729,7 +675,7 @@ static int mshv_cpu_exec(CPUState *cpu)
         exit_reason = run_vcpu(mshv_state->vm, cpu, &mshv_msg);
 
         switch (exit_reason) {
-        case VmExitIgnore:
+        case MshvVmExitIgnore:
             break;
         default:
             ret = EXCP_INTERRUPT;
@@ -851,6 +797,29 @@ static bool mshv_cpus_are_resettable(void)
     return false;
 }
 
+static void mshv_accel_class_init(ObjectClass *oc, void *data)
+{
+    AccelClass *ac = ACCEL_CLASS(oc);
+
+    ac->name = "MSHV";
+    ac->init_machine = mshv_init;
+    ac->allowed = &mshv_allowed;
+}
+
+static void mshv_accel_instance_init(Object *obj)
+{
+    MshvState *s = MSHV_STATE(obj);
+
+    s->vm = 0;
+}
+
+static const TypeInfo mshv_accel_type = {
+    .name = TYPE_MSHV_ACCEL,
+    .parent = TYPE_ACCEL,
+    .instance_init = mshv_accel_instance_init,
+    .class_init = mshv_accel_class_init,
+    .instance_size = sizeof(MshvState),
+};
 static void mshv_accel_ops_class_init(ObjectClass *oc, void *data)
 {
     AccelOpsClass *ops = ACCEL_OPS_CLASS(oc);

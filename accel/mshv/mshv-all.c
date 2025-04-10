@@ -788,7 +788,7 @@ static void mshv_cpu_synchronize_pre_loadvm(CPUState *cpu)
 
 static void do_mshv_cpu_synchronize(CPUState *cpu, run_on_cpu_data arg)
 {
-    mshv_arch_get_registers(mshv_state, cpu);
+    mshv_load_regs(cpu);
 }
 
 static void mshv_cpu_synchronize(CPUState *cpu)

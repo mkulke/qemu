@@ -34,8 +34,8 @@ MshvState *mshv_state;
 static int init_mshv(void) {
     int mshv_fd = open("/dev/mshv", O_RDWR | O_CLOEXEC);
     if (mshv_fd < 0) {
-        perror("Failed to open /dev/mshv");
-        return -errno;
+        error_report("Failed to open /dev/mshv: %s", strerror(errno));
+        return -1;
     }
     return mshv_fd;
 }
@@ -74,8 +74,8 @@ static int pause_vm(int vm_fd)
 
     ret = set_time_freeze(vm_fd, 1);
     if (ret < 0) {
-        perror("Failed to pause partition");
-        ret = -errno;
+        error_report("Failed to pause partition");
+        ret = -1;
     }
 
     return 0;
@@ -88,7 +88,7 @@ static int resume_vm(int vm_fd)
     ret = set_time_freeze(vm_fd, 0);
     if (ret < 0) {
         error_report("Failed to resume partition");
-        ret = -errno;
+        ret = -1;
     }
 
     return 0;
@@ -113,8 +113,8 @@ static int create_partition(int mshv_fd)
 
     ret = ioctl(mshv_fd, MSHV_CREATE_PARTITION, &args);
     if (ret < 0) {
-        perror("[mshv] Failed to create partition");
-        return -errno;
+        error_report("Failed to create partition: %s", strerror(errno));
+        return -1;
     }
     return ret;
 }
@@ -190,8 +190,8 @@ static int set_unimplemented_msr_action(int vm_fd)
 
     int ret = mshv_hvcall(vm_fd, &args);
     if (ret < 0) {
-        perror("Failed to set unimplemented MSR action");
-        return -errno;
+        error_report("Failed to set unimplemented MSR action");
+        return -1;
     }
     return 0;
 }
@@ -494,14 +494,14 @@ int mshv_hvcall(int mshv_fd, const struct mshv_root_hvcall *args)
 
     ret = ioctl(mshv_fd, MSHV_ROOT_HVCALL, args);
     if (ret < 0) {
-        perror("[mshv] Failed to perform hvcall");
-        return -errno;
+        error_report("Failed to perform hvcall: %s", strerror(errno));
+        return -1;
     }
     return ret;
 }
 
 int guest_mem_read_fn(uint64_t gpa, uint8_t *data, uintptr_t size,
-                       bool is_secure_mode, bool instruction_fetch)
+                      bool is_secure_mode, bool instruction_fetch)
 {
     int ret;
     MemTxAttrs memattr = mshv_get_mem_attrs(is_secure_mode);
@@ -515,7 +515,7 @@ int guest_mem_read_fn(uint64_t gpa, uint8_t *data, uintptr_t size,
     ret = address_space_rw(&address_space_memory, gpa, memattr, (void *)data,
                            size, false);
     if (ret != MEMTX_OK) {
-        perror("Failed to read guest memory");
+        error_report("Failed to read guest memory");
         return -1;
     }
 
@@ -601,20 +601,20 @@ static int mshv_init(MachineState *ms)
     // memory
     mshv_init_mem_manager();
 
-    // TODO: object_property_find(OBJECT(current_machine), "mshv-type")
+    /* TODO: object_property_find(OBJECT(current_machine), "mshv-type") */
     vm_type = 0;
     do {
-        // this creates an internal entry in the VM_DB hash table as a side
-        // effect, we can make the fn return the PerVMInfo struct instead and
-        // store it ourselves
+        /* this creates an internal entry in the VM_DB hash table as a side */
+        /* effect, we can make the fn return the PerVMInfo struct instead and */
+        /* store it ourselves */
         int vm_fd = create_vm_with_type(vm_type, mshv_fd);
         s->vm = vm_fd;
     } while (!s->vm);
 
     resume_vm(s->vm);
 
-    // MAX number of address spaces:
-    // address_space_memory
+    /* MAX number of address spaces: */
+    /* address_space_memory */
     s->nr_as = 1;
     s->as = g_new0(struct MshvAs, s->nr_as);
 
@@ -672,7 +672,11 @@ static int mshv_cpu_exec(CPUState *cpu)
          */
         smp_rmb();
 
-        exit_reason = run_vcpu(mshv_state->vm, cpu, &mshv_msg);
+        ret = mshv_run_vcpu(mshv_state->vm, cpu, &mshv_msg, &exit_reason);
+        if (ret < 0) {
+            error_report("Failed to to run on vcpu");
+            abort();
+        }
 
         switch (exit_reason) {
         case MshvVmExitIgnore:

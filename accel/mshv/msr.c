@@ -69,21 +69,20 @@ static uint32_t SUPPORTED_MSRS[64] = {
 	HV_X64_MSR_EOM,
 };
 
-static int compare_msr_index_mgns(const void *a, const void *b)
+static int compare_msr_index(const void *a, const void *b)
 {
 	return (*(uint32_t *)a - *(uint32_t *)b);
 }
 
-int is_supported_msr_mgns(uint32_t msr)
+int mshv_is_supported_msr(uint32_t msr)
 {
-	return bsearch(&msr,
-				   SUPPORTED_MSRS,
+	return bsearch(&msr, SUPPORTED_MSRS,
 				   sizeof(SUPPORTED_MSRS) / sizeof(uint32_t),
 				   sizeof(uint32_t),
-				   compare_msr_index_mgns) != NULL;
+				   compare_msr_index) != NULL;
 }
 
-int msr_to_hv_reg_name_mgns(uint32_t msr, uint32_t *hv_reg)
+int mshv_msr_to_hv_reg_name(uint32_t msr, uint32_t *hv_reg)
 {
     switch (msr) {
     case IA32_MSR_TSC:

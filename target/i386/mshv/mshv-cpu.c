@@ -4,66 +4,17 @@
 #include "emulate/x86_flags.h"
 #include "qemu/error-report.h"
 
-static void set_seg(struct SegmentRegister *lhs, const SegmentCache *rhs)
+int mshv_store_regs(CPUState *cpu)
 {
-    unsigned flags = rhs->flags;
-    lhs->selector = rhs->selector;
-    lhs->base = rhs->base;
-    lhs->limit = rhs->limit;
-    lhs->type_ = (flags >> DESC_TYPE_SHIFT) & 15;
-    lhs->present = (flags & DESC_P_MASK) != 0;
-    lhs->dpl = (flags >> DESC_DPL_SHIFT) & 3;
-    lhs->db = (flags >> DESC_B_SHIFT) & 1;
-    lhs->s = (flags & DESC_S_MASK) != 0;
-    lhs->l = (flags >> DESC_L_SHIFT) & 1;
-    lhs->g = (flags & DESC_G_MASK) != 0;
-    lhs->avl = (flags & DESC_AVL_MASK) != 0;
-    lhs->unusable = !lhs->present;
-    lhs->padding = 0;
-}
-
-static void mshv_set_seg(struct SegmentRegister *mshv_seg, SegmentCache *qemu_s)
-{
-    set_seg(mshv_seg, (const struct SegmentCache *)qemu_s);
-}
-
-static void mshv_put_reg(uint64_t *mshv_reg, target_ulong *qemu_reg)
-{
-    *mshv_reg = *qemu_reg;
-}
-
-int mshv_store_regs(int cpu_fd, const CPUState *cpu)
-{
-    X86CPU *x86cpu = X86_CPU(cpu);
-    CPUX86State *env = &x86cpu->env;
-    StandardRegisters regs = {0};
 	int ret;
 
-	regs.rax = env->regs[R_EAX];
-	regs.rbx = env->regs[R_EBX];
-	regs.rcx = env->regs[R_ECX];
-	regs.rdx = env->regs[R_EDX];
-	regs.rsi = env->regs[R_ESI];
-	regs.rdi = env->regs[R_EDI];
-	regs.rsp = env->regs[R_ESP];
-	regs.rbp = env->regs[R_EBP];
-	regs.r8  = env->regs[R_R8];
-	regs.r9  = env->regs[R_R9];
-	regs.r10 = env->regs[R_R10];
-	regs.r11 = env->regs[R_R11];
-	regs.r12 = env->regs[R_R12];
-	regs.r13 = env->regs[R_R13];
-	regs.r14 = env->regs[R_R14];
-	regs.r15 = env->regs[R_R15];
-    lflags_to_rflags(env);
-	regs.rflags = env->eflags;
-	regs.rip = env->eip;
-
-	ret = mshv_set_standard_regs(cpu_fd, &regs);
+	ret = mshv_set_standard_regs(cpu);
 	if (ret < 0) {
 		perror("Failed to store standard registers");
 		return -1;
 	}
+
+    /* TODO: should store special registers? */
 
 	return 0;
 }
@@ -90,48 +41,12 @@ static int mshv_put_regs(MshvState *mshv_state, CPUState *cpu)
 {
     X86CPU *x86cpu = X86_CPU(cpu);
     CPUX86State *env = &x86cpu->env;
-    StandardRegisters regs = {0};
-    SpecialRegisters sregs = {0};
     FloatingPointUnit fpu = {0};
-    MshvCpuState cpu_state = { .regs = &regs, .sregs = &sregs, .fpu = &fpu };
     int ret = 0;
 
-    mshv_put_reg(&regs.rax, &env->regs[R_EAX]);
-    mshv_put_reg(&regs.rbx, &env->regs[R_EBX]);
-    mshv_put_reg(&regs.rcx, &env->regs[R_ECX]);
-    mshv_put_reg(&regs.rdx, &env->regs[R_EDX]);
-    mshv_put_reg(&regs.rsi, &env->regs[R_ESI]);
-    mshv_put_reg(&regs.rdi, &env->regs[R_EDI]);
-    mshv_put_reg(&regs.rsp, &env->regs[R_ESP]);
-    mshv_put_reg(&regs.rbp, &env->regs[R_EBP]);
-    mshv_put_reg(&regs.rflags, &env->eflags);
-    mshv_put_reg(&regs.rip, &env->eip);
-
-    mshv_set_seg(&sregs.cs, &env->segs[R_CS]);
-    mshv_set_seg(&sregs.ds, &env->segs[R_DS]);
-    mshv_set_seg(&sregs.es, &env->segs[R_ES]);
-    mshv_set_seg(&sregs.fs, &env->segs[R_FS]);
-    mshv_set_seg(&sregs.gs, &env->segs[R_GS]);
-    mshv_set_seg(&sregs.ss, &env->segs[R_SS]);
-
-    sregs.idt.limit = env->idt.limit;
-    sregs.idt.base = env->idt.base;
-    sregs.gdt.limit = env->gdt.limit;
-    sregs.gdt.base = env->gdt.base;
-
-    mshv_put_reg(&sregs.cr0, &env->cr[0]);
-    mshv_put_reg(&sregs.cr2, &env->cr[2]);
-    mshv_put_reg(&sregs.cr3, &env->cr[3]);
-    mshv_put_reg(&sregs.cr4, &env->cr[4]);
-
-    mshv_put_reg(&sregs.efer, &env->efer);
-
-    sregs.cr8 = cpu_get_apic_tpr(x86cpu->apic_state);
-    sregs.apic_base = cpu_get_apic_base(x86cpu->apic_state);
-    memset(&sregs.interrupt_bitmap, 0, sizeof(sregs.interrupt_bitmap));
     memset(&fpu, 0, sizeof(fpu));
 
-    mshv_configure_vcpu(cpu, &cpu_state, env->xcr0);
+    mshv_configure_vcpu(cpu, &fpu, env->xcr0);
 
     return ret;
 }

@@ -29,33 +29,15 @@ static uint8_t RWRX_SEGMENT_TYPE = 0x2;
 static uint8_t CODE_SEGMENT_TYPE = 0x8;
 static uint8_t EXPAND_DOWN_SEGMENT_TYPE = 0x4;
 
-enum Mode {
+typedef enum CpuMode {
 	REAL_MODE,
 	PROTECTED_MODE,
 	LONG_MODE,
-};
+} CpuMode;
 
-static void set_seg(struct SegmentRegister *lhs, const SegmentCache *rhs)
+static CpuMode cpu_mode(CPUState *cpu)
 {
-    unsigned flags = rhs->flags;
-    lhs->selector = rhs->selector;
-    lhs->base = rhs->base;
-    lhs->limit = rhs->limit;
-    lhs->type_ = (flags >> DESC_TYPE_SHIFT) & 15;
-    lhs->present = (flags & DESC_P_MASK) != 0;
-    lhs->dpl = (flags >> DESC_DPL_SHIFT) & 3;
-    lhs->db = (flags >> DESC_B_SHIFT) & 1;
-    lhs->s = (flags & DESC_S_MASK) != 0;
-    lhs->l = (flags >> DESC_L_SHIFT) & 1;
-    lhs->g = (flags & DESC_G_MASK) != 0;
-    lhs->avl = (flags & DESC_AVL_MASK) != 0;
-    lhs->unusable = !lhs->present;
-    lhs->padding = 0;
-}
-
-static enum Mode cpu_mode(CPUState *cpu)
-{
-	enum Mode m = REAL_MODE;
+	enum CpuMode m = REAL_MODE;
 
 	if (x86_is_protected(cpu)) {
 		m = PROTECTED_MODE;
@@ -70,38 +52,31 @@ static enum Mode cpu_mode(CPUState *cpu)
 
 static bool segment_type_ro(const SegmentCache *seg)
 {
-	SegmentRegister mshv_seg = {0};
-	set_seg(&mshv_seg, seg);
-
-    return (mshv_seg.type_ & (~RWRX_SEGMENT_TYPE)) == 0;
+    uint32_t type_ = (seg->flags >> DESC_TYPE_SHIFT) & 15;
+    return (type_ & (~RWRX_SEGMENT_TYPE)) == 0;
 }
 
 static bool segment_type_code(const SegmentCache *seg)
 {
-	SegmentRegister mshv_seg = {0};
-	set_seg(&mshv_seg, seg);
-
-    return (mshv_seg.type_ & CODE_SEGMENT_TYPE) != 0;
+    uint32_t type_ = (seg->flags >> DESC_TYPE_SHIFT) & 15;
+    return (type_ & CODE_SEGMENT_TYPE) != 0;
 }
 
 static bool segment_expands_down(const SegmentCache *seg)
 {
-	SegmentRegister mshv_seg = {0};
+    uint32_t type_ = (seg->flags >> DESC_TYPE_SHIFT) & 15;
 
 	if (segment_type_code(seg)) {
 		return false;
 	}
 
-	set_seg(&mshv_seg, seg);
-	return (mshv_seg.type_ & EXPAND_DOWN_SEGMENT_TYPE) != 0;
+	return (type_ & EXPAND_DOWN_SEGMENT_TYPE) != 0;
 }
 
 static uint32_t segment_limit(const SegmentCache *seg)
 {
-	SegmentRegister mshv_seg = {0};
-	set_seg(&mshv_seg, seg);
-	uint32_t limit = mshv_seg.limit;
-	uint8_t granularity = mshv_seg.g;
+	uint32_t limit = seg->limit;
+    uint32_t granularity = (seg->flags & DESC_G_MASK) != 0;
 
 	if (granularity != 0) {
 		limit = (limit << 12) | 0xFFF;
@@ -112,17 +87,14 @@ static uint32_t segment_limit(const SegmentCache *seg)
 
 static uint8_t segment_db(const SegmentCache *seg)
 {
-	SegmentRegister mshv_seg = {0};
-	set_seg(&mshv_seg, seg);
-
-	return mshv_seg.db;
+    return (seg->flags >> DESC_B_SHIFT) & 1;
 }
 
 static int linearize(CPUState *cpu,
 					 target_ulong logical_addr, target_ulong *linear_addr,
 					 X86Seg seg_idx)
 {
-	enum Mode mode;
+	enum CpuMode mode;
     X86CPU *x86_cpu = X86_CPU(cpu);
     CPUX86State *env = &x86_cpu->env;
 	SegmentCache *seg = &env->segs[seg_idx];

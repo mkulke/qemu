@@ -1,10 +1,11 @@
-#include "hw/hyperv/linux-mshv.h"
 #include "qemu/osdep.h"
 #include "qemu/lockable.h"
 #include "qemu/error-report.h"
 #include "qemu/memalign.h"
 #include "qemu/typedefs.h"
 #include "system/mshv.h"
+#include "hw/hyperv/linux-mshv.h"
+#include "cpu.h"
 #include <stdint.h>
 #include <sys/ioctl.h>
 #include <sys/types.h>
@@ -440,11 +441,14 @@ int mshv_get_standard_regs(CPUState *cpu)
     return 0;
 }
 
-int mshv_set_standard_regs(int cpu_fd, const struct StandardRegisters *regs)
+int mshv_set_standard_regs(CPUState *cpu)
 {
+    X86CPU *x86cpu = X86_CPU(cpu);
+    CPUX86State *env = &x86cpu->env;
     struct hv_register_assoc *assocs;
     size_t n_regs = sizeof(STANDARD_REGISTER_NAMES) / sizeof(hv_register_name);
     int ret;
+    int cpu_fd = mshv_vcpufd(cpu);
 
     assocs = g_new0(hv_register_assoc, n_regs);
 
@@ -452,24 +456,25 @@ int mshv_set_standard_regs(int cpu_fd, const struct StandardRegisters *regs)
     for (size_t i = 0; i < n_regs; i++) {
         assocs[i].name = STANDARD_REGISTER_NAMES[i];
     }
-    assocs[0].value.reg64 = regs->rax;
-    assocs[1].value.reg64 = regs->rbx;
-    assocs[2].value.reg64 = regs->rcx;
-    assocs[3].value.reg64 = regs->rdx;
-    assocs[4].value.reg64 = regs->rsi;
-    assocs[5].value.reg64 = regs->rdi;
-    assocs[6].value.reg64 = regs->rsp;
-    assocs[7].value.reg64 = regs->rbp;
-    assocs[8].value.reg64 = regs->r8;
-    assocs[9].value.reg64 = regs->r9;
-    assocs[10].value.reg64 = regs->r10;
-    assocs[11].value.reg64 = regs->r11;
-    assocs[12].value.reg64 = regs->r12;
-    assocs[13].value.reg64 = regs->r13;
-    assocs[14].value.reg64 = regs->r14;
-    assocs[15].value.reg64 = regs->r15;
-    assocs[16].value.reg64 = regs->rip;
-    assocs[17].value.reg64 = regs->rflags;
+    assocs[0].value.reg64 = env->regs[R_EAX];
+    assocs[1].value.reg64 = env->regs[R_EBX];
+    assocs[2].value.reg64 = env->regs[R_ECX];
+    assocs[3].value.reg64 = env->regs[R_EDX];
+    assocs[4].value.reg64 = env->regs[R_ESI];
+    assocs[5].value.reg64 = env->regs[R_EDI];
+    assocs[6].value.reg64 = env->regs[R_ESP];
+    assocs[7].value.reg64 = env->regs[R_EBP];
+    assocs[8].value.reg64 = env->regs[R_R8];
+    assocs[9].value.reg64 = env->regs[R_R9];
+    assocs[10].value.reg64 = env->regs[R_R10];
+    assocs[11].value.reg64 = env->regs[R_R11];
+    assocs[12].value.reg64 = env->regs[R_R12];
+    assocs[13].value.reg64 = env->regs[R_R13];
+    assocs[14].value.reg64 = env->regs[R_R14];
+    assocs[15].value.reg64 = env->regs[R_R15];
+    assocs[16].value.reg64 = env->eip;
+    lflags_to_rflags(env);
+    assocs[17].value.reg64 = env->eflags;
 
     ret = set_generic_regs(cpu_fd, assocs, n_regs);
     g_free(assocs);
@@ -505,36 +510,39 @@ int mshv_get_special_regs(CPUState *cpu)
     return 0;
 }
 
-static void populate_hv_segment_reg(const struct SegmentRegister *reg,
-                                    struct hv_x64_segment_register *hv_reg)
+static void populate_hv_segment_reg(SegmentCache *seg,
+                                    hv_x64_segment_register *hv_reg)
 {
-    hv_reg->base = reg->base;
-    hv_reg->limit = reg->limit;
-    hv_reg->selector = reg->selector;
+    uint32_t flags = seg->flags;
 
-    hv_reg->segment_type = reg->type_ & 0xF;
-    hv_reg->non_system_segment = reg->s & 0x1;
-    hv_reg->descriptor_privilege_level = reg->dpl & 0x3;
-    hv_reg->present = reg->present & 0x1;
+    hv_reg->base = seg->base;
+    hv_reg->limit = seg->limit;
+    hv_reg->selector = seg->selector;
+    hv_reg->segment_type = (flags >> DESC_TYPE_SHIFT) & 0xF;
+    hv_reg->non_system_segment = (flags & DESC_S_MASK) != 0;
+    hv_reg->descriptor_privilege_level = (flags >> DESC_DPL_SHIFT) & 0x3;
+    hv_reg->present = (flags & DESC_P_MASK) != 0;
     hv_reg->reserved = 0;
-    hv_reg->available = reg->avl & 0x1;
-    hv_reg->_long = reg->l & 0x1;
-    hv_reg->_default = reg->db & 0x1;
-    hv_reg->granularity = reg->g & 0x1;
+    hv_reg->available = (flags & DESC_AVL_MASK) != 0;
+    hv_reg->_long = (flags >> DESC_L_SHIFT) & 0x1;
+    hv_reg->_default = (flags >> DESC_B_SHIFT) & 0x1;
+    hv_reg->granularity = (flags & DESC_G_MASK) != 0;
 }
 
-static void populate_hv_table_reg(const struct TableRegister *reg,
-                                  struct hv_x64_table_register *hv_reg)
+static void populate_hv_table_reg(const struct SegmentCache *seg,
+                                  hv_x64_table_register *hv_reg)
 {
-    hv_reg->base = reg->base;
-    hv_reg->limit = reg->limit;
+    hv_reg->base = seg->base;
+    hv_reg->limit = seg->limit;
     memset(hv_reg->pad, 0, sizeof(hv_reg->pad));
 }
 
-static int set_special_regs(int cpu_fd, const struct SpecialRegisters *regs)
+static int set_special_regs(CPUState *cpu)
 {
+    X86CPU *x86cpu = X86_CPU(cpu);
+    CPUX86State *env = &x86cpu->env;
+    int cpu_fd = mshv_vcpufd(cpu);
     struct hv_register_assoc *assocs;
-    uint64_t bits;
     size_t n_regs = sizeof(SPECIAL_REGISTER_NAMES) / sizeof(hv_register_name);
     int ret;
 
@@ -544,43 +552,37 @@ static int set_special_regs(int cpu_fd, const struct SpecialRegisters *regs)
     for (size_t i = 0; i < n_regs; i++) {
         assocs[i].name = SPECIAL_REGISTER_NAMES[i];
     }
-    populate_hv_segment_reg(&regs->cs, &assocs[0].value.segment);
-    populate_hv_segment_reg(&regs->ds, &assocs[1].value.segment);
-    populate_hv_segment_reg(&regs->es, &assocs[2].value.segment);
-    populate_hv_segment_reg(&regs->fs, &assocs[3].value.segment);
-    populate_hv_segment_reg(&regs->gs, &assocs[4].value.segment);
-    populate_hv_segment_reg(&regs->ss, &assocs[5].value.segment);
-    populate_hv_segment_reg(&regs->tr, &assocs[6].value.segment);
-    populate_hv_segment_reg(&regs->ldt, &assocs[7].value.segment);
+    populate_hv_segment_reg(&env->segs[R_CS], &assocs[0].value.segment);
+    populate_hv_segment_reg(&env->segs[R_DS], &assocs[1].value.segment);
+    populate_hv_segment_reg(&env->segs[R_ES], &assocs[2].value.segment);
+    populate_hv_segment_reg(&env->segs[R_FS], &assocs[3].value.segment);
+    populate_hv_segment_reg(&env->segs[R_GS], &assocs[4].value.segment);
+    populate_hv_segment_reg(&env->segs[R_SS], &assocs[5].value.segment);
+    populate_hv_segment_reg(&env->tr, &assocs[6].value.segment);
+    populate_hv_segment_reg(&env->ldt, &assocs[7].value.segment);
 
-    populate_hv_table_reg(&regs->gdt, &assocs[8].value.table);
-    populate_hv_table_reg(&regs->idt, &assocs[9].value.table);
+    populate_hv_table_reg(&env->gdt, &assocs[8].value.table);
+    populate_hv_table_reg(&env->idt, &assocs[9].value.table);
 
-    assocs[10].value.reg64 = regs->cr0;
-    assocs[11].value.reg64 = regs->cr2;
-    assocs[12].value.reg64 = regs->cr3;
-    assocs[13].value.reg64 = regs->cr4;
-    assocs[14].value.reg64 = regs->cr8;
-    assocs[15].value.reg64 = regs->efer;
-    assocs[16].value.reg64 = regs->apic_base;
+    assocs[10].value.reg64 = env->cr[0];
+    assocs[11].value.reg64 = env->cr[2];
+    assocs[12].value.reg64 = env->cr[3];
+    assocs[13].value.reg64 = env->cr[4];
+    assocs[14].value.reg64 = cpu_get_apic_tpr(x86cpu->apic_state);
+    assocs[15].value.reg64 = env->efer;
+    assocs[16].value.reg64 = cpu_get_apic_base(x86cpu->apic_state);
 
     /* TODO: support asserting an interrupt using interrup_bitmap
      * it should be possible if we use the vm_fd
      */
-    for (size_t i = 0; i < 4; i++) {
-        bits = regs->interrupt_bitmap[i];
-        if (bits) {
-            error_report("asserting an interrupt is not supported");
-            return -EINVAL;
-        }
-    }
 
     ret = set_generic_regs(cpu_fd, assocs, n_regs);
     g_free(assocs);
     if (ret < 0) {
         error_report("failed to set special registers");
-        return -errno;
+        return -1;
     }
+
     return 0;
 }
 
@@ -632,9 +634,10 @@ static int set_fpu_regs(int cpu_fd, const struct FloatingPointUnit *regs)
     ret = set_generic_regs(cpu_fd, assocs, n_regs);
     g_free(assocs);
     if (ret < 0) {
-        perror("failed to set fpu registers");
-        return -errno;
+        error_report("failed to set fpu registers");
+        return -1;
     }
+
     return 0;
 }
 
@@ -654,19 +657,18 @@ static int set_xc_reg(int cpu_fd, uint64_t xcr0)
     return 0;
 }
 
-static int set_cpu_state(int cpu_fd,
-                         const struct StandardRegisters *standard_regs,
-                         const struct SpecialRegisters *special_regs,
+static int set_cpu_state(CPUState *cpu,
                          const struct FloatingPointUnit *fpu_regs,
                          uint64_t xcr0)
 {
     int ret;
+    int cpu_fd = mshv_vcpufd(cpu);
 
-    ret = mshv_set_standard_regs(cpu_fd, standard_regs);
+    ret = mshv_set_standard_regs(cpu);
     if (ret < 0) {
         return ret;
     }
-    ret = set_special_regs(cpu_fd, special_regs);
+    ret = set_special_regs(cpu);
     if (ret < 0) {
         return ret;
     }
@@ -1063,12 +1065,12 @@ static int set_lint(int cpu_fd)
  * CPUX86State *env = &x86cpu->env;
  * X86CPUTopoInfo *topo_info = &env->topo_info;
  */
-int mshv_configure_vcpu(CPUState *cpu, const MshvCpuState *state,
+int mshv_configure_vcpu(CPUState *cpu,
+                        const struct FloatingPointUnit *fpu,
                         uint64_t xcr0)
 {
     int ret;
     int cpu_fd = mshv_vcpufd(cpu);
-
 
     ret = set_cpuid2(cpu);
     if (ret < 0) {
@@ -1082,7 +1084,7 @@ int mshv_configure_vcpu(CPUState *cpu, const MshvCpuState *state,
         return -1;
     }
 
-    ret = set_cpu_state(cpu_fd, state->regs, state->sregs, state->fpu, xcr0);
+    ret = set_cpu_state(cpu, fpu, xcr0);
     if (ret < 0) {
         error_report("failed to set cpu state");
         return -1;
@@ -1199,7 +1201,6 @@ static int emulate_insn(CPUState *cpu,
     }
 
     WITH_QEMU_LOCK_GUARD(guard) {
-        /* ret = mshv_load_regs(cpu_fd, cpu); */
         ret = mshv_load_regs(cpu);
         if (ret < 0) {
             error_report("failed to load registers");
@@ -1209,7 +1210,7 @@ static int emulate_insn(CPUState *cpu,
         decode_instruction_stream(env, &decode, &stream);
         exec_instruction(env, &decode);
 
-        ret = mshv_store_regs(cpu_fd, cpu);
+        ret = mshv_store_regs(cpu);
         if (ret < 0) {
             error_report("failed to store registers");
             return -1;

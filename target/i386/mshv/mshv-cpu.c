@@ -22,35 +22,14 @@ static void set_seg(struct SegmentRegister *lhs, const SegmentCache *rhs)
     lhs->padding = 0;
 }
 
-static void get_seg(SegmentCache *lhs, const struct SegmentRegister *rhs)
+static void mshv_set_seg(struct SegmentRegister *mshv_seg, SegmentCache *qemu_s)
 {
-    lhs->selector = rhs->selector;
-    lhs->base = rhs->base;
-    lhs->limit = rhs->limit;
-    lhs->flags = (rhs->type_ << DESC_TYPE_SHIFT) |
-                 ((rhs->present && !rhs->unusable) * DESC_P_MASK) |
-                 (rhs->dpl << DESC_DPL_SHIFT) | (rhs->db << DESC_B_SHIFT) |
-                 (rhs->s * DESC_S_MASK) | (rhs->l << DESC_L_SHIFT) |
-                 (rhs->g * DESC_G_MASK) | (rhs->avl * DESC_AVL_MASK);
+    set_seg(mshv_seg, (const struct SegmentCache *)qemu_s);
 }
 
-static void mshv_getset_seg(struct SegmentRegister *mshv_seg,
-                            SegmentCache *qemu_s, int set)
+static void mshv_put_reg(uint64_t *mshv_reg, target_ulong *qemu_reg)
 {
-    if (set) {
-        set_seg(mshv_seg, (const struct SegmentCache *)qemu_s);
-    } else {
-        get_seg(qemu_s, (const struct SegmentRegister *)mshv_seg);
-    }
-}
-
-static void mshv_getput_reg(uint64_t *mshv_reg, target_ulong *qemu_reg, int set)
-{
-    if (set) {
-        *mshv_reg = *qemu_reg;
-    } else {
-        *qemu_reg = *mshv_reg;
-    }
+    *mshv_reg = *qemu_reg;
 }
 
 int mshv_store_regs(int cpu_fd, const CPUState *cpu)
@@ -89,72 +68,25 @@ int mshv_store_regs(int cpu_fd, const CPUState *cpu)
 	return 0;
 }
 
-int mshv_load_regs(int cpu_fd, CPUState *cpu)
+int mshv_load_regs(CPUState *cpu)
 {
-    X86CPU *x86cpu = X86_CPU(cpu);
-    CPUX86State *env = &x86cpu->env;
-    StandardRegisters regs = {0};
-    SpecialRegisters sregs = {0};
 	int ret;
 
-	ret = mshv_get_standard_regs(cpu_fd, &regs);
+	ret = mshv_get_standard_regs(cpu);
 	if (ret < 0) {
 		perror("Failed to load standard registers");
 		return -1;
 	}
-	ret = mshv_get_special_regs(cpu_fd, &sregs);
+	ret = mshv_get_special_regs(cpu);
 	if (ret < 0) {
 		perror("Failed to load special registers");
 		return -1;
 	}
 
-	env->regs[R_EAX] = regs.rax;
-	env->regs[R_EBX] = regs.rbx;
-	env->regs[R_ECX] = regs.rcx;
-	env->regs[R_EDX] = regs.rdx;
-	env->regs[R_ESI] = regs.rsi;
-	env->regs[R_EDI] = regs.rdi;
-	env->regs[R_ESP] = regs.rsp;
-	env->regs[R_EBP] = regs.rbp;
-	env->regs[R_R8]  = regs.r8;
-	env->regs[R_R9]  = regs.r9;
-	env->regs[R_R10] = regs.r10;
-	env->regs[R_R11] = regs.r11;
-	env->regs[R_R12] = regs.r12;
-	env->regs[R_R13] = regs.r13;
-	env->regs[R_R14] = regs.r14;
-	env->regs[R_R15] = regs.r15;
-
-	env->eflags = regs.rflags;
-    rflags_to_lflags(env);
-
-	env->eip = regs.rip;
-
-	get_seg(&env->segs[R_CS], &sregs.cs);
-	get_seg(&env->segs[R_DS], &sregs.ds);
-	get_seg(&env->segs[R_ES], &sregs.es);
-	get_seg(&env->segs[R_FS], &sregs.fs);
-	get_seg(&env->segs[R_GS], &sregs.gs);
-	get_seg(&env->segs[R_SS], &sregs.ss);
-
-	env->idt.limit = sregs.idt.limit;
-	env->idt.base = sregs.idt.base;
-	env->gdt.limit = sregs.gdt.limit;
-	env->gdt.base = sregs.gdt.base;
-
-	env->cr[0] = sregs.cr0;
-	env->cr[2] = sregs.cr2;
-	env->cr[3] = sregs.cr3;
-	env->cr[4] = sregs.cr4;
-	env->efer = sregs.efer;
-
-	cpu_set_apic_tpr(x86cpu->apic_state, sregs.cr8);
-	cpu_set_apic_base(x86cpu->apic_state, sregs.apic_base);
-
 	return 0;
 }
 
-static int mshv_getput_regs(MshvState *mshv_state, CPUState *cpu, bool set)
+static int mshv_put_regs(MshvState *mshv_state, CPUState *cpu)
 {
     X86CPU *x86cpu = X86_CPU(cpu);
     CPUX86State *env = &x86cpu->env;
@@ -162,64 +94,44 @@ static int mshv_getput_regs(MshvState *mshv_state, CPUState *cpu, bool set)
     SpecialRegisters sregs = {0};
     FloatingPointUnit fpu = {0};
     MshvCpuState cpu_state = { .regs = &regs, .sregs = &sregs, .fpu = &fpu };
-	int cpu_fd = mshv_vcpufd(cpu);
     int ret = 0;
 
-    if (!set) {
-		ret = mshv_get_standard_regs(cpu_fd, &regs);
-		if (ret < 0) {
-			perror("Failed to get standard registers");
-			return -1;
-		}
+    mshv_put_reg(&regs.rax, &env->regs[R_EAX]);
+    mshv_put_reg(&regs.rbx, &env->regs[R_EBX]);
+    mshv_put_reg(&regs.rcx, &env->regs[R_ECX]);
+    mshv_put_reg(&regs.rdx, &env->regs[R_EDX]);
+    mshv_put_reg(&regs.rsi, &env->regs[R_ESI]);
+    mshv_put_reg(&regs.rdi, &env->regs[R_EDI]);
+    mshv_put_reg(&regs.rsp, &env->regs[R_ESP]);
+    mshv_put_reg(&regs.rbp, &env->regs[R_EBP]);
+    mshv_put_reg(&regs.rflags, &env->eflags);
+    mshv_put_reg(&regs.rip, &env->eip);
 
-		ret = mshv_get_special_regs(cpu_fd, &sregs);
-		if (ret < 0) {
-			perror("Failed to get special registers");
-			return -1;
-		}
-    }
-
-    mshv_getput_reg(&regs.rax, &env->regs[R_EAX], set);
-    mshv_getput_reg(&regs.rbx, &env->regs[R_EBX], set);
-    mshv_getput_reg(&regs.rcx, &env->regs[R_ECX], set);
-    mshv_getput_reg(&regs.rdx, &env->regs[R_EDX], set);
-    mshv_getput_reg(&regs.rsi, &env->regs[R_ESI], set);
-    mshv_getput_reg(&regs.rdi, &env->regs[R_EDI], set);
-    mshv_getput_reg(&regs.rsp, &env->regs[R_ESP], set);
-    mshv_getput_reg(&regs.rbp, &env->regs[R_EBP], set);
-    mshv_getput_reg(&regs.rflags, &env->eflags, set);
-    mshv_getput_reg(&regs.rip, &env->eip, set);
-
-    mshv_getset_seg(&sregs.cs, &env->segs[R_CS], set);
-    mshv_getset_seg(&sregs.ds, &env->segs[R_DS], set);
-    mshv_getset_seg(&sregs.es, &env->segs[R_ES], set);
-    mshv_getset_seg(&sregs.fs, &env->segs[R_FS], set);
-    mshv_getset_seg(&sregs.gs, &env->segs[R_GS], set);
-    mshv_getset_seg(&sregs.ss, &env->segs[R_SS], set);
+    mshv_set_seg(&sregs.cs, &env->segs[R_CS]);
+    mshv_set_seg(&sregs.ds, &env->segs[R_DS]);
+    mshv_set_seg(&sregs.es, &env->segs[R_ES]);
+    mshv_set_seg(&sregs.fs, &env->segs[R_FS]);
+    mshv_set_seg(&sregs.gs, &env->segs[R_GS]);
+    mshv_set_seg(&sregs.ss, &env->segs[R_SS]);
 
     sregs.idt.limit = env->idt.limit;
     sregs.idt.base = env->idt.base;
     sregs.gdt.limit = env->gdt.limit;
     sregs.gdt.base = env->gdt.base;
 
-    mshv_getput_reg(&sregs.cr0, &env->cr[0], set);
-    mshv_getput_reg(&sregs.cr2, &env->cr[2], set);
-    mshv_getput_reg(&sregs.cr3, &env->cr[3], set);
-    mshv_getput_reg(&sregs.cr4, &env->cr[4], set);
+    mshv_put_reg(&sregs.cr0, &env->cr[0]);
+    mshv_put_reg(&sregs.cr2, &env->cr[2]);
+    mshv_put_reg(&sregs.cr3, &env->cr[3]);
+    mshv_put_reg(&sregs.cr4, &env->cr[4]);
 
-    mshv_getput_reg(&sregs.efer, &env->efer, set);
+    mshv_put_reg(&sregs.efer, &env->efer);
 
-    if (set) {
-        sregs.cr8 = cpu_get_apic_tpr(x86cpu->apic_state);
-        sregs.apic_base = cpu_get_apic_base(x86cpu->apic_state);
-        memset(&sregs.interrupt_bitmap, 0, sizeof(sregs.interrupt_bitmap));
-        memset(&fpu, 0, sizeof(fpu));
+    sregs.cr8 = cpu_get_apic_tpr(x86cpu->apic_state);
+    sregs.apic_base = cpu_get_apic_base(x86cpu->apic_state);
+    memset(&sregs.interrupt_bitmap, 0, sizeof(sregs.interrupt_bitmap));
+    memset(&fpu, 0, sizeof(fpu));
 
-		mshv_configure_vcpu(cpu, &cpu_state, env->xcr0);
-    } else {
-        cpu_set_apic_tpr(x86cpu->apic_state, sregs.cr8);
-        cpu_set_apic_base(x86cpu->apic_state, sregs.apic_base);
-    }
+    mshv_configure_vcpu(cpu, &cpu_state, env->xcr0);
 
     return ret;
 }
@@ -286,7 +198,7 @@ int mshv_arch_put_registers(MshvState *mshv_state, CPUState *cpu)
 {
     int ret = 0;
 
-    ret = mshv_getput_regs(mshv_state, cpu, true);
+    ret = mshv_put_regs(mshv_state, cpu);
     if (ret) {
         return ret;
     }
@@ -297,9 +209,4 @@ int mshv_arch_put_registers(MshvState *mshv_state, CPUState *cpu)
     }
 
     return ret;
-}
-
-int mshv_arch_get_registers(MshvState *mshv_state, CPUState *cpu)
-{
-    return mshv_getput_regs(mshv_state, cpu, false);
 }

@@ -3,6 +3,7 @@
 #include "qemu/lockable.h"
 #include "qemu/error-report.h"
 #include "qemu/memalign.h"
+#include "qemu/typedefs.h"
 #include "system/mshv.h"
 #include <stdint.h>
 #include <sys/ioctl.h>
@@ -10,6 +11,7 @@
 
 #include "emulate/x86_decode.h"
 #include "emulate/x86_emu.h"
+#include "emulate/x86_flags.h"
 #include "qemu/atomic.h"
 #include "trace-accel_mshv.h"
 #include "trace.h"
@@ -326,120 +328,100 @@ static int set_generic_regs(int cpu_fd, hv_register_assoc *assocs,
 }
 
 static void populate_standard_regs(const hv_register_assoc *assocs,
-                                   struct StandardRegisters *regs)
+                                   CPUX86State *env)
 {
-    regs->rax = assocs[0].value.reg64;
-    regs->rbx = assocs[1].value.reg64;
-    regs->rcx = assocs[2].value.reg64;
-    regs->rdx = assocs[3].value.reg64;
-    regs->rsi = assocs[4].value.reg64;
-    regs->rdi = assocs[5].value.reg64;
-    regs->rsp = assocs[6].value.reg64;
-    regs->rbp = assocs[7].value.reg64;
-    regs->r8  = assocs[8].value.reg64;
-    regs->r9  = assocs[9].value.reg64;
-    regs->r10 = assocs[10].value.reg64;
-    regs->r11 = assocs[11].value.reg64;
-    regs->r12 = assocs[12].value.reg64;
-    regs->r13 = assocs[13].value.reg64;
-    regs->r14 = assocs[14].value.reg64;
-    regs->r15 = assocs[15].value.reg64;
-    regs->rip = assocs[16].value.reg64;
+	env->regs[R_EAX] = assocs[0].value.reg64;
+	env->regs[R_EBX] = assocs[1].value.reg64;
+	env->regs[R_ECX] = assocs[2].value.reg64;
+	env->regs[R_EDX] = assocs[3].value.reg64;
+	env->regs[R_ESI] = assocs[4].value.reg64;
+	env->regs[R_EDI] = assocs[5].value.reg64;
+	env->regs[R_ESP] = assocs[6].value.reg64;
+	env->regs[R_EBP] = assocs[7].value.reg64;
+	env->regs[R_R8]  = assocs[8].value.reg64;
+	env->regs[R_R9]  = assocs[9].value.reg64;
+	env->regs[R_R10] = assocs[10].value.reg64;
+	env->regs[R_R11] = assocs[11].value.reg64;
+	env->regs[R_R12] = assocs[12].value.reg64;
+	env->regs[R_R13] = assocs[13].value.reg64;
+	env->regs[R_R14] = assocs[14].value.reg64;
+	env->regs[R_R15] = assocs[15].value.reg64;
 
-    regs->rflags = assocs[17].value.reg64;
+    env->eip = assocs[16].value.reg64;
+	env->eflags = assocs[17].value.reg64;
+    rflags_to_lflags(env);
 }
 
 static void populate_segment_reg(const hv_x64_segment_register *hv_seg,
-                                 struct SegmentRegister *seg)
+                                 SegmentCache *seg)
 {
-    memset(seg, 0, sizeof(struct SegmentRegister));
+    memset(seg, 0, sizeof(SegmentCache));
 
     seg->base = hv_seg->base;
     seg->limit = hv_seg->limit;
     seg->selector = hv_seg->selector;
-    seg->unusable = 0;
-    seg->padding = 0;
 
-    seg->type_ = hv_seg->segment_type;
-    seg->present = hv_seg->present;
-    seg->dpl = hv_seg->descriptor_privilege_level;
-    seg->db = hv_seg->_default;
-    seg->s = hv_seg->non_system_segment;
-    seg->l = hv_seg->_long;
-    seg->g = hv_seg->granularity;
-    seg->avl = hv_seg->available;
+    seg->flags = (hv_seg->segment_type << DESC_TYPE_SHIFT)
+                 | (hv_seg->present * DESC_P_MASK)
+                 | (hv_seg->descriptor_privilege_level << DESC_DPL_SHIFT)
+                 | (hv_seg->_default << DESC_B_SHIFT)
+                 | (hv_seg->non_system_segment * DESC_S_MASK)
+                 | (hv_seg->_long << DESC_L_SHIFT)
+                 | (hv_seg->granularity * DESC_G_MASK)
+                 | (hv_seg->available * DESC_AVL_MASK);
 
 }
 
 static void populate_table_reg(const hv_x64_table_register *hv_seg,
-                               struct TableRegister *reg)
+                               SegmentCache *tbl)
 {
-    memset(reg, 0, sizeof(TableRegister));
+    memset(tbl, 0, sizeof(SegmentCache));
 
-    reg->base = hv_seg->base;
-    reg->limit = hv_seg->limit;
+    tbl->base = hv_seg->base;
+    tbl->limit = hv_seg->limit;
 }
 
-static void populate_interrupt_bitmap(uint64_t pending_reg, uint64_t *bitmap)
+static void populate_special_regs(const hv_register_assoc *assocs,
+                                  X86CPU *x86cpu)
 {
-    uint64_t interrupt_nr;
-    /* TODO: early exit */
-    /* Check if the least significant bit is 1 (interruption pending) */
-    /* and that the trailing zero count (after shifting right by 1) is >= 3. */
-    if (((pending_reg & 0x01ULL) == 1ULL)
-        && (__builtin_ctzll(pending_reg >> 1) >= 3)) {
-        /* Extract the interrupt number from bits 16 and above. */
-        interrupt_nr = pending_reg >> 16;
-        if (interrupt_nr > 255) {
-            perror("invalid interrupt vector number > 255");
-            abort();
-        }
+    CPUX86State *env = &x86cpu->env;
 
-        /* Compute the bit offset (lower 6 bits, i.e. 0-63) */
-        uint64_t bit_offset = pending_reg & 0x3FULL;
-        /* The index is stored in the remaining higher bits (shift right by 6) */
-        uint64_t index = pending_reg >> 6;
+    populate_segment_reg(&assocs[0].value.segment, &env->segs[R_CS]);
+    populate_segment_reg(&assocs[1].value.segment, &env->segs[R_DS]);
+    populate_segment_reg(&assocs[2].value.segment, &env->segs[R_ES]);
+    populate_segment_reg(&assocs[3].value.segment, &env->segs[R_FS]);
+    populate_segment_reg(&assocs[4].value.segment, &env->segs[R_GS]);
+    populate_segment_reg(&assocs[5].value.segment, &env->segs[R_SS]);
 
-        /* Set the corresponding bit in the interrupt bitmap. */
-        /* (63 - bit_offset) shifts from the left. */
-        bitmap[index] = 1ULL << (63 - bit_offset);
-    }
+    /* TODO: should we set TR + LDT? */
+    /* populate_segment_reg(&assocs[6].value.segment, &regs->tr); */
+    /* populate_segment_reg(&assocs[7].value.segment, &regs->ldt); */
+
+    populate_table_reg(&assocs[8].value.table, &env->gdt);
+    populate_table_reg(&assocs[9].value.table, &env->idt);
+
+    env->cr[0] = assocs[10].value.reg64;
+    env->cr[2] = assocs[11].value.reg64;
+    env->cr[3] = assocs[12].value.reg64;
+    env->cr[4] = assocs[13].value.reg64;
+
+	cpu_set_apic_tpr(x86cpu->apic_state, assocs[14].value.reg64);
+	env->efer = assocs[15].value.reg64;
+	cpu_set_apic_base(x86cpu->apic_state, assocs[16].value.reg64);
+
+    /* TODO: should we set those? */
+    /* pending_reg = assocs[17].value.pending_interruption.as_uint64; */
+    /* populate_interrupt_bitmap(pending_reg, regs->interrupt_bitmap); */
 }
 
-static void populate_special_regs(const struct hv_register_assoc *assocs,
-                                  struct SpecialRegisters *regs)
-{
-    uint64_t pending_reg;
-
-    populate_segment_reg(&assocs[0].value.segment, &regs->cs);
-    populate_segment_reg(&assocs[1].value.segment, &regs->ds);
-    populate_segment_reg(&assocs[2].value.segment, &regs->es);
-    populate_segment_reg(&assocs[3].value.segment, &regs->fs);
-    populate_segment_reg(&assocs[4].value.segment, &regs->gs);
-    populate_segment_reg(&assocs[5].value.segment, &regs->ss);
-    populate_segment_reg(&assocs[6].value.segment, &regs->tr);
-    populate_segment_reg(&assocs[7].value.segment, &regs->ldt);
-
-    populate_table_reg(&assocs[8].value.table, &regs->gdt);
-    populate_table_reg(&assocs[9].value.table, &regs->idt);
-
-    regs->cr0       = assocs[10].value.reg64;
-    regs->cr2       = assocs[11].value.reg64;
-    regs->cr3       = assocs[12].value.reg64;
-    regs->cr4       = assocs[13].value.reg64;
-    regs->cr8       = assocs[14].value.reg64;
-    regs->efer      = assocs[15].value.reg64;
-    regs->apic_base = assocs[16].value.reg64;
-
-    pending_reg = assocs[17].value.pending_interruption.as_uint64;
-    populate_interrupt_bitmap(pending_reg, regs->interrupt_bitmap);
-}
-
-int mshv_get_standard_regs(int cpu_fd, struct StandardRegisters *regs)
+int mshv_get_standard_regs(CPUState *cpu)
 {
     size_t n_regs = sizeof(STANDARD_REGISTER_NAMES) / sizeof(hv_register_name);
     struct hv_register_assoc *assocs;
     int ret;
+    X86CPU *x86cpu = X86_CPU(cpu);
+    CPUX86State *env = &x86cpu->env;
+    int cpu_fd = mshv_vcpufd(cpu);
 
     assocs = g_new0(hv_register_assoc, n_regs);
     for (size_t i = 0; i < n_regs; i++) {
@@ -452,7 +434,7 @@ int mshv_get_standard_regs(int cpu_fd, struct StandardRegisters *regs)
         return -1;
     }
 
-    populate_standard_regs(assocs, regs);
+    populate_standard_regs(assocs, env);
 
     g_free(assocs);
     return 0;
@@ -498,11 +480,13 @@ int mshv_set_standard_regs(int cpu_fd, const struct StandardRegisters *regs)
     return 0;
 }
 
-int mshv_get_special_regs(int cpu_fd, struct SpecialRegisters *regs)
+int mshv_get_special_regs(CPUState *cpu)
 {
     size_t n_regs = sizeof(SPECIAL_REGISTER_NAMES) / sizeof(hv_register_name);
     struct hv_register_assoc *assocs;
     int ret;
+    X86CPU *x86cpu = X86_CPU(cpu);
+    int cpu_fd = mshv_vcpufd(cpu);
 
     assocs = g_new0(hv_register_assoc, n_regs);
     for (size_t i = 0; i < n_regs; i++) {
@@ -515,7 +499,7 @@ int mshv_get_special_regs(int cpu_fd, struct SpecialRegisters *regs)
         return -errno;
     }
 
-    populate_special_regs(assocs, regs);
+    populate_special_regs(assocs, x86cpu);
 
     g_free(assocs);
     return 0;
@@ -1215,7 +1199,8 @@ static int emulate_insn(CPUState *cpu,
     }
 
     WITH_QEMU_LOCK_GUARD(guard) {
-        ret = mshv_load_regs(cpu_fd, cpu);
+        /* ret = mshv_load_regs(cpu_fd, cpu); */
+        ret = mshv_load_regs(cpu);
         if (ret < 0) {
             error_report("failed to load registers");
             return -1;
@@ -1319,28 +1304,28 @@ static int handle_pio_str(CPUState *cpu,
     size_t repeat = repop ? info->rcx : 1;
     size_t insn_len = info->header.instruction_length;
     uint8_t data[4] = { 0 };
-    struct StandardRegisters standard_regs = { 0 };
-    struct SpecialRegisters special_regs = { 0 };
     bool direction_flag;
     uint32_t reg_names[3];
     uint64_t reg_values[3];
     int ret;
     uint64_t src, dst, rip, rax, rsi, rdi;
     struct X64Registers x64_regs = { 0 };
+    X86CPU *x86_cpu = X86_CPU(cpu);
+    CPUX86State *env = &x86_cpu->env;
     int cpu_fd = mshv_vcpufd(cpu);
 
-    ret = mshv_get_standard_regs(cpu_fd, &standard_regs);
+    ret = mshv_get_standard_regs(cpu);
     if (ret < 0) {
         error_report("failed to get standard registers");
         return -1;
     }
-    ret = mshv_get_special_regs(cpu_fd, &special_regs);
+    ret = mshv_get_special_regs(cpu);
     if (ret < 0) {
         error_report("failed to get special registers");
-        return ret;
+        return -1;
     }
 
-    direction_flag = (standard_regs.rflags & DF) != 0;
+    direction_flag = (env->eflags & DF) != 0;
 
     if (access_type == HV_X64_INTERCEPT_ACCESS_TYPE_WRITE) {
         src = linear_addr(cpu, info->rsi, R_DS);

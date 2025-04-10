@@ -35,7 +35,7 @@ static MshvMemoryEntry *find_entry_by_userspace_addr(uint64_t addr)
     return NULL;
 }
 
-static int set_guest_memory(int vm_fd, mshv_user_mem_region *region)
+static int set_guest_memory(int vm_fd, const mshv_user_mem_region *region)
 {
     int ret;
 
@@ -97,7 +97,7 @@ bool find_entry_idx_by_gpa(uint64_t addr, size_t *index)
     return false;
 }
 
-static bool find_overlap_region(size_t gpa_idx, MshvMemoryRegion *mr,
+static bool find_overlap_region(size_t gpa_idx, const MshvMemoryRegion *mr,
                                 size_t *overlap_idx)
 {
     MshvMemoryEntry *entry;
@@ -121,13 +121,14 @@ static bool find_overlap_region(size_t gpa_idx, MshvMemoryRegion *mr,
     return false;
 }
 
-static MshvMemoryEntry *find_mem_entry(GList *entries,
+static MshvMemoryEntry *find_mem_entry(const GList *entries,
                                        const MshvMemoryRegion *mr_1)
 {
     MshvMemoryEntry *item;
     MshvMemoryRegion *mr_2;
+    const GList *elem;
 
-    for(GList* elem = entries; elem != NULL; elem = elem->next) {
+    for(elem = entries; elem != NULL; elem = elem->next) {
         item = elem->data;
         /* the list is corrupt if we have a NULL entry */
         assert(item != NULL);
@@ -142,9 +143,6 @@ static MshvMemoryEntry *find_mem_entry(GList *entries,
 
 /* TODO: this is a port of mem_manager->add_del_mem. We have to see how
  * we can consolidate this.
- * We can probably combine mshv_add_del_mem() + mem_manager->add_del_mem()
- * mem_memanager is protected is wholly guarded by a mutex in the rust code
- * We are doing the same with mem_entries
  * */
 static inline int add_del_mem(int vm_fd, const MshvMemoryRegion *mr, bool add)
 {
@@ -204,7 +202,7 @@ static inline int add_del_mem(int vm_fd, const MshvMemoryRegion *mr, bool add)
     return 0;
 }
 
-bool map_overlapped_region(int vm_fd, uint64_t gpa)
+bool mshv_map_overlapped_region(int vm_fd, uint64_t gpa)
 {
     size_t gpa_idx, overlap_idx;
     MshvMemoryEntry *gpa_entry, *overlap_entry;

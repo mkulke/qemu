@@ -80,7 +80,7 @@ int mshv_store_regs(int cpu_fd, const CPUState *cpu)
 	regs.rflags = env->eflags;
 	regs.rip = env->eip;
 
-	ret = set_standard_regs_mgns(cpu_fd, &regs);
+	ret = mshv_set_standard_regs(cpu_fd, &regs);
 	if (ret < 0) {
 		perror("Failed to store standard registers");
 		return -1;
@@ -158,10 +158,10 @@ static int mshv_getput_regs(MshvState *mshv_state, CPUState *cpu, bool set)
 {
     X86CPU *x86cpu = X86_CPU(cpu);
     CPUX86State *env = &x86cpu->env;
-	X86CPUTopoInfo *topo_info = &env->topo_info;
     StandardRegisters regs = {0};
     SpecialRegisters sregs = {0};
     FloatingPointUnit fpu = {0};
+    MshvCpuState cpu_state = { .regs = &regs, .sregs = &sregs, .fpu = &fpu };
 	int cpu_fd = mshv_vcpufd(cpu);
     int ret = 0;
 
@@ -215,16 +215,7 @@ static int mshv_getput_regs(MshvState *mshv_state, CPUState *cpu, bool set)
         memset(&sregs.interrupt_bitmap, 0, sizeof(sregs.interrupt_bitmap));
         memset(&fpu, 0, sizeof(fpu));
 
-		mshv_configure_vcpu(cpu,
-							cpu_fd,
-							cpu->cpu_index,
-						    topo_info->dies_per_pkg,
-						    topo_info->cores_per_module / topo_info->dies_per_pkg,
-						    cpu->nr_threads,
-							&regs,
-							&sregs,
-							env->xcr0,
-							&fpu);
+		mshv_configure_vcpu(cpu, &cpu_state, env->xcr0);
     } else {
         cpu_set_apic_tpr(x86cpu->apic_state, sregs.cr8);
         cpu_set_apic_base(x86cpu->apic_state, sregs.apic_base);
@@ -236,14 +227,14 @@ static int mshv_getput_regs(MshvState *mshv_state, CPUState *cpu, bool set)
 #define MSR_ENTRIES_COUNT 64
 
 struct MsrList {
-    msr_entry entries[MSR_ENTRIES_COUNT];
+    MshvMsrEntry entries[MSR_ENTRIES_COUNT];
     uint32_t nmsrs;
 };
 
-static struct msr_entry *mshv_msr_entry_add(struct MsrList *msrs,
-                                            uint32_t index, uint64_t value)
+static MshvMsrEntry *mshv_msr_entry_add(struct MsrList *msrs, uint32_t index,
+                                        uint64_t value)
 {
-    struct msr_entry *entry = &msrs->entries[msrs->nmsrs];
+    MshvMsrEntry *entry = &msrs->entries[msrs->nmsrs];
 
     assert(msrs->nmsrs < MSR_ENTRIES_COUNT);
 
@@ -286,8 +277,7 @@ static int mshv_put_msrs(CPUState *cpu)
     mshv_msr_entry_add(msrs, MSR_IA32_SMBASE, env->smbase);
     mshv_msr_entry_add(msrs, MSR_IA32_SPEC_CTRL, env->spec_ctrl);
     mshv_msr_entry_add(msrs, MSR_VIRT_SSBD, env->virt_ssbd);
-    /* mshv_configure_msr(mshv_vcpufd(cpu), &msrs->entries[0], msrs->nmsrs); */
-    ret = configure_msr_mgns(mshv_vcpufd(cpu), &msrs->entries[0], msrs->nmsrs);
+    ret = mshv_configure_msr(mshv_vcpufd(cpu), &msrs->entries[0], msrs->nmsrs);
     g_free(msrs);
     return ret;
 }

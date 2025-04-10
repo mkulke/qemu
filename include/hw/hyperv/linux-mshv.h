@@ -22,7 +22,7 @@
 
 #define MSHV_IOCTL	0xB8
 
-enum hv_register_name {
+typedef enum hv_register_name {
 	/* Pending Interruption Register */
 	HV_REGISTER_PENDING_INTERRUPTION = 0x00010002,
 
@@ -197,7 +197,7 @@ enum hv_register_name {
 	HV_REGISTER_SIMP		= 0x000A0013,
 	HV_REGISTER_EOM			= 0x000A0014,
 	HV_REGISTER_SIRBP		= 0x000A0015,
-};
+} hv_register_name;
 
 enum hv_intercept_type {
 	HV_INTERCEPT_TYPE_X64_IO_PORT		= 0X00000000,
@@ -321,7 +321,7 @@ union hv_x64_msr_npiep_config_contents {
 	};
 };
 
-struct hv_x64_segment_register {
+typedef struct hv_x64_segment_register {
 	__u64 base;
 	__u32 limit;
 	__u16 selector;
@@ -339,13 +339,13 @@ struct hv_x64_segment_register {
 		};
 		__u16 attributes;
 	};
-};
+} hv_x64_segment_register;
 
-struct hv_x64_table_register {
+typedef struct hv_x64_table_register {
 	__u16 pad[3];
 	__u16 limit;
 	__u64 base;
-};
+} hv_x64_table_register;
 
 union hv_x64_fp_control_status_register {
 	struct hv_u128 as_uint128;
@@ -429,12 +429,12 @@ union hv_register_value {
 	union hv_x64_register_sev_control sev_control;
 };
 
-struct hv_register_assoc {
+typedef struct hv_register_assoc {
 	__u32 name;			/* enum hv_register_name */
 	__u32 reserved1;
 	__u64 reserved2;
 	union hv_register_value value;
-};
+} hv_register_assoc;
 
 #define MSHV_VP_MAX_REGISTERS	128
 
@@ -641,12 +641,12 @@ union hv_translate_gva_result {
 	};
 };
 
-struct mshv_translate_gva {
+typedef struct mshv_translate_gva {
 	__u64 gva;
 	__u64 flags;
 	union hv_translate_gva_result *result;
 	__u64 *gpa;
-};
+} mshv_translate_gva;
 
 /* /dev/mshv */
 #define MSHV_CREATE_PARTITION	_IOW(MSHV_IOCTL, 0x00, struct mshv_create_partition)
@@ -681,7 +681,7 @@ enum {
 	MSHV_VP_STATE_COUNT,
 };
 
-struct mshv_get_set_vp_state {
+typedef struct mshv_get_set_vp_state {
 	__u8 type;	/* MSHV_VP_STATE_* */
 	__u8 rsvd[3];	/* MBZ */
 	__u32 buf_sz;	/* in - 4k page-aligned size of buffer.
@@ -689,7 +689,7 @@ struct mshv_get_set_vp_state {
 			 * On EINVAL, check this to see if buffer was too small
 			 */
 	__u64 buf_ptr;	/* 4k page-aligned data buffer. */
-};
+} mshv_get_set_vp_state;
 
 struct hv_local_interrupt_controller_state {
 	/* HV_X64_INTERRUPT_CONTROLLER_STATE */

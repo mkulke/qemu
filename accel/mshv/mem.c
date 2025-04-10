@@ -1,8 +1,8 @@
-#include "hw/hyperv/linux-mshv.h"
 #include "qemu/osdep.h"
 #include "qemu/lockable.h"
 #include "qemu/error-report.h"
 #include "system/mshv.h"
+#include "hw/hyperv/linux-mshv.h"
 #include <stdint.h>
 #include <sys/ioctl.h>
 
@@ -159,7 +159,7 @@ static inline int add_del_mem(int vm_fd, const MshvMemoryRegion *mr, bool add)
         if (!entry) {
             /* delete */
             if (!add) {
-                perror("mem entry selected for removal does not exist\n");
+                error_report("mem entry selected for removal does not exist");
                 return -1;
             }
 
@@ -173,9 +173,8 @@ static inline int add_del_mem(int vm_fd, const MshvMemoryRegion *mr, bool add)
 
             if (ret == -MSHV_USERSPACE_ADDR_REMAP_ERROR) {
                 warn_report(
-                    "ignoring failed remapping of userspace_addr: 0x%016lx-0x%016lx\n",
-                    mr->userspace_addr,
-                    mr->userspace_addr + mr->memory_size);
+                    "ignoring failed remapping of userspace_addr: 0x%016lx",
+                    mr->userspace_addr);
                 ret = 0;
             }
 

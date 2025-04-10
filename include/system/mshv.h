@@ -255,40 +255,38 @@ typedef struct X64Registers {
   uintptr_t count;
 } X64Registers;
 
-typedef struct CpuStateMgns {
-	StandardRegisters standard_regs;
-	SpecialRegisters special_regs;
-} CpuStateMgns;
+typedef struct MshvCpuState {
+	StandardRegisters *regs;
+	SpecialRegisters *sregs;
+    FloatingPointUnit *fpu;
+} MshvCpuState;
 
-enum MshvVmExit {
+typedef struct MshvCpuTopology {
+    uint8_t id;
+    uint8_t n_dies;
+    uint8_t n_cores_per_die;
+    uint8_t n_threads_per_core;
+} MshvCpuTopology;
+
+typedef enum MshvVmExit {
 	MshvVmExitIgnore   = 0,
 	MshvVmExitShutdown = 1,
 	MshvVmExitSpecial  = 2,
-};
+} MshvVmExit;
 
 void mshv_init_cpu_logic(void);
 int mshv_create_vcpu(int vm_fd, uint8_t vp_index, int *cpu_fd);
 void mshv_remove_vcpu(int vm_fd, int cpu_fd);
-int mshv_configure_vcpu(CPUState *cpu,
-		                int cpu_fd,
-						uint8_t id,
-						uint8_t ndies,
-						uint8_t ncores_per_die,
-						uint8_t nthreads_per_core,
-						struct StandardRegisters *standard_regs,
-						struct SpecialRegisters *special_regs,
-						uint64_t xcr0,
-						struct FloatingPointUnit *fpu_regs);
+int mshv_configure_vcpu(CPUState *cpu, const MshvCpuState *state,
+                        uint64_t xcr0);
 int mshv_get_standard_regs(int cpu_fd, struct StandardRegisters *regs);
 int mshv_get_special_regs(int cpu_fd, struct SpecialRegisters *regs);
-int set_x64_registers_mgns(int cpu_fd, const struct X64Registers *regs);
-enum MshvVmExit run_vcpu(int vm_fd, CPUState *cpu, hv_message *msg);
-int translate_gva(int cpu_fd, uint64_t gva, uint64_t *gpa, uint64_t flags);
+int mshv_run_vcpu(int vm_fd, CPUState *cpu, hv_message *msg, MshvVmExit *exit);
 
 /* for use in the local sw emu */
 int mshv_load_regs(int cpu_fd, CPUState *cpu);
 int mshv_store_regs(int cpu_fd, const CPUState *cpu);
-int set_standard_regs_mgns(int cpu_fd, const struct StandardRegisters *regs);
+int mshv_set_standard_regs(int cpu_fd, const struct StandardRegisters *regs);
 
 /* for use in the remote sw emu */
 int guest_mem_read_fn(uint64_t gpa, uint8_t *data, uintptr_t size,
@@ -303,15 +301,15 @@ void pio_read_fn(uint64_t port, uint8_t *data, uintptr_t size,
                  bool is_secure_mode);
 
 /* msr */
-typedef struct msr_entry {
+typedef struct MshvMsrEntry {
   uint32_t index;
   uint32_t reserved;
   uint64_t data;
-} msr_entry;
+} MshvMsrEntry;
 
-int configure_msr_mgns(int cpu_fd, msr_entry *msrs, size_t n_msrs);
-int is_supported_msr_mgns(uint32_t msr);
-int msr_to_hv_reg_name_mgns(uint32_t msr, uint32_t *hv_reg);
+int mshv_configure_msr(int cpu_fd, const MshvMsrEntry *msrs, size_t n_msrs);
+int mshv_is_supported_msr(uint32_t msr);
+int mshv_msr_to_hv_reg_name(uint32_t msr, uint32_t *hv_reg);
 
 /* memory */
 void init_dirty_log_slots_mgns(void);
@@ -321,7 +319,7 @@ int remove_dirty_log_slot_mgns(uint64_t guest_pfn);
 int mshv_add_mem(int vm_fd, const MshvMemoryRegion *mr);
 int mshv_remove_mem(int vm_fd, const MshvMemoryRegion *mr);
 bool find_entry_idx_by_gpa(uint64_t addr, size_t *index);
-bool map_overlapped_region(int vm_fd, uint64_t gpa);
+bool mshv_map_overlapped_region(int vm_fd, uint64_t gpa);
 
 /* interrupt */
 void mshv_init_msicontrol(void);

@@ -8,9 +8,8 @@
 
 static struct MsiControlMgns *msi_control_mgns;
 static QemuMutex msi_control_mutex_mgns;
-/* gint global_counter_mgns = 0; */
 
-void init_msicontrol_mgns(void) {
+void mshv_init_msicontrol(void) {
     qemu_mutex_init(&msi_control_mutex_mgns);
     msi_control_mgns = g_new0(struct MsiControlMgns, 1);
 	msi_control_mgns->gsi_routes = g_hash_table_new(g_direct_hash, g_direct_equal);

@@ -8,7 +8,7 @@
 
 static MshvMemManager *mem_manager;
 
-void init_mem_manager_mgns(void)
+void mshv_init_mem_manager(void)
 {
     mem_manager = g_new0(MshvMemManager, 1);
     qemu_mutex_init(&mem_manager->mutex);
@@ -250,12 +250,12 @@ bool map_overlapped_region(int vm_fd, uint64_t gpa)
     return true;
 }
 
-int add_mem_mgns(int vm_fd, const MshvMemoryRegion *mr)
+int mshv_add_mem(int vm_fd, const MshvMemoryRegion *mr)
 {
     return add_del_mem(vm_fd, mr, true);
 }
 
-int remove_mem_mgns(int vm_fd, const MshvMemoryRegion *mr)
+int mshv_remove_mem(int vm_fd, const MshvMemoryRegion *mr)
 {
     return add_del_mem(vm_fd, mr, false);
 }

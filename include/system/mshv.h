@@ -93,8 +93,6 @@ typedef enum MshvVmType {
 
 int mshv_arch_put_registers(MshvState *s, CPUState *cpu);
 
-int mshv_arch_get_registers(MshvState *s, CPUState *cpu);
-
 #else //! CONFIG_MSHV_IS_POSSIBLE
 #define mshv_enabled() false
 #endif
@@ -279,12 +277,12 @@ int mshv_create_vcpu(int vm_fd, uint8_t vp_index, int *cpu_fd);
 void mshv_remove_vcpu(int vm_fd, int cpu_fd);
 int mshv_configure_vcpu(CPUState *cpu, const MshvCpuState *state,
                         uint64_t xcr0);
-int mshv_get_standard_regs(int cpu_fd, struct StandardRegisters *regs);
-int mshv_get_special_regs(int cpu_fd, struct SpecialRegisters *regs);
+int mshv_get_standard_regs(CPUState *cpu);
+int mshv_get_special_regs(CPUState *cpu);
 int mshv_run_vcpu(int vm_fd, CPUState *cpu, hv_message *msg, MshvVmExit *exit);
 
-/* for use in the local sw emu */
-int mshv_load_regs(int cpu_fd, CPUState *cpu);
+/* TODO: for use in the local sw emu, can probably become static */
+int mshv_load_regs(CPUState *cpu);
 int mshv_store_regs(int cpu_fd, const CPUState *cpu);
 int mshv_set_standard_regs(int cpu_fd, const struct StandardRegisters *regs);
 

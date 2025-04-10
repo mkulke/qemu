@@ -100,7 +100,7 @@ static int add_msi_routing(uint64_t addr, uint32_t data)
     return gsi;
 }
 
-static int commit_msi_routing_table(int vm_fd)
+static int commit_msi_routing_table(void)
 {
     guint len;
     int i, ret;
@@ -108,6 +108,7 @@ static int commit_msi_routing_table(int vm_fd)
     struct mshv_user_irq_table *table;
     GHashTableIter iter;
     gpointer key, value;
+    int vm_fd = mshv_state->vm;
 
     WITH_QEMU_LOCK_GUARD(&msi_control_mutex) {
         if (!msi_control->updated) {
@@ -223,25 +224,25 @@ static int unregister_irqfd(int vm_fd, int event_fd, uint32_t gsi)
     return 0;
 }
 
-static int mshv_irqchip_update_irqfd_notifier_gsi(MshvState *s,
-                                                  EventNotifier *event,
-                                                  EventNotifier *resample,
-                                                  int virq, bool add)
+static int irqchip_update_irqfd_notifier_gsi(const EventNotifier *event,
+                                             const EventNotifier *resample,
+                                             int virq, bool add)
 {
     int fd = event_notifier_get_fd(event);
     int rfd = resample ? event_notifier_get_fd(resample) : -1;
+    int vm_fd = mshv_state->vm;
 
     trace_mshv_irqchip_update_irqfd_notifier_gsi(fd, rfd, virq, add);
 
     if (!add) {
-        return unregister_irqfd(s->vm, fd, virq);
+        return unregister_irqfd(vm_fd, fd, virq);
     }
 
     if (rfd > 0) {
-        return register_irqfd_with_resample(s->vm, fd, rfd, virq);
+        return register_irqfd_with_resample(vm_fd, fd, rfd, virq);
     }
 
-    return register_irqfd(s->vm, fd, virq);
+    return register_irqfd(vm_fd, fd, virq);
 }
 
 
@@ -311,20 +312,27 @@ int mshv_request_interrupt(int vm_fd, uint32_t interrupt_type, uint32_t vector,
     }
     return 0;
 }
+
 void mshv_irqchip_commit_routes(void)
 {
-    commit_msi_routing_table(mshv_state->vm);
+    int ret;
+
+    ret = commit_msi_routing_table();
+    if (ret < 0) {
+        error_report("Failed to commit msi routing table");
+        abort();
+    }
 }
 
-int mshv_irqchip_add_irqfd_notifier_gsi(EventNotifier *n, EventNotifier *rn,
+int mshv_irqchip_add_irqfd_notifier_gsi(const EventNotifier *event,
+                                        const EventNotifier *resample,
                                         int virq)
 {
-    return mshv_irqchip_update_irqfd_notifier_gsi(mshv_state, n, rn, virq,
-                                                  true);
+    return irqchip_update_irqfd_notifier_gsi(event, resample, virq, true);
 }
 
-int mshv_irqchip_remove_irqfd_notifier_gsi(EventNotifier *n, int virq)
+int mshv_irqchip_remove_irqfd_notifier_gsi(const EventNotifier *event,
+                                           int virq)
 {
-    return mshv_irqchip_update_irqfd_notifier_gsi(mshv_state, n, NULL, virq,
-                                                  false);
+    return irqchip_update_irqfd_notifier_gsi(event, NULL, virq, false);
 }

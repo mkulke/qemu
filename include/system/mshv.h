@@ -336,9 +336,11 @@ int mshv_irqchip_add_msi_route(int vector, PCIDevice *dev);
 int mshv_irqchip_update_msi_route(int virq, MSIMessage msg, PCIDevice *dev);
 void mshv_irqchip_commit_routes(void);
 void mshv_irqchip_release_virq(int virq);
-int mshv_irqchip_add_irqfd_notifier_gsi(EventNotifier *n, EventNotifier *rn,
-                                        int virq);
-int mshv_irqchip_remove_irqfd_notifier_gsi(EventNotifier *n, int virq);
+// int mshv_irqchip_add_irqfd_notifier_gsi(EventNotifier *n, EventNotifier *rn,
+//                                         int virq);
+int mshv_irqchip_add_irqfd_notifier_gsi(const EventNotifier *n,
+                                        const EventNotifier *rn, int virq);
+int mshv_irqchip_remove_irqfd_notifier_gsi(const EventNotifier *n, int virq);
 
 /* taken from github.com/rust-vmm/mshv-ioctls/src/ioctls/system.rs */
 static const uint32_t msr_list_mgns[] = {

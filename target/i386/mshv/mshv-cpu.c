@@ -1,20 +1,1503 @@
 #include "qemu/osdep.h"
-#include "cpu.h"
-#include "system/mshv.h"
-#include "emulate/x86_flags.h"
+#include "qemu/lockable.h"
 #include "qemu/error-report.h"
+#include "qemu/memalign.h"
+#include "qemu/typedefs.h"
+#include "system/mshv.h"
+#include "hw/hyperv/linux-mshv.h"
+#include "cpu.h"
+#include <stdint.h>
+#include <sys/ioctl.h>
+#include <sys/types.h>
+
+#include "emulate/x86_decode.h"
+#include "emulate/x86_emu.h"
+#include "emulate/x86_flags.h"
+#include "qemu/atomic.h"
+#include "trace-accel_mshv.h"
+#include "trace.h"
+
+#define MSR_ENTRIES_COUNT 64
+
+static QemuMutex *cpu_guards_lock;
+static GHashTable *cpu_guards;
+
+/* MTRR constants */
+/* IA32_MTRR_DEF_TYPE MSR: E (MTRRs enabled) flag, bit 11 */
+static u_int64_t MTRR_ENABLE = 0x800;
+static u_int64_t MTRR_MEM_TYPE_WB = 0x6;
+
+/* Defines poached from apicdef.h kernel header. */
+static u_int32_t APIC_MODE_NMI = 0x4;
+static u_int32_t APIC_MODE_EXTINT = 0x7;
+
+typedef struct X64Registers {
+  const uint32_t *names;
+  const uint64_t *values;
+  uintptr_t count;
+} X64Registers;
+
+static enum hv_register_name STANDARD_REGISTER_NAMES[18] = {
+    HV_X64_REGISTER_RAX,
+    HV_X64_REGISTER_RBX,
+    HV_X64_REGISTER_RCX,
+    HV_X64_REGISTER_RDX,
+    HV_X64_REGISTER_RSI,
+    HV_X64_REGISTER_RDI,
+    HV_X64_REGISTER_RSP,
+    HV_X64_REGISTER_RBP,
+    HV_X64_REGISTER_R8,
+    HV_X64_REGISTER_R9,
+    HV_X64_REGISTER_R10,
+    HV_X64_REGISTER_R11,
+    HV_X64_REGISTER_R12,
+    HV_X64_REGISTER_R13,
+    HV_X64_REGISTER_R14,
+    HV_X64_REGISTER_R15,
+    HV_X64_REGISTER_RIP,
+    HV_X64_REGISTER_RFLAGS,
+};
+
+static enum hv_register_name SPECIAL_REGISTER_NAMES[18] = {
+    HV_X64_REGISTER_CS,
+    HV_X64_REGISTER_DS,
+    HV_X64_REGISTER_ES,
+    HV_X64_REGISTER_FS,
+    HV_X64_REGISTER_GS,
+    HV_X64_REGISTER_SS,
+    HV_X64_REGISTER_TR,
+    HV_X64_REGISTER_LDTR,
+    HV_X64_REGISTER_GDTR,
+    HV_X64_REGISTER_IDTR,
+    HV_X64_REGISTER_CR0,
+    HV_X64_REGISTER_CR2,
+    HV_X64_REGISTER_CR3,
+    HV_X64_REGISTER_CR4,
+    HV_X64_REGISTER_CR8,
+    HV_X64_REGISTER_EFER,
+    HV_X64_REGISTER_APIC_BASE,
+    HV_REGISTER_PENDING_INTERRUPTION,
+};
+
+static enum hv_register_name FPU_REGISTER_NAMES[26] = {
+    HV_X64_REGISTER_XMM0,
+    HV_X64_REGISTER_XMM1,
+    HV_X64_REGISTER_XMM2,
+    HV_X64_REGISTER_XMM3,
+    HV_X64_REGISTER_XMM4,
+    HV_X64_REGISTER_XMM5,
+    HV_X64_REGISTER_XMM6,
+    HV_X64_REGISTER_XMM7,
+    HV_X64_REGISTER_XMM8,
+    HV_X64_REGISTER_XMM9,
+    HV_X64_REGISTER_XMM10,
+    HV_X64_REGISTER_XMM11,
+    HV_X64_REGISTER_XMM12,
+    HV_X64_REGISTER_XMM13,
+    HV_X64_REGISTER_XMM14,
+    HV_X64_REGISTER_XMM15,
+    HV_X64_REGISTER_FP_MMX0,
+    HV_X64_REGISTER_FP_MMX1,
+    HV_X64_REGISTER_FP_MMX2,
+    HV_X64_REGISTER_FP_MMX3,
+    HV_X64_REGISTER_FP_MMX4,
+    HV_X64_REGISTER_FP_MMX5,
+    HV_X64_REGISTER_FP_MMX6,
+    HV_X64_REGISTER_FP_MMX7,
+    HV_X64_REGISTER_FP_CONTROL_STATUS,
+    HV_X64_REGISTER_XMM_CONTROL_STATUS,
+};
+
+static int translate_gva(int cpu_fd, uint64_t gva, uint64_t *gpa, uint64_t flags)
+{
+    int ret;
+    union hv_translate_gva_result result = { 0 };
+
+    *gpa = 0;
+    mshv_translate_gva args = {
+        .gva = gva,
+        .flags = flags,
+        .gpa = (__u64 *)gpa,
+        .result = &result,
+    };
+
+    ret = ioctl(cpu_fd, MSHV_TRANSLATE_GVA, &args);
+    if (ret < 0) {
+        error_report("failed to invoke gpa->gva translation");
+        return -errno;
+    }
+    if (result.result_code != HV_TRANSLATE_GVA_SUCCESS) {
+        error_report("failed to translate gva (" TARGET_FMT_lx ") to gpa", gva);
+        return -1;
+
+    }
+
+    return 0;
+}
+
+static int guest_mem_read_with_gva(const CPUState *cpu, uint64_t gva,
+                                   uint8_t *data, uintptr_t size,
+                                   bool fetch_instruction)
+{
+    int ret;
+    uint64_t gpa, flags;
+    int cpu_fd = mshv_vcpufd(cpu);
+
+    flags = HV_TRANSLATE_GVA_VALIDATE_READ;
+    ret = translate_gva(cpu_fd, gva, &gpa, flags);
+    if (ret < 0) {
+        error_report("failed to translate gva to gpa");
+        return -1;
+    }
+    ret = mshv_guest_mem_read(gpa, data, size, false, fetch_instruction);
+    if (ret < 0) {
+        error_report("failed to read from guest memory");
+        return -1;
+    }
+
+    return 0;
+}
+
+static int guest_mem_write_with_gva(const CPUState *cpu, uint64_t gva,
+                                    const uint8_t *data, uintptr_t size)
+{
+    int ret;
+    uint64_t gpa, flags;
+    int cpu_fd = mshv_vcpufd(cpu);
+
+    flags = HV_TRANSLATE_GVA_VALIDATE_WRITE;
+    ret = translate_gva(cpu_fd, gva, &gpa, flags);
+    if (ret < 0) {
+        perror("failed to translate gva to gpa");
+        return -1;
+    }
+    ret = mshv_guest_mem_write(gpa, data, size, false);
+    if (ret < 0) {
+        perror("failed to write to guest memory");
+        return -1;
+    }
+    return 0;
+}
+
+
+static void write_mem_emu(CPUState *cpu, void *data, target_ulong addr,
+                          int bytes)
+{
+    if (guest_mem_write_with_gva(cpu, addr, data, bytes) < 0) {
+        error_report("failed to write memory");
+        abort();
+    }
+}
+
+static void read_mem_emu(CPUState *cpu, void *data, target_ulong addr,
+                         int bytes)
+{
+    if (guest_mem_read_with_gva(cpu, addr, data, bytes, false) < 0) {
+        error_report("failed to read memory");
+        abort();
+    }
+}
+
+static void fetch_instruction_emu(CPUState *cpu, void *data,
+                                  target_ulong addr, int bytes)
+{
+    if (guest_mem_read_with_gva(cpu, addr, data, bytes, true) < 0) {
+        error_report("failed to fetch instruction");
+        abort();
+    }
+}
+
+static void read_segment_descriptor_emu(CPUState *cpu,
+                                        struct x86_segment_descriptor *desc,
+                                        enum X86Seg seg_idx)
+{
+    bool ret;
+    X86CPU *x86_cpu = X86_CPU(cpu);
+    CPUX86State *env = &x86_cpu->env;
+    SegmentCache *seg = &env->segs[seg_idx];
+    x86_segment_selector sel = { .sel = seg->selector & 0xFFFF };
+
+    ret = x86_read_segment_descriptor(cpu, desc, sel);
+    if (ret == false) {
+        error_report("failed to read segment descriptor");
+        abort();
+    }
+}
+
+static void handle_io_emu(CPUState *cpu, uint16_t port, void *data, int direction,
+                          int size, int count)
+{
+    error_report("handle_io_emu not implemented");
+    abort();
+}
+
+static void simulate_rdmsr_emu(CPUState *cpu)
+{
+    error_report("simulate_rdmsr_emu not implemented");
+    abort();
+}
+
+static void simulate_wrmsr_emu(CPUState *cpu)
+{
+    error_report("simulate_wrmsr_emu not implemented");
+    abort();
+}
+
+static const struct x86_emul_ops mshv_x86_emul_ops = {
+    .fetch_instruction = fetch_instruction_emu,
+    .read_mem = read_mem_emu,
+    .write_mem = write_mem_emu,
+    .read_segment_descriptor = read_segment_descriptor_emu,
+    .handle_io = handle_io_emu,
+    .simulate_rdmsr = simulate_rdmsr_emu,
+    .simulate_wrmsr = simulate_wrmsr_emu,
+};
+
+void mshv_init_cpu_logic(void)
+{
+    cpu_guards_lock = g_new0(QemuMutex, 1);
+    qemu_mutex_init(cpu_guards_lock);
+    cpu_guards = g_hash_table_new(g_direct_hash, g_direct_equal);
+
+    init_decoder();
+    init_emu(&mshv_x86_emul_ops);
+}
+
+static void add_cpu_guard(int cpu_fd)
+{
+    QemuMutex *guard;
+
+    WITH_QEMU_LOCK_GUARD(cpu_guards_lock) {
+        guard = g_new0(QemuMutex, 1);
+        qemu_mutex_init(guard);
+        g_hash_table_insert(cpu_guards, GUINT_TO_POINTER(cpu_fd), guard);
+    }
+}
+
+static void remove_cpu_guard(int cpu_fd)
+{
+    QemuMutex *guard;
+
+    WITH_QEMU_LOCK_GUARD(cpu_guards_lock) {
+        guard = g_hash_table_lookup(cpu_guards, GUINT_TO_POINTER(cpu_fd));
+        if (guard) {
+            qemu_mutex_destroy(guard);
+            g_free(guard);
+            g_hash_table_remove(cpu_guards, GUINT_TO_POINTER(cpu_fd));
+        }
+    }
+}
+
+int mshv_create_vcpu(int vm_fd, uint8_t vp_index, int *cpu_fd)
+{
+    int ret;
+    struct mshv_create_vp vp_arg = {
+        .vp_index = vp_index,
+    };
+    ret = ioctl(vm_fd, MSHV_CREATE_VP, &vp_arg);
+    if (ret < 0) {
+        error_report("failed to create mshv vcpu: %s", strerror(errno));
+        return -1;
+    }
+
+    add_cpu_guard(ret);
+    *cpu_fd = ret;
+
+    return 0;
+}
+
+void mshv_remove_vcpu(int vm_fd, int cpu_fd)
+{
+    /* TODO: don't we have to perform an ioctl to remove the vcpu?
+     * there is WHvDeleteVirtualProcessor in the WHV api
+     */
+    remove_cpu_guard(cpu_fd);
+}
+
+static int get_generic_regs(int cpu_fd, struct hv_register_assoc *assocs,
+                            size_t n_regs)
+{
+    struct mshv_vp_registers input = {
+        .count = n_regs,
+        .regs = assocs,
+    };
+
+    return ioctl(cpu_fd, MSHV_GET_VP_REGISTERS, &input);
+}
+
+int mshv_set_generic_regs(int cpu_fd, hv_register_assoc *assocs, size_t n_regs)
+{
+    struct mshv_vp_registers input = {
+        .count = n_regs,
+        .regs = assocs,
+    };
+
+    return ioctl(cpu_fd, MSHV_SET_VP_REGISTERS, &input);
+}
+
+static void populate_standard_regs(const hv_register_assoc *assocs,
+                                   CPUX86State *env)
+{
+	env->regs[R_EAX] = assocs[0].value.reg64;
+	env->regs[R_EBX] = assocs[1].value.reg64;
+	env->regs[R_ECX] = assocs[2].value.reg64;
+	env->regs[R_EDX] = assocs[3].value.reg64;
+	env->regs[R_ESI] = assocs[4].value.reg64;
+	env->regs[R_EDI] = assocs[5].value.reg64;
+	env->regs[R_ESP] = assocs[6].value.reg64;
+	env->regs[R_EBP] = assocs[7].value.reg64;
+	env->regs[R_R8]  = assocs[8].value.reg64;
+	env->regs[R_R9]  = assocs[9].value.reg64;
+	env->regs[R_R10] = assocs[10].value.reg64;
+	env->regs[R_R11] = assocs[11].value.reg64;
+	env->regs[R_R12] = assocs[12].value.reg64;
+	env->regs[R_R13] = assocs[13].value.reg64;
+	env->regs[R_R14] = assocs[14].value.reg64;
+	env->regs[R_R15] = assocs[15].value.reg64;
+
+    env->eip = assocs[16].value.reg64;
+	env->eflags = assocs[17].value.reg64;
+    rflags_to_lflags(env);
+}
+
+static void populate_segment_reg(const hv_x64_segment_register *hv_seg,
+                                 SegmentCache *seg)
+{
+    memset(seg, 0, sizeof(SegmentCache));
+
+    seg->base = hv_seg->base;
+    seg->limit = hv_seg->limit;
+    seg->selector = hv_seg->selector;
+
+    seg->flags = (hv_seg->segment_type << DESC_TYPE_SHIFT)
+                 | (hv_seg->present * DESC_P_MASK)
+                 | (hv_seg->descriptor_privilege_level << DESC_DPL_SHIFT)
+                 | (hv_seg->_default << DESC_B_SHIFT)
+                 | (hv_seg->non_system_segment * DESC_S_MASK)
+                 | (hv_seg->_long << DESC_L_SHIFT)
+                 | (hv_seg->granularity * DESC_G_MASK)
+                 | (hv_seg->available * DESC_AVL_MASK);
+
+}
+
+static void populate_table_reg(const hv_x64_table_register *hv_seg,
+                               SegmentCache *tbl)
+{
+    memset(tbl, 0, sizeof(SegmentCache));
+
+    tbl->base = hv_seg->base;
+    tbl->limit = hv_seg->limit;
+}
+
+static void populate_special_regs(const hv_register_assoc *assocs,
+                                  X86CPU *x86cpu)
+{
+    CPUX86State *env = &x86cpu->env;
+
+    populate_segment_reg(&assocs[0].value.segment, &env->segs[R_CS]);
+    populate_segment_reg(&assocs[1].value.segment, &env->segs[R_DS]);
+    populate_segment_reg(&assocs[2].value.segment, &env->segs[R_ES]);
+    populate_segment_reg(&assocs[3].value.segment, &env->segs[R_FS]);
+    populate_segment_reg(&assocs[4].value.segment, &env->segs[R_GS]);
+    populate_segment_reg(&assocs[5].value.segment, &env->segs[R_SS]);
+
+    /* TODO: should we set TR + LDT? */
+    /* populate_segment_reg(&assocs[6].value.segment, &regs->tr); */
+    /* populate_segment_reg(&assocs[7].value.segment, &regs->ldt); */
+
+    populate_table_reg(&assocs[8].value.table, &env->gdt);
+    populate_table_reg(&assocs[9].value.table, &env->idt);
+
+    env->cr[0] = assocs[10].value.reg64;
+    env->cr[2] = assocs[11].value.reg64;
+    env->cr[3] = assocs[12].value.reg64;
+    env->cr[4] = assocs[13].value.reg64;
+
+	cpu_set_apic_tpr(x86cpu->apic_state, assocs[14].value.reg64);
+	env->efer = assocs[15].value.reg64;
+	cpu_set_apic_base(x86cpu->apic_state, assocs[16].value.reg64);
+
+    /* TODO: should we set those? */
+    /* pending_reg = assocs[17].value.pending_interruption.as_uint64; */
+    /* populate_interrupt_bitmap(pending_reg, regs->interrupt_bitmap); */
+}
+
+int mshv_get_standard_regs(CPUState *cpu)
+{
+    size_t n_regs = sizeof(STANDARD_REGISTER_NAMES) / sizeof(hv_register_name);
+    struct hv_register_assoc *assocs;
+    int ret;
+    X86CPU *x86cpu = X86_CPU(cpu);
+    CPUX86State *env = &x86cpu->env;
+    int cpu_fd = mshv_vcpufd(cpu);
+
+    assocs = g_new0(hv_register_assoc, n_regs);
+    for (size_t i = 0; i < n_regs; i++) {
+        assocs[i].name = STANDARD_REGISTER_NAMES[i];
+    }
+    ret = get_generic_regs(cpu_fd, assocs, n_regs);
+    if (ret < 0) {
+        error_report("failed to get standard registers");
+        g_free(assocs);
+        return -1;
+    }
+
+    populate_standard_regs(assocs, env);
+
+    g_free(assocs);
+    return 0;
+}
+
+static int set_standard_regs(CPUState *cpu)
+{
+    X86CPU *x86cpu = X86_CPU(cpu);
+    CPUX86State *env = &x86cpu->env;
+    struct hv_register_assoc *assocs;
+    size_t n_regs = sizeof(STANDARD_REGISTER_NAMES) / sizeof(hv_register_name);
+    int ret;
+    int cpu_fd = mshv_vcpufd(cpu);
+
+    assocs = g_new0(hv_register_assoc, n_regs);
+
+    /* set names */
+    for (size_t i = 0; i < n_regs; i++) {
+        assocs[i].name = STANDARD_REGISTER_NAMES[i];
+    }
+    assocs[0].value.reg64 = env->regs[R_EAX];
+    assocs[1].value.reg64 = env->regs[R_EBX];
+    assocs[2].value.reg64 = env->regs[R_ECX];
+    assocs[3].value.reg64 = env->regs[R_EDX];
+    assocs[4].value.reg64 = env->regs[R_ESI];
+    assocs[5].value.reg64 = env->regs[R_EDI];
+    assocs[6].value.reg64 = env->regs[R_ESP];
+    assocs[7].value.reg64 = env->regs[R_EBP];
+    assocs[8].value.reg64 = env->regs[R_R8];
+    assocs[9].value.reg64 = env->regs[R_R9];
+    assocs[10].value.reg64 = env->regs[R_R10];
+    assocs[11].value.reg64 = env->regs[R_R11];
+    assocs[12].value.reg64 = env->regs[R_R12];
+    assocs[13].value.reg64 = env->regs[R_R13];
+    assocs[14].value.reg64 = env->regs[R_R14];
+    assocs[15].value.reg64 = env->regs[R_R15];
+    assocs[16].value.reg64 = env->eip;
+    lflags_to_rflags(env);
+    assocs[17].value.reg64 = env->eflags;
+
+    ret = mshv_set_generic_regs(cpu_fd, assocs, n_regs);
+    g_free(assocs);
+    if (ret < 0) {
+        error_report("failed to set standard registers");
+        return -errno;
+    }
+    return 0;
+}
+
+int mshv_get_special_regs(CPUState *cpu)
+{
+    size_t n_regs = sizeof(SPECIAL_REGISTER_NAMES) / sizeof(hv_register_name);
+    struct hv_register_assoc *assocs;
+    int ret;
+    X86CPU *x86cpu = X86_CPU(cpu);
+    int cpu_fd = mshv_vcpufd(cpu);
+
+    assocs = g_new0(hv_register_assoc, n_regs);
+    for (size_t i = 0; i < n_regs; i++) {
+        assocs[i].name = SPECIAL_REGISTER_NAMES[i];
+    }
+    ret = get_generic_regs(cpu_fd, assocs, n_regs);
+    if (ret < 0) {
+        error_report("failed to get special registers");
+        g_free(assocs);
+        return -errno;
+    }
+
+    populate_special_regs(assocs, x86cpu);
+
+    g_free(assocs);
+    return 0;
+}
+
+static void populate_hv_segment_reg(SegmentCache *seg,
+                                    hv_x64_segment_register *hv_reg)
+{
+    uint32_t flags = seg->flags;
+
+    hv_reg->base = seg->base;
+    hv_reg->limit = seg->limit;
+    hv_reg->selector = seg->selector;
+    hv_reg->segment_type = (flags >> DESC_TYPE_SHIFT) & 0xF;
+    hv_reg->non_system_segment = (flags & DESC_S_MASK) != 0;
+    hv_reg->descriptor_privilege_level = (flags >> DESC_DPL_SHIFT) & 0x3;
+    hv_reg->present = (flags & DESC_P_MASK) != 0;
+    hv_reg->reserved = 0;
+    hv_reg->available = (flags & DESC_AVL_MASK) != 0;
+    hv_reg->_long = (flags >> DESC_L_SHIFT) & 0x1;
+    hv_reg->_default = (flags >> DESC_B_SHIFT) & 0x1;
+    hv_reg->granularity = (flags & DESC_G_MASK) != 0;
+}
+
+static void populate_hv_table_reg(const struct SegmentCache *seg,
+                                  hv_x64_table_register *hv_reg)
+{
+    hv_reg->base = seg->base;
+    hv_reg->limit = seg->limit;
+    memset(hv_reg->pad, 0, sizeof(hv_reg->pad));
+}
+
+static int set_special_regs(CPUState *cpu)
+{
+    X86CPU *x86cpu = X86_CPU(cpu);
+    CPUX86State *env = &x86cpu->env;
+    int cpu_fd = mshv_vcpufd(cpu);
+    struct hv_register_assoc *assocs;
+    size_t n_regs = sizeof(SPECIAL_REGISTER_NAMES) / sizeof(hv_register_name);
+    int ret;
+
+    assocs = g_new0(struct hv_register_assoc, n_regs);
+
+    /* set names */
+    for (size_t i = 0; i < n_regs; i++) {
+        assocs[i].name = SPECIAL_REGISTER_NAMES[i];
+    }
+    populate_hv_segment_reg(&env->segs[R_CS], &assocs[0].value.segment);
+    populate_hv_segment_reg(&env->segs[R_DS], &assocs[1].value.segment);
+    populate_hv_segment_reg(&env->segs[R_ES], &assocs[2].value.segment);
+    populate_hv_segment_reg(&env->segs[R_FS], &assocs[3].value.segment);
+    populate_hv_segment_reg(&env->segs[R_GS], &assocs[4].value.segment);
+    populate_hv_segment_reg(&env->segs[R_SS], &assocs[5].value.segment);
+    populate_hv_segment_reg(&env->tr, &assocs[6].value.segment);
+    populate_hv_segment_reg(&env->ldt, &assocs[7].value.segment);
+
+    populate_hv_table_reg(&env->gdt, &assocs[8].value.table);
+    populate_hv_table_reg(&env->idt, &assocs[9].value.table);
+
+    assocs[10].value.reg64 = env->cr[0];
+    assocs[11].value.reg64 = env->cr[2];
+    assocs[12].value.reg64 = env->cr[3];
+    assocs[13].value.reg64 = env->cr[4];
+    assocs[14].value.reg64 = cpu_get_apic_tpr(x86cpu->apic_state);
+    assocs[15].value.reg64 = env->efer;
+    assocs[16].value.reg64 = cpu_get_apic_base(x86cpu->apic_state);
+
+    /* TODO: support asserting an interrupt using interrup_bitmap
+     * it should be possible if we use the vm_fd
+     */
+
+    ret = mshv_set_generic_regs(cpu_fd, assocs, n_regs);
+    g_free(assocs);
+    if (ret < 0) {
+        error_report("failed to set special registers");
+        return -1;
+    }
+
+    return 0;
+}
+
+static int set_fpu_regs(int cpu_fd, const struct MshvFPU *regs)
+{
+    struct hv_register_assoc *assocs;
+    union hv_register_value *value;
+    size_t n_regs = sizeof(FPU_REGISTER_NAMES) / sizeof(enum hv_register_name);
+    size_t fp_i;
+    union hv_x64_fp_control_status_register *ctrl_status;
+    union hv_x64_xmm_control_status_register *xmm_ctrl_status;
+    int ret;
+
+    assocs = g_new0(struct hv_register_assoc, n_regs);
+
+    /* first 16 registers are xmm0-xmm15 */
+    for (size_t i = 0; i < 16; i++) {
+        assocs[i].name = FPU_REGISTER_NAMES[i];
+        value = &assocs[i].value;
+        memcpy(&value->reg128, &regs->xmm[i], 16);
+    }
+
+    /* next 8 registers are fp_mmx0-fp_mmx7 */
+    for (size_t i = 16; i < 24; i++) {
+        assocs[i].name = FPU_REGISTER_NAMES[i];
+        fp_i = (i - 16);
+        value = &assocs[i].value;
+        memcpy(&value->reg128, &regs->fpr[fp_i], 16);
+    }
+
+    /* last two registers are fp_control_status and xmm_control_status */
+    assocs[24].name = FPU_REGISTER_NAMES[24];
+    value = &assocs[24].value;
+    ctrl_status = &value->fp_control_status;
+    ctrl_status->fp_control = regs->fcw;
+    ctrl_status->fp_status = regs->fsw;
+    ctrl_status->fp_tag = regs->ftwx;
+    ctrl_status->reserved = 0;
+    ctrl_status->last_fp_op = regs->last_opcode;
+    ctrl_status->last_fp_rip = regs->last_ip;
+
+    assocs[25].name = FPU_REGISTER_NAMES[25];
+    value = &assocs[25].value;
+    xmm_ctrl_status = &value->xmm_control_status;
+    xmm_ctrl_status->xmm_status_control = regs->mxcsr;
+    xmm_ctrl_status->xmm_status_control_mask = 0;
+    xmm_ctrl_status->last_fp_rdp = regs->last_dp;
+
+    ret = mshv_set_generic_regs(cpu_fd, assocs, n_regs);
+    g_free(assocs);
+    if (ret < 0) {
+        error_report("failed to set fpu registers");
+        return -1;
+    }
+
+    return 0;
+}
+
+static int set_xc_reg(int cpu_fd, uint64_t xcr0)
+{
+    int ret;
+    struct hv_register_assoc assoc = {
+        .name = HV_X64_REGISTER_XFEM,
+        .value.reg64 = xcr0,
+    };
+
+    ret = mshv_set_generic_regs(cpu_fd, &assoc, 1);
+    if (ret < 0) {
+        error_report("failed to set xcr0");
+        return -errno;
+    }
+    return 0;
+}
+
+static int set_cpu_state(CPUState *cpu, const MshvFPU *fpu_regs, uint64_t xcr0)
+{
+    int ret;
+    int cpu_fd = mshv_vcpufd(cpu);
+
+    ret = set_standard_regs(cpu);
+    if (ret < 0) {
+        return ret;
+    }
+    ret = set_special_regs(cpu);
+    if (ret < 0) {
+        return ret;
+    }
+    ret = set_fpu_regs(cpu_fd, fpu_regs);
+    if (ret < 0) {
+        return ret;
+    }
+    ret = set_xc_reg(cpu_fd, xcr0);
+    if (ret < 0) {
+        return ret;
+    }
+    return 0;
+}
+
+static int register_intercept_result_cpuid_entry(int cpu_fd,
+                                                 uint8_t subleaf_specific,
+                                                 uint8_t always_override,
+                                                 struct hv_cpuid_entry *entry)
+{
+    struct hv_register_x64_cpuid_result_parameters cpuid_params = {
+        .input.eax = entry->function,
+        .input.ecx = entry->index,
+        .input.subleaf_specific = subleaf_specific,
+        .input.always_override = always_override,
+        .input.padding = 0,
+        /* With regard to masks - these are to specify bits to be overwritten. */
+        /* The current CpuidEntry structure wouldn't allow to carry the masks */
+        /* in addition to the actual register values. For this reason, the */
+        /* masks are set to the exact values of the corresponding register bits */
+        /* to be registered for an overwrite. To view resulting values the */
+        /* hypervisor would return, HvCallGetVpCpuidValues hypercall can be used. */
+        .result.eax = entry->eax,
+        .result.eax_mask = entry->eax,
+        .result.ebx = entry->ebx,
+        .result.ebx_mask = entry->ebx,
+        .result.ecx = entry->ecx,
+        .result.ecx_mask = entry->ecx,
+        .result.edx = entry->edx,
+        .result.edx_mask = entry->edx,
+    };
+    union hv_register_intercept_result_parameters parameters = {
+        .cpuid = cpuid_params,
+    };
+    struct mshv_register_intercept_result args = {
+        .intercept_type = HV_INTERCEPT_TYPE_X64_CPUID,
+        .parameters = parameters,
+    };
+    int ret;
+
+    ret = ioctl(cpu_fd, MSHV_VP_REGISTER_INTERCEPT_RESULT, &args);
+    if (ret < 0) {
+        perror("failed to register intercept result for cpuid");
+        return -errno;
+    }
+
+    return 0;
+}
+
+static int register_intercept_result_cpuid(int cpu_fd, struct hv_cpuid *cpuid)
+{
+    int ret = 0, entry_ret;
+    struct hv_cpuid_entry *entry;
+    uint8_t subleaf_specific, always_override;
+
+    for (size_t i = 0; i < cpuid->nent; i++) {
+        entry = &cpuid->entries[i];
+
+        /* set defaults */
+        subleaf_specific = 0;
+        always_override = 1;
+
+        /* Intel */
+        /* 0xb - Extended Topology Enumeration Leaf */
+        /* 0x1f - V2 Extended Topology Enumeration Leaf */
+        /* AMD */
+        /* 0x8000_001e - Processor Topology Information */
+        /* 0x8000_0026 - Extended CPU Topology */
+        if (entry->function == 0xb
+            || entry->function == 0x1f
+            || entry->function == 0x8000001e
+            || entry->function == 0x80000026) {
+            subleaf_specific = 1;
+            always_override = 1;
+        }
+        else if (entry->function == 0x00000001
+            || entry->function == 0x80000000
+            || entry->function == 0x80000001
+            || entry->function == 0x80000008) {
+            subleaf_specific = 0;
+            always_override = 1;
+        }
+
+        entry_ret = register_intercept_result_cpuid_entry(cpu_fd,
+                                                          subleaf_specific,
+                                                          always_override,
+                                                          entry);
+        if ((entry_ret < 0) && (ret == 0)) {
+            ret = entry_ret;
+        }
+    }
+
+    return ret;
+}
+static void add_cpuid_entry(GList *cpuid_entries,
+                            uint32_t function, uint32_t index,
+                            uint32_t eax, uint32_t ebx,
+                            uint32_t ecx, uint32_t edx)
+{
+    struct hv_cpuid_entry *entry;
+
+    entry = g_malloc0(sizeof(struct hv_cpuid_entry));
+    entry->function = function;
+    entry->index = index;
+    entry->eax = eax;
+    entry->ebx = ebx;
+    entry->ecx = ecx;
+    entry->edx = edx;
+
+    cpuid_entries = g_list_append(cpuid_entries, entry);
+}
+
+static void collect_cpuid_entries(CPUState *cpu, GList *cpuid_entries)
+{
+    X86CPU *x86_cpu = X86_CPU(cpu);
+    CPUX86State *env = &x86_cpu->env;
+    uint32_t eax, ebx, ecx, edx;
+    uint32_t leaf, subleaf;
+    const size_t max_leaf = 0x1F;
+    const size_t max_subleaf = 0x20;
+
+    // Example leaves to iterate through
+    const uint32_t leaves_with_subleaves[] = {0x4, 0x7, 0xD, 0xF, 0x10};
+    const int num_subleaf_leaves = sizeof(leaves_with_subleaves)/sizeof(leaves_with_subleaves[0]);
+
+    // Regular leaves without subleaves
+    for (leaf = 0; leaf <= max_leaf; leaf++) {
+        bool has_subleaves = false;
+        for (int i = 0; i < num_subleaf_leaves; i++) {
+            if (leaf == leaves_with_subleaves[i]) {
+                has_subleaves = true;
+                break;
+            }
+        }
+
+        if (!has_subleaves) {
+            cpu_x86_cpuid(env, leaf, 0, &eax, &ebx, &ecx, &edx);
+            if (eax == 0 && ebx == 0 && ecx == 0 && edx == 0) {
+                /* all zeroes indicates no more leaves */
+                continue;
+            }
+
+            add_cpuid_entry(cpuid_entries, leaf, 0, eax, ebx, ecx, edx);
+            continue;
+        }
+
+        subleaf = 0;
+        while (subleaf < max_subleaf) {
+            cpu_x86_cpuid(env, leaf, subleaf, &eax, &ebx, &ecx, &edx);
+
+            if (eax == 0 && ebx == 0 && ecx == 0 && edx == 0) {
+                /* all zeroes indicates no more leaves */
+                break;
+            }
+            add_cpuid_entry(cpuid_entries, leaf, 0, eax, ebx, ecx, edx);
+        }
+    }
+}
+
+static int set_cpuid2(CPUState *cpu)
+{
+    int ret;
+    size_t n_entries, cpuid_size;
+    struct hv_cpuid *cpuid;
+    struct hv_cpuid_entry *entry;
+    GList *entries = NULL;
+    int cpu_fd = mshv_vcpufd(cpu);
+
+    collect_cpuid_entries(cpu, entries);
+    n_entries = g_list_length(entries);
+
+    cpuid_size = sizeof(struct hv_cpuid)
+        + n_entries * sizeof(struct hv_cpuid_entry);
+
+    cpuid = g_malloc0(cpuid_size);
+    cpuid->nent = n_entries;
+    cpuid->padding = 0;
+
+    for (size_t i = 0; i < n_entries; i++) {
+        entry = g_list_nth_data(entries, i);
+        cpuid->entries[i] = *entry;
+        g_free(entry);
+    }
+    g_list_free(entries);
+
+    ret = register_intercept_result_cpuid(cpu_fd, cpuid);
+    g_free(cpuid);
+    if (ret < 0) {
+        return ret;
+    }
+
+    return 0;
+}
+
+static int setup_msrs(int cpu_fd)
+{
+    int ret;
+    uint64_t default_type = MTRR_ENABLE | MTRR_MEM_TYPE_WB;
+
+    /* boot msr entries */
+    MshvMsrEntry msrs[9] = {
+        { .index = IA32_MSR_SYSENTER_CS, .data = 0x0, },
+        { .index = IA32_MSR_SYSENTER_ESP, .data = 0x0, },
+        { .index = IA32_MSR_SYSENTER_EIP, .data = 0x0, },
+        { .index = IA32_MSR_STAR, .data = 0x0, },
+        { .index = IA32_MSR_CSTAR, .data = 0x0, },
+        { .index = IA32_MSR_LSTAR, .data = 0x0, },
+        { .index = IA32_MSR_KERNEL_GS_BASE, .data = 0x0, },
+        { .index = IA32_MSR_SFMASK, .data = 0x0, },
+        { .index = IA32_MSR_MTRR_DEF_TYPE, .data = default_type, },
+    };
+
+    ret = mshv_configure_msr(cpu_fd, msrs, 9);
+    if (ret < 0) {
+        error_report("failed to setup msrs");
+        return -1;
+    }
+
+    return 0;
+}
+
+static int get_vp_state(int cpu_fd, mshv_get_set_vp_state *state)
+{
+    int ret;
+
+    ret = ioctl(cpu_fd, MSHV_GET_VP_STATE, state);
+    if (ret < 0) {
+        error_report("failed to get partition state: %s", strerror(errno));
+        return -1;
+    }
+
+    return 0;
+}
+
+static int set_vp_state(int cpu_fd, const mshv_get_set_vp_state *state)
+{
+    int ret;
+
+    ret = ioctl(cpu_fd, MSHV_SET_VP_STATE, state);
+    if (ret < 0) {
+        error_report("failed to set partition state: %s", strerror(errno));
+        return -1;
+    }
+
+    return 0;
+}
+
+static int get_lapic(int cpu_fd, struct hv_local_interrupt_controller_state *lapic_state)
+{
+    int ret;
+    size_t size = 4096;
+    /* buffer aligned to 4k, as *state requires that */
+    void *buffer = qemu_memalign(size, size);
+    struct mshv_get_set_vp_state state = { 0 };
+
+    state.buf_ptr = (uint64_t) buffer;
+    state.buf_sz = size;
+    state.type = MSHV_VP_STATE_LAPIC;
+
+    ret = get_vp_state(cpu_fd, &state);
+    if (ret == 0) {
+        memcpy(lapic_state, buffer, sizeof(*lapic_state));
+    }
+    qemu_vfree(buffer);
+    if (ret < 0) {
+        perror("failed to get lapic");
+        return ret;
+    }
+
+    return 0;
+}
+
+static int set_lapic(int cpu_fd, struct hv_local_interrupt_controller_state *lapic_state)
+{
+
+    int ret;
+    size_t size = 4096;
+    /* buffer aligned to 4k, as *state requires that */
+    void *buffer = qemu_memalign(size, size);
+    struct mshv_get_set_vp_state state = { 0 };
+
+    assert(lapic_state);
+    memcpy(lapic_state, buffer, sizeof(*lapic_state));
+
+    state.buf_ptr = (uint64_t) buffer;
+    state.buf_sz = size;
+    state.type = MSHV_VP_STATE_LAPIC;
+
+    ret = set_vp_state(cpu_fd, &state);
+    qemu_vfree(buffer);
+    if (ret < 0) {
+        error_report("failed to set lapic: %s", strerror(errno));
+        return -1;
+    }
+
+    return 0;
+}
+
+static uint32_t set_apic_delivery_mode(uint32_t reg, uint32_t mode)
+{
+    return ((reg) & ~0x700) | ((mode) << 8);
+}
+
+static int set_lint(int cpu_fd)
+{
+    int ret;
+    uint32_t *lvt_lint0, *lvt_lint1;
+
+    struct hv_local_interrupt_controller_state lapic_state = { 0 };
+    ret = get_lapic(cpu_fd, &lapic_state);
+    if (ret < 0) {
+        return ret;
+    }
+
+
+    lvt_lint0 = &lapic_state.apic_lvt_lint0;
+    *lvt_lint0 = set_apic_delivery_mode(*lvt_lint0, APIC_MODE_EXTINT);
+
+    lvt_lint1 = &lapic_state.apic_lvt_lint1;
+    *lvt_lint1 = set_apic_delivery_mode(*lvt_lint1, APIC_MODE_NMI);
+
+    /* TODO: should we skip setting lapic if the values are the same? */
+
+    return set_lapic(cpu_fd, &lapic_state);
+}
+
+/* TODO: populate topology info:
+ * X86CPU *x86cpu = X86_CPU(cpu);
+ * CPUX86State *env = &x86cpu->env;
+ * X86CPUTopoInfo *topo_info = &env->topo_info;
+ */
+int mshv_configure_vcpu(CPUState *cpu, const struct MshvFPU *fpu, uint64_t xcr0)
+{
+    int ret;
+    int cpu_fd = mshv_vcpufd(cpu);
+
+    ret = set_cpuid2(cpu);
+    if (ret < 0) {
+        error_report("failed to set cpuid");
+        return -1;
+    }
+
+    ret = setup_msrs(cpu_fd);
+    if (ret < 0) {
+        error_report("failed to setup msrs");
+        return -1;
+    }
+
+    ret = set_cpu_state(cpu, fpu, xcr0);
+    if (ret < 0) {
+        error_report("failed to set cpu state");
+        return -1;
+    }
+
+    ret = set_lint(cpu_fd);
+    if (ret < 0) {
+        error_report("failed to set lpic int");
+        return -1;
+    }
+
+    return 0;
+}
+
+static int set_x64_registers(int cpu_fd, const struct X64Registers *regs)
+{
+    size_t n_regs = regs->count;
+    struct hv_register_assoc *assocs;
+
+    assocs = g_new0(hv_register_assoc, n_regs);
+    for (size_t i = 0; i < n_regs; i++) {
+        assocs[i].name = regs->names[i];
+        assocs[i].value.reg64 = regs->values[i];
+    }
+    int ret;
+
+    ret = mshv_set_generic_regs(cpu_fd, assocs, n_regs);
+    g_free(assocs);
+    if (ret < 0) {
+        error_report("failed to set x64 registers");
+        return -1;
+    }
+
+    return 0;
+}
+
+static int set_memory_info(const struct hyperv_message *msg,
+                           struct hv_x64_memory_intercept_message *info)
+{
+    if (msg->header.message_type != HVMSG_GPA_INTERCEPT
+            && msg->header.message_type != HVMSG_UNMAPPED_GPA
+            && msg->header.message_type != HVMSG_UNACCEPTED_GPA) {
+        perror("invalid message type");
+        return -1;
+    }
+    // copy the content of the message to info
+    memcpy(info, msg->payload, sizeof(*info));
+    return 0;
+}
+
+static int read_memory(int cpu_fd, uint64_t initial_gva, uint64_t initial_gpa,
+                       uint64_t gva, uint8_t *data, size_t len)
+{
+    int ret;
+    uint64_t gpa, flags;
+
+    if (gva == initial_gva) {
+        gpa = initial_gpa;
+    } else {
+        flags = HV_TRANSLATE_GVA_VALIDATE_READ;
+        ret = translate_gva(cpu_fd, gva, &gpa, flags);
+        if (ret < 0) {
+            return -1;
+        }
+
+        /* TODO: it's unfortunate that this fn doesn't fail */
+        mshv_guest_mem_read(gpa, data, len, false, false);
+    }
+
+    return 0;
+}
+
+static int write_memory(int cpu_fd, uint64_t initial_gva, uint64_t initial_gpa,
+                        uint64_t gva, const uint8_t *data, size_t len)
+{
+    int ret;
+    uint64_t gpa, flags;
+
+    if (gva == initial_gva) {
+        gpa = initial_gpa;
+    } else {
+        flags = HV_TRANSLATE_GVA_VALIDATE_WRITE;
+        ret = translate_gva(cpu_fd, gva, &gpa, flags);
+        if (ret < 0) {
+            error_report("failed to translate gva to gpa");
+            return -1;
+        }
+    }
+    ret = mshv_guest_mem_write(gpa, data, len, false);
+    if (ret != MEMTX_OK) {
+        error_report("failed to write to mmio");
+        return -1;
+    }
+
+    return 0;
+}
+
+static int emulate_insn(CPUState *cpu,
+                        const uint8_t *insn_bytes, size_t insn_len,
+                        uint64_t gva, uint64_t gpa)
+{
+    X86CPU *x86_cpu = X86_CPU(cpu);
+    CPUX86State *env = &x86_cpu->env;
+    struct x86_decode decode = { 0 };
+    int ret;
+    int cpu_fd = mshv_vcpufd(cpu);
+    QemuMutex *guard;
+    x86_insn_stream stream = { .bytes = insn_bytes, .len = insn_len };
+
+    guard = g_hash_table_lookup(cpu_guards, GUINT_TO_POINTER(cpu_fd));
+    if (!guard) {
+        error_report("failed to get cpu guard");
+        return -1;
+    }
+
+    WITH_QEMU_LOCK_GUARD(guard) {
+        ret = mshv_load_regs(cpu);
+        if (ret < 0) {
+            error_report("failed to load registers");
+            return -1;
+        }
+
+        decode_instruction_stream(env, &decode, &stream);
+        exec_instruction(env, &decode);
+
+        ret = mshv_store_regs(cpu);
+        if (ret < 0) {
+            error_report("failed to store registers");
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+static int handle_mmio(CPUState *cpu, const struct hyperv_message *msg,
+                       MshvVmExit *exit_reason)
+{
+    struct hv_x64_memory_intercept_message info = { 0 };
+    size_t insn_len;
+    uint8_t access_type;
+    uint8_t *instruction_bytes;
+    int ret;
+
+    ret = set_memory_info(msg, &info);
+    if (ret < 0) {
+        perror("failed to convert message to memory info");
+        /* TODO: rather return? */
+        abort();
+    }
+    insn_len = info.instruction_byte_count;
+    access_type = info.header.intercept_access_type;
+
+    if (access_type == HV_X64_INTERCEPT_ACCESS_TYPE_EXECUTE) {
+        perror("invalid intercept access type: execute");
+        abort();
+    }
+
+    if (insn_len <= 0 || insn_len > 16) {
+        perror("invalid instruction length");
+        abort();
+    }
+
+    /* TODO: insn_len != 16 is x-page access, do we handle it properly? */
+
+    instruction_bytes = info.instruction_bytes;
+
+    ret = emulate_insn(cpu,
+                       instruction_bytes, insn_len,
+                       info.guest_virtual_address, info.guest_physical_address);
+    if (ret < 0) {
+        error_report("failed to emulate mmio");
+        return -1;
+    }
+
+    *exit_reason = MshvVmExitIgnore;
+
+    return 0;
+}
+
+static int handle_unmapped_mem(int vm_fd, CPUState *cpu,
+                               const struct hyperv_message *msg,
+                               MshvVmExit *exit_reason)
+{
+    struct hv_x64_memory_intercept_message info = { 0 };
+    uint64_t gpa;
+    int ret;
+    bool found;
+
+    ret = set_memory_info(msg, &info);
+    if (ret < 0) {
+        perror("failed to convert message to memory info");
+        return -1;
+    }
+    gpa = info.guest_physical_address;
+
+    found = mshv_find_entry_idx_by_gpa(gpa, NULL);
+    if (!found) {
+        return handle_mmio(cpu, msg, exit_reason);
+    }
+
+    ret = mshv_map_overlapped_region(vm_fd, gpa);
+    if (ret < 0) {
+        *exit_reason = MshvVmExitSpecial;
+    } else {
+        *exit_reason = MshvVmExitIgnore;
+    }
+
+    return 0;
+}
+
+static int handle_pio_str(CPUState *cpu, hv_x64_io_port_intercept_message *info)
+{
+    size_t len = info->access_info.access_size;
+    uint8_t access_type = info->header.intercept_access_type;
+    uint16_t port = info->port_number;
+    bool repop = info->access_info.rep_prefix == 1;
+    size_t repeat = repop ? info->rcx : 1;
+    size_t insn_len = info->header.instruction_length;
+    uint8_t data[4] = { 0 };
+    bool direction_flag;
+    uint32_t reg_names[3];
+    uint64_t reg_values[3];
+    int ret;
+    uint64_t src, dst, rip, rax, rsi, rdi;
+    struct X64Registers x64_regs = { 0 };
+    X86CPU *x86_cpu = X86_CPU(cpu);
+    CPUX86State *env = &x86_cpu->env;
+    int cpu_fd = mshv_vcpufd(cpu);
+
+    ret = mshv_get_standard_regs(cpu);
+    if (ret < 0) {
+        error_report("failed to get standard registers");
+        return -1;
+    }
+    ret = mshv_get_special_regs(cpu);
+    if (ret < 0) {
+        error_report("failed to get special registers");
+        return -1;
+    }
+
+    direction_flag = (env->eflags & DF) != 0;
+
+    if (access_type == HV_X64_INTERCEPT_ACCESS_TYPE_WRITE) {
+        src = linear_addr(cpu, info->rsi, R_DS);
+
+        for (size_t i = 0; i < repeat; i++) {
+            ret = read_memory(cpu_fd, 0, 0, src, data, len);
+            if (ret < 0) {
+                perror("failed to read memory");
+                return -1;
+            }
+            ret = mshv_pio_write(port, data, len, false);
+            if (ret < 0) {
+                perror("failed to write to io port");
+                return -1;
+            }
+            if (direction_flag) {
+                src -= (uint64_t)len;
+                info->rsi -= (uint64_t)len;
+            } else {
+                src += (uint64_t)len;
+                info->rsi += (uint64_t)len;
+            }
+        }
+        rip = info->header.rip + insn_len;
+        rax = info->rax;
+        rsi = info->rsi;
+        reg_names[0] = HV_X64_REGISTER_RIP;
+        reg_values[0] = rip;
+        reg_names[1] = HV_X64_REGISTER_RAX;
+        reg_values[1] = rax;
+        reg_names[2] = HV_X64_REGISTER_RSI;
+        reg_values[2] = rsi;
+    } else {
+        dst = linear_addr(cpu, info->rdi, R_ES);
+
+        for (size_t i = 0; i < repeat; i++) {
+            mshv_pio_read(port, data, len, false);
+
+            ret = write_memory(cpu_fd, 0, 0, dst, data, len);
+            if (ret < 0) {
+                perror("failed to write memory");
+                return -1;
+            }
+            if (direction_flag) {
+                dst -= (uint64_t)len;
+                info->rdi -= (uint64_t)len;
+            } else {
+                dst += (uint64_t)len;
+                info->rdi += (uint64_t)len;
+            }
+        }
+        rip = info->header.rip + insn_len;
+        rax = info->rax;
+        rdi = info->rdi;
+        reg_names[0] = HV_X64_REGISTER_RIP;
+        reg_values[0] = rip;
+        reg_names[1] = HV_X64_REGISTER_RAX;
+        reg_values[1] = rax;
+        reg_names[2] = HV_X64_REGISTER_RDI;
+        reg_values[2] = rdi;
+    }
+
+    x64_regs.names = reg_names;
+    x64_regs.values = reg_values;
+    x64_regs.count = 2;
+
+    ret = set_x64_registers(cpu_fd, &x64_regs);
+    if (ret < 0) {
+        perror("failed to set x64 registers");
+        return -1;
+    }
+
+    return 0;
+}
+
+static int handle_pio_non_str(const CPUState *cpu,
+                              hv_x64_io_port_intercept_message *info) {
+    size_t len = info->access_info.access_size;
+    uint8_t access_type = info->header.intercept_access_type;
+    int ret;
+    uint32_t val, eax;
+    const uint32_t eax_mask =  0xffffffffu >> (32 - len * 8);
+    size_t insn_len;
+    uint64_t rip, rax;
+    uint32_t reg_names[2];
+    uint64_t reg_values[2];
+    struct X64Registers x64_regs = { 0 };
+    uint16_t port = info->port_number;
+    int cpu_fd = mshv_vcpufd(cpu);
+
+    if (access_type == HV_X64_INTERCEPT_ACCESS_TYPE_WRITE) {
+        union {
+            uint32_t u32;
+            uint8_t bytes[4];
+        } conv;
+
+        /* convert the first 4 bytes of rax to bytes */
+        conv.u32 = (uint32_t)info->rax;
+        /* secure mode is set to false */
+        ret = mshv_pio_write(port, conv.bytes, len, false);
+        if (ret < 0) {
+            perror("failed to write to io port");
+            return -1;
+        }
+    } else {
+        uint8_t data[4] = { 0 };
+        /* secure mode is set to false */
+        mshv_pio_read(info->port_number, data, len, false);
+
+        /* Preserve high bits in EAX, but clear out high bits in RAX */
+        val = *(uint32_t *)data;
+        eax = (((uint32_t)info->rax) & ~eax_mask) | (val & eax_mask);
+        info->rax = (uint64_t)eax;
+    }
+
+    insn_len = info->header.instruction_length;
+
+    /* Advance RIP and update RAX */
+    rip = info->header.rip + insn_len;
+    rax = info->rax;
+
+    reg_names[0] = HV_X64_REGISTER_RIP;
+    reg_values[0] = rip;
+    reg_names[1] = HV_X64_REGISTER_RAX;
+    reg_values[1] = rax;
+
+    x64_regs.names = reg_names;
+    x64_regs.values = reg_values;
+    x64_regs.count = 2;
+
+    ret = set_x64_registers(cpu_fd, &x64_regs);
+    if (ret < 0) {
+        error_report("failed to set x64 registers");
+        return -1;
+    }
+
+    return 0;
+}
+
+static int set_ioport_info(const struct hyperv_message *msg,
+                           hv_x64_io_port_intercept_message *info)
+{
+    if (msg->header.message_type != HVMSG_X64_IO_PORT_INTERCEPT) {
+        perror("invalid message type");
+        return -1;
+    }
+    // copy the content of the message to info
+    memcpy(info, msg->payload, sizeof(*info));
+    return 0;
+}
+
+static int handle_pio(CPUState *cpu, const struct hyperv_message *msg)
+{
+    struct hv_x64_io_port_intercept_message info = { 0 };
+    int ret;
+
+    ret = set_ioport_info(msg, &info);
+    if (ret < 0) {
+        perror("failed to convert message to ioport info");
+        return -1;
+    }
+
+    if (info.access_info.string_op) {
+        return handle_pio_str(cpu, &info);
+    }
+
+    return handle_pio_non_str(cpu, &info);
+}
+
+int mshv_run_vcpu(int vm_fd, CPUState *cpu, hv_message *msg, MshvVmExit *exit)
+{
+    int ret;
+    hv_message exit_msg = { 0 };
+    enum MshvVmExit exit_reason;
+    int cpu_fd = mshv_vcpufd(cpu);
+
+    ret = ioctl(cpu_fd, MSHV_RUN_VP, &exit_msg);
+    if (ret < 0) {
+        return MshvVmExitShutdown;
+    }
+
+    switch(exit_msg.header.message_type) {
+        case HVMSG_UNRECOVERABLE_EXCEPTION:
+            *msg = exit_msg;
+            return MshvVmExitShutdown;
+        case HVMSG_UNMAPPED_GPA:
+            ret = handle_unmapped_mem(vm_fd, cpu, &exit_msg, &exit_reason);
+            if (ret < 0) {
+                error_report("failed to handle unmapped memory");
+                return -1;
+            }
+            return exit_reason;
+        case HVMSG_GPA_INTERCEPT:
+            ret = handle_mmio(cpu, &exit_msg, &exit_reason);
+            if (ret < 0) {
+                error_report("failed to handle mmio");
+                return -1;
+            }
+            return exit_reason;
+        case HVMSG_X64_IO_PORT_INTERCEPT:
+            ret = handle_pio(cpu, &exit_msg);
+            if (ret < 0) {
+                return MshvVmExitSpecial;
+            }
+            return MshvVmExitIgnore;
+        default:
+            msg = &exit_msg;
+    }
+
+    *exit = MshvVmExitIgnore;
+    return 0;
+}
 
 int mshv_store_regs(CPUState *cpu)
 {
 	int ret;
 
-	ret = mshv_set_standard_regs(cpu);
+	ret = set_standard_regs(cpu);
 	if (ret < 0) {
 		perror("Failed to store standard registers");
 		return -1;
 	}
 
-    /* TODO: should store special registers? */
+    /* TODO: should store special registers? the equivalent hvf code doesn't */
 
 	return 0;
 }
@@ -28,6 +1511,7 @@ int mshv_load_regs(CPUState *cpu)
 		perror("Failed to load standard registers");
 		return -1;
 	}
+
 	ret = mshv_get_special_regs(cpu);
 	if (ret < 0) {
 		perror("Failed to load special registers");
@@ -41,7 +1525,7 @@ static int mshv_put_regs(MshvState *mshv_state, CPUState *cpu)
 {
     X86CPU *x86cpu = X86_CPU(cpu);
     CPUX86State *env = &x86cpu->env;
-    FloatingPointUnit fpu = {0};
+    MshvFPU fpu = {0};
     int ret = 0;
 
     memset(&fpu, 0, sizeof(fpu));
@@ -51,59 +1535,59 @@ static int mshv_put_regs(MshvState *mshv_state, CPUState *cpu)
     return ret;
 }
 
-#define MSR_ENTRIES_COUNT 64
-
-struct MsrList {
-    MshvMsrEntry entries[MSR_ENTRIES_COUNT];
-    uint32_t nmsrs;
+struct MsrPair {
+    uint32_t index;
+    uint64_t value;
 };
-
-static MshvMsrEntry *mshv_msr_entry_add(struct MsrList *msrs, uint32_t index,
-                                        uint64_t value)
-{
-    MshvMsrEntry *entry = &msrs->entries[msrs->nmsrs];
-
-    assert(msrs->nmsrs < MSR_ENTRIES_COUNT);
-
-    entry->index = index;
-    entry->reserved = 0;
-    entry->data = value;
-    msrs->nmsrs++;
-
-    return entry;
-}
 
 static int mshv_put_msrs(CPUState *cpu)
 {
 	int ret = 0;
     X86CPU *x86cpu = X86_CPU(cpu);
     CPUX86State *env = &x86cpu->env;
-    struct MsrList *msrs = g_malloc0(sizeof(struct MsrList));
+    MshvMsrEntries *msrs = g_malloc0(sizeof(MshvMsrEntries));
 
-    mshv_msr_entry_add(msrs, MSR_IA32_SYSENTER_CS, env->sysenter_cs);
-    mshv_msr_entry_add(msrs, MSR_IA32_SYSENTER_ESP, env->sysenter_esp);
-    mshv_msr_entry_add(msrs, MSR_IA32_SYSENTER_EIP, env->sysenter_eip);
-    mshv_msr_entry_add(msrs, MSR_EFER, env->efer);
-    mshv_msr_entry_add(msrs, MSR_PAT, env->pat);
-    mshv_msr_entry_add(msrs, MSR_STAR, env->star);
-    mshv_msr_entry_add(msrs, MSR_CSTAR, env->cstar);
-    mshv_msr_entry_add(msrs, MSR_LSTAR, env->lstar);
-    mshv_msr_entry_add(msrs, MSR_KERNELGSBASE, env->kernelgsbase);
-    mshv_msr_entry_add(msrs, MSR_FMASK, env->fmask);
-    mshv_msr_entry_add(msrs, MSR_MTRRdefType, env->mtrr_deftype);
-    mshv_msr_entry_add(msrs, MSR_VM_HSAVE_PA, env->vm_hsave);
-    mshv_msr_entry_add(msrs, MSR_SMI_COUNT, env->msr_smi_count);
-    mshv_msr_entry_add(msrs, MSR_IA32_PKRS, env->pkrs);
-    mshv_msr_entry_add(msrs, MSR_IA32_BNDCFGS, env->msr_bndcfgs);
-    mshv_msr_entry_add(msrs, MSR_IA32_XSS, env->xss);
-    mshv_msr_entry_add(msrs, MSR_IA32_UMWAIT_CONTROL, env->umwait);
-    mshv_msr_entry_add(msrs, MSR_IA32_TSX_CTRL, env->tsx_ctrl);
-    mshv_msr_entry_add(msrs, MSR_AMD64_TSC_RATIO, env->amd_tsc_scale_msr);
-    mshv_msr_entry_add(msrs, MSR_TSC_AUX, env->tsc_aux);
-    mshv_msr_entry_add(msrs, MSR_TSC_ADJUST, env->tsc_adjust);
-    mshv_msr_entry_add(msrs, MSR_IA32_SMBASE, env->smbase);
-    mshv_msr_entry_add(msrs, MSR_IA32_SPEC_CTRL, env->spec_ctrl);
-    mshv_msr_entry_add(msrs, MSR_VIRT_SSBD, env->virt_ssbd);
+    struct MsrPair pairs[] = {
+        { MSR_IA32_SYSENTER_CS,    env->sysenter_cs },
+        { MSR_IA32_SYSENTER_ESP,   env->sysenter_esp },
+        { MSR_IA32_SYSENTER_EIP,   env->sysenter_eip },
+        { MSR_EFER,                env->efer },
+        { MSR_PAT,                 env->pat },
+        { MSR_STAR,                env->star },
+        { MSR_CSTAR,               env->cstar },
+        { MSR_LSTAR,               env->lstar },
+        { MSR_KERNELGSBASE,        env->kernelgsbase },
+        { MSR_FMASK,               env->fmask },
+        { MSR_MTRRdefType,         env->mtrr_deftype },
+        { MSR_VM_HSAVE_PA,         env->vm_hsave },
+        { MSR_SMI_COUNT,           env->msr_smi_count },
+        { MSR_IA32_PKRS,           env->pkrs },
+        { MSR_IA32_BNDCFGS,        env->msr_bndcfgs },
+        { MSR_IA32_XSS,            env->xss },
+        { MSR_IA32_UMWAIT_CONTROL, env->umwait },
+        { MSR_IA32_TSX_CTRL,       env->tsx_ctrl },
+        { MSR_AMD64_TSC_RATIO,     env->amd_tsc_scale_msr },
+        { MSR_TSC_AUX,             env->tsc_aux },
+        { MSR_TSC_ADJUST,          env->tsc_adjust },
+        { MSR_IA32_SMBASE,         env->smbase },
+        { MSR_IA32_SPEC_CTRL,      env->spec_ctrl },
+        { MSR_VIRT_SSBD,           env->virt_ssbd },
+    };
+
+    if (ARRAY_SIZE(pairs) > MSR_ENTRIES_COUNT) {
+        error_report("MSR entries exceed maximum size");
+        g_free(msrs);
+        return -1;
+    }
+
+    for (size_t i = 0; i < ARRAY_SIZE(pairs); i++) {
+        MshvMsrEntry *entry = &msrs->entries[i];
+        entry->index = pairs[i].index;
+        entry->reserved = 0;
+        entry->data = pairs[i].value;
+        msrs->nmsrs++;
+    }
+
     ret = mshv_configure_msr(mshv_vcpufd(cpu), &msrs->entries[0], msrs->nmsrs);
     g_free(msrs);
     return ret;

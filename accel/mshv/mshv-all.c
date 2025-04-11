@@ -4,6 +4,8 @@
 #include "qemu/module.h"
 
 #include "hw/hyperv/hvhdk.h"
+#include "hw/hyperv/hvhdk_mini.h"
+#include "hw/hyperv/hvgdk.h"
 #include "hw/hyperv/linux-mshv.h"
 
 #include "exec/address-spaces.h"
@@ -344,8 +346,22 @@ static void mem_region_del(MemoryListener *listener,
     memory_region_unref(section->mr);
 }
 
+typedef enum {
+    DATAMATCH_NONE,
+    DATAMATCH_U32,
+    DATAMATCH_U64,
+} DatamatchTag;
+
+typedef struct {
+    DatamatchTag tag;
+    union {
+        uint32_t u32;
+        uint64_t u64;
+    } value;
+} Datamatch;
+
 /* flags: determine whether to de/assign */
-static int ioeventfd(int vm_fd, int event_fd, uint64_t addr, MshvDatamatch dm,
+static int ioeventfd(int vm_fd, int event_fd, uint64_t addr, Datamatch dm,
                      uint32_t flags)
 {
     int ret = 0;
@@ -375,7 +391,7 @@ static int ioeventfd(int vm_fd, int event_fd, uint64_t addr, MshvDatamatch dm,
 static int unregister_ioevent(int vm_fd, int event_fd, uint64_t mmio_addr)
 {
     uint32_t flags = 0;
-    MshvDatamatch dm = {0};
+    Datamatch dm = {0};
 
     flags |= BIT(MSHV_IOEVENTFD_BIT_DEASSIGN);
     dm.tag = DATAMATCH_NONE;
@@ -387,7 +403,7 @@ static int register_ioevent(int vm_fd, int event_fd, uint64_t mmio_addr,
                             uint64_t val, bool is_64bit, bool is_datamatch)
 {
     uint32_t flags = 0;
-    MshvDatamatch dm = {0};
+    Datamatch dm = {0};
 
     if (!is_datamatch) {
         dm.tag = DATAMATCH_NONE;
@@ -483,11 +499,6 @@ static void mshv_reset(void *param)
 
 static void mshv_init_irq(MshvState *s) {}
 
-static inline MemTxAttrs mshv_get_mem_attrs(bool is_secure_mode)
-{
-    return ((MemTxAttrs){ .secure = is_secure_mode });
-}
-
 int mshv_hvcall(int mshv_fd, const struct mshv_root_hvcall *args)
 {
     int ret = 0;
@@ -500,54 +511,28 @@ int mshv_hvcall(int mshv_fd, const struct mshv_root_hvcall *args)
     return ret;
 }
 
-int guest_mem_read_fn(uint64_t gpa, uint8_t *data, uintptr_t size,
-                      bool is_secure_mode, bool instruction_fetch)
+static inline MemTxAttrs get_mem_attrs(bool is_secure_mode)
 {
-    int ret;
-    MemTxAttrs memattr = mshv_get_mem_attrs(is_secure_mode);
-
-    if (instruction_fetch) {
-        trace_mcpu_insn_fetch(gpa, size);
-    } else {
-        trace_mcpu_mem_read(gpa, size);
-    }
-
-    ret = address_space_rw(&address_space_memory, gpa, memattr, (void *)data,
-                           size, false);
-    if (ret != MEMTX_OK) {
-        error_report("Failed to read guest memory");
-        return -1;
-    }
-
-    return 0;
+    MemTxAttrs memattr = {0};
+    memattr.secure = is_secure_mode;
+    return memattr;
 }
 
-int guest_mem_write_fn(uint64_t gpa, const uint8_t *data, uintptr_t size,
-                       bool is_secure_mode)
-{
-    trace_mcpu_mem_write(gpa, size);
-    int ret = 0;
-    MemTxAttrs memattr = mshv_get_mem_attrs(is_secure_mode);
-    ret = address_space_rw(&address_space_memory, gpa, memattr, (void *)data,
-                           size, true);
-    return ret;
-}
-
-void pio_read_fn(uint64_t port, uint8_t *data, uintptr_t size,
+void mshv_pio_read(uint64_t port, uint8_t *data, uintptr_t size,
                  bool is_secure_mode)
 {
     int ret = 0;
-    MemTxAttrs memattr = mshv_get_mem_attrs(is_secure_mode);
+    MemTxAttrs memattr = get_mem_attrs(is_secure_mode);
     ret = address_space_rw(&address_space_io, port, memattr, (void *)data, size,
                            false);
     assert(ret == MEMTX_OK);
 }
 
-int pio_write_fn(uint64_t port, const uint8_t *data, uintptr_t size,
+int mshv_pio_write(uint64_t port, const uint8_t *data, uintptr_t size,
                  bool is_secure_mode)
 {
     int ret = 0;
-    MemTxAttrs memattr = mshv_get_mem_attrs(is_secure_mode);
+    MemTxAttrs memattr = get_mem_attrs(is_secure_mode);
     ret = address_space_rw(&address_space_io, port, memattr, (void *)data, size,
                            true);
     return ret;

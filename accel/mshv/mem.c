@@ -1,10 +1,12 @@
 #include "qemu/osdep.h"
 #include "qemu/lockable.h"
 #include "qemu/error-report.h"
+#include "exec/address-spaces.h"
 #include "system/mshv.h"
 #include "hw/hyperv/linux-mshv.h"
 #include <stdint.h>
 #include <sys/ioctl.h>
+#include "trace.h"
 
 static MshvMemManager *mem_manager;
 
@@ -73,7 +75,7 @@ static int map_or_unmap(int vm_fd, const MshvMemoryRegion *mr, bool add)
     return set_guest_memory(vm_fd, &region);
 }
 
-bool find_entry_idx_by_gpa(uint64_t addr, size_t *index)
+bool mshv_find_entry_idx_by_gpa(uint64_t addr, size_t *index)
 {
     MshvMemoryEntry *entry;
     GList *entries;
@@ -209,7 +211,7 @@ bool mshv_map_overlapped_region(int vm_fd, uint64_t gpa)
     int ret;
 
     WITH_QEMU_LOCK_GUARD(&mem_manager->mutex) {
-        if (!find_entry_idx_by_gpa(gpa, &gpa_idx)) {
+        if (!mshv_find_entry_idx_by_gpa(gpa, &gpa_idx)) {
             return false;
         }
         gpa_entry = g_list_nth_data(mem_manager->mem_entries, gpa_idx);
@@ -255,4 +257,45 @@ int mshv_add_mem(int vm_fd, const MshvMemoryRegion *mr)
 int mshv_remove_mem(int vm_fd, const MshvMemoryRegion *mr)
 {
     return add_del_mem(vm_fd, mr, false);
+}
+
+static inline MemTxAttrs get_mem_attrs(bool is_secure_mode)
+{
+    MemTxAttrs memattr = {0};
+    memattr.secure = is_secure_mode;
+    return memattr;
+}
+
+int mshv_guest_mem_read(uint64_t gpa, uint8_t *data, uintptr_t size,
+                        bool is_secure_mode, bool instruction_fetch)
+{
+    int ret;
+    MemTxAttrs memattr = get_mem_attrs(is_secure_mode);
+
+    if (instruction_fetch) {
+        trace_mshv_insn_fetch(gpa, size);
+    } else {
+        trace_mshv_mem_read(gpa, size);
+    }
+
+    ret = address_space_rw(&address_space_memory, gpa, memattr, (void *)data,
+                           size, false);
+    if (ret != MEMTX_OK) {
+        error_report("Failed to read guest memory");
+        return -1;
+    }
+
+    return 0;
+}
+
+int mshv_guest_mem_write(uint64_t gpa, const uint8_t *data, uintptr_t size,
+                         bool is_secure_mode)
+{
+    int ret = 0;
+
+    trace_mshv_mem_write(gpa, size);
+    MemTxAttrs memattr = get_mem_attrs(is_secure_mode);
+    ret = address_space_rw(&address_space_memory, gpa, memattr, (void *)data,
+                           size, true);
+    return ret;
 }

@@ -1,16 +1,11 @@
 # See docs/devel/tracing.rst for syntax documentation.
 
-# mshv-all.c
 mshv_start_vcpu_thread(const char* thread, uint32_t cpu) "thread %s cpu_index %d"
 mshv_handle_interrupt(uint32_t cpu, int mask) "cpu_index %d mask %x"
 mshv_set_memory(bool add, uint64_t gpa, uint64_t size, uint64_t user_addr, bool readonly, int ret) "[add = %d] gpa = %lx size = %lx user = %lx readonly = %d result = %d"
 mshv_mem_ioeventfd_add(uint64_t addr, uint32_t size, uint32_t data) "addr %lx size %d data %x"
 mshv_mem_ioeventfd_del(uint64_t addr, uint32_t size, uint32_t data) "addr %lx size %d data %x"
 mshv_shutdown(uint32_t cpu) "cpu %d"
-
-# mgns
-mgns_init_vm_db(void) "init vm db"
-mgns_update_vm_db(int fd) "update vm db entry for fd %d"
 
 mshv_hvcall_args(const char* hvcall, uint16_t code, uint16_t in_sz) "built args for '%s' code: %d in_sz: %d"
 
@@ -21,21 +16,6 @@ mshv_commit_msi_routing_table(int vm_fd, int len) "vm_fd %d table_size %d"
 mshv_register_irqfd(int vm_fd, int event_fd, uint32_t gsi) "vm_fd %d event_fd %d gsi %d"
 mshv_irqchip_update_irqfd_notifier_gsi(int event_fd, int resample_fd, int virq, bool add) "event_fd %d resample_fd %d virq %d add %d"
 
-# mgns cpu state
-mcpu_prior(uint64_t c) "before emulation of instruction #%lu"
-mcpu_after(uint64_t c) "after emulation of instruction #%lu"
-mcpu_regs_rax_rbp(uint64_t rax, uint64_t rbx, uint64_t rcx, uint64_t rdx, uint64_t rsi, uint64_t rdi, uint64_t rsp, uint64_t rbp) "\trax=%lx,rbx=%lx,rcx=%lx,rdx=%lx,rsi=%lx,rdi=%lx,rsp=%lx,rbp=%lx"
-mcpu_regs_r8_r15(uint64_t r8, uint64_t r9, uint64_t r10, uint64_t r11, uint64_t r12, uint64_t r13, uint64_t r14, uint64_t r15) "\tr8=%lx,r9=%lx,r10=%lx,r11=%lx,r12=%lx,r13=%lx,r14=%lx,r15=%lx"
-mcpu_regs_rip_rflags(uint64_t rip, uint64_t rflags) "\trip=%lx,flags=%lx"
-
-mcpu_sregs_cs_ss(uint16_t cs, uint16_t ds, uint16_t es, uint16_t fs, uint16_t gs, uint16_t ss) "\tcs=%x,ds=%x,es=%x,fs=%x,gs=%x,ss=%x"
-mcpu_sregs_gdt_idt(uint64_t gdt_base, uint16_t gdt_limit, uint64_t idt_base, uint16_t idt_limit) "\tgdt_base=%lx,gdt_limit=%x,idt_base=%lx,idt_limit=%x"
-mcpu_sregs_cr0_cr8(uint64_t cr0, uint64_t cr2, uint64_t cr3, uint64_t cr4, uint64_t cr8) "\tcr0=%lx,cr2=%lx,cr3=%lx,cr4=%lx,cr8=%lx"
-mcpu_sregs_efer_apic_bs(uint64_t efer, uint64_t apic_base) "efer=%lx,apic_base=%lx"
-mcpu_sregs_irq_bitmap(uint64_t bitmap0, uint64_t bitmap1, uint64_t bitmap2, uint64_t bitmap3) "\tbitmap0=%lx,bitmap1=%lx,bitmap2=%lx,bitmap3=%lx"
-
-mcpu_decoded_x86_insn(const char *cmd, size_t len, uint8_t op0, uint8_t op1, uint8_t op2, uint8_t op3) "\tcmd=%s, len=%zu, opcode=%02x %02x %02x %02x"
-
-mcpu_insn_fetch(uint64_t addr, size_t size) "gpa=%lx size=%lu"
-mcpu_mem_write(uint64_t addr, size_t size) "\tgpa=%lx size=%lu"
-mcpu_mem_read(uint64_t addr, size_t size) "\tgpa=%lx size=%lu"
+mshv_insn_fetch(uint64_t addr, size_t size) "gpa=%lx size=%lu"
+mshv_mem_write(uint64_t addr, size_t size) "\tgpa=%lx size=%lu"
+mshv_mem_read(uint64_t addr, size_t size) "\tgpa=%lx size=%lu"

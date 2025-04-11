@@ -1,4 +1,5 @@
 #include "hw/hyperv/linux-mshv.h"
+#include "hw/hyperv/hvhdk_mini.h"
 #include "qemu/osdep.h"
 #include "hw/pci/msi.h"
 #include "system/mshv.h"

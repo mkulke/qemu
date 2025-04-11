@@ -1,15 +1,16 @@
 #ifndef QEMU_MSHV_INT_H
 #define QEMU_MSHV_INT_H
 
-#include "exec/memory.h"
+#include "qemu/osdep.h"
+#include "qemu/accel.h"
+#include "qemu/log.h"
+#include "qemu/queue.h"
 #include "hw/hyperv/hv-balloon.h"
 #include "hw/hyperv/hyperv-proto.h"
 #include "hw/hyperv/linux-mshv.h"
 #include "hw/hyperv/hvhdk.h"
 #include "qapi/qapi-types-common.h"
-#include "qemu/accel.h"
-#include "qemu/log.h"
-#include "qemu/queue.h"
+#include "exec/memory.h"
 #include <stdint.h>
 
 #ifdef COMPILING_PER_TARGET
@@ -34,6 +35,8 @@ typedef struct hyperv_message hv_message;
 
 #define MSHV_PAGE_SHIFT 12
 
+#define MSHV_MSR_ENTRIES_COUNT 64
+
 #define mshv_err(FMT, ...)                                                     \
   do {                                                                         \
     fprintf(stderr, FMT, ##__VA_ARGS__);                                       \
@@ -52,7 +55,6 @@ typedef struct hyperv_message hv_message;
 #ifdef CONFIG_MSHV_IS_POSSIBLE
 extern bool mshv_allowed;
 #define mshv_enabled() (mshv_allowed)
-
 
 typedef struct MshvMemoryListener {
   MemoryListener listener;
@@ -91,8 +93,6 @@ typedef enum MshvVmType {
 
 #define mshv_vcpufd(cpu) (cpu->accel->cpufd)
 
-int mshv_arch_put_registers(MshvState *s, CPUState *cpu);
-
 #else //! CONFIG_MSHV_IS_POSSIBLE
 #define mshv_enabled() false
 #endif
@@ -102,45 +102,99 @@ int mshv_arch_put_registers(MshvState *s, CPUState *cpu);
 #define mshv_msi_via_irqfd_enabled() false
 #endif
 
-enum hv_partition_property_code_mgns {
-	/* Privilege properties */
-    HV_PARTITION_PROPERTY_PRIVILEGE_FLAGS				= 0x00010000,
-    HV_PARTITION_PROPERTY_SYNTHETIC_PROC_FEATURES		= 0x00010001,
-    HV_PARTITION_PROPERTY_TIME_FREEZE				    = 0x00030003,
-    HV_PARTITION_PROPERTY_UNIMPLEMENTED_MSR_ACTION		= 0x00050017,
-};
+/* cpu */
+/* EFER (technically not a register) bits */
+#define EFER_LMA   ((uint64_t)0x400)
+#define EFER_LME   ((uint64_t)0x100)
 
-enum hv_unimplemented_msr_action_mgns {
-	HV_UNIMPLEMENTED_MSR_ACTION_FAULT = 0,
-	HV_UNIMPLEMENTED_MSR_ACTION_IGNORE_WRITE_READ_ZERO = 1,
-	HV_UNIMPLEMENTED_MSR_ACTION_COUNT = 2,
-};
+/* CR0 bits */
+#define CR0_PE     ((uint64_t)0x1)
+#define CR0_PG     ((uint64_t)0x80000000)
 
+/* CR4 bits */
+#define CR4_PAE    ((uint64_t)0x20)
+#define CR4_LA57   ((uint64_t)0x1000)
 
-/* Declare the various hypercall operations. from hvgdk_mini.h */
-/* HV_CALL_CODE */
-#define HVCALL_GET_PARTITION_PROPERTY		0x0044
-#define HVCALL_SET_PARTITION_PROPERTY		0x0045
-#define HVCALL_ASSERT_VIRTUAL_INTERRUPT		0x0094
+/* rflags bits (shift values) */
+#define CF_SHIFT   0
+#define PF_SHIFT   2
+#define AF_SHIFT   4
+#define ZF_SHIFT   6
+#define SF_SHIFT   7
+#define DF_SHIFT   10
+#define OF_SHIFT   11
 
-enum mapping_errors_mgns {
+/* rflags bits (bit masks) */
+#define CF         ((uint64_t)1 << CF_SHIFT)
+#define PF         ((uint64_t)1 << PF_SHIFT)
+#define AF         ((uint64_t)1 << AF_SHIFT)
+#define ZF         ((uint64_t)1 << ZF_SHIFT)
+#define SF         ((uint64_t)1 << SF_SHIFT)
+#define DF         ((uint64_t)1 << DF_SHIFT)
+#define OF         ((uint64_t)1 << OF_SHIFT)
+
+typedef struct MshvFPU {
+  uint8_t fpr[8][16];
+  uint16_t fcw;
+  uint16_t fsw;
+  uint8_t ftwx;
+  uint8_t pad1;
+  uint16_t last_opcode;
+  uint64_t last_ip;
+  uint64_t last_dp;
+  uint8_t xmm[16][16];
+  uint32_t mxcsr;
+  uint32_t pad2;
+} MshvFPU;
+
+typedef enum MshvVmExit {
+	MshvVmExitIgnore   = 0,
+	MshvVmExitShutdown = 1,
+	MshvVmExitSpecial  = 2,
+} MshvVmExit;
+
+void mshv_init_cpu_logic(void);
+int mshv_create_vcpu(int vm_fd, uint8_t vp_index, int *cpu_fd);
+void mshv_remove_vcpu(int vm_fd, int cpu_fd);
+int mshv_configure_vcpu(CPUState *cpu, const MshvFPU *fpu, uint64_t xcr0);
+int mshv_get_standard_regs(CPUState *cpu);
+int mshv_get_special_regs(CPUState *cpu);
+int mshv_run_vcpu(int vm_fd, CPUState *cpu, hv_message *msg, MshvVmExit *exit);
+int mshv_load_regs(CPUState *cpu);
+int mshv_store_regs(CPUState *cpu);
+int mshv_set_generic_regs(int cpu_fd, hv_register_assoc *assocs, size_t n_regs);
+int mshv_arch_put_registers(MshvState *s, CPUState *cpu);
+
+/* pio */
+int mshv_pio_write(uint64_t port, const uint8_t *data, uintptr_t size,
+			       bool is_secure_mode);
+void mshv_pio_read(uint64_t port, uint8_t *data, uintptr_t size,
+                   bool is_secure_mode);
+
+/* generic */
+enum MshvMiscError {
 	MSHV_USERSPACE_ADDR_REMAP_ERROR = 2001,
 };
 
-typedef enum {
-    DATAMATCH_NONE,
-    DATAMATCH_U32,
-    DATAMATCH_U64,
-} MshvDatamatchTag;
+int mshv_hvcall(int mshv_fd, const struct mshv_root_hvcall *args);
 
-typedef struct {
-    MshvDatamatchTag tag;
-    union {
-        uint32_t u32;
-        uint64_t u64;
-    } value;
-} MshvDatamatch;
+/* msr */
+typedef struct MshvMsrEntry {
+  uint32_t index;
+  uint32_t reserved;
+  uint64_t data;
+} MshvMsrEntry;
 
+typedef struct MshvMsrEntries {
+    MshvMsrEntry entries[MSHV_MSR_ENTRIES_COUNT];
+    uint32_t nmsrs;
+} MshvMsrEntries;
+
+int mshv_configure_msr(int cpu_fd, const MshvMsrEntry *msrs, size_t n_msrs);
+int mshv_is_supported_msr(uint32_t msr);
+int mshv_msr_to_hv_reg_name(uint32_t msr, uint32_t *hv_reg);
+
+/* memory */
 typedef struct MshvMemoryRegion {
 	uint64_t guest_phys_addr;
 	uint64_t memory_size;
@@ -158,97 +212,15 @@ typedef struct MshvMemManager {
  	QemuMutex mutex;
 } MshvMemManager;
 
-typedef struct DirtyLogSlotMgns {
-	uint64_t guest_pfn;
-	uint64_t memory_size;
-} DirtyLogSlotMgns;
-
-typedef struct PerCpuInfoMgns {
-	int vp_fd;
-	uint8_t vp_index;
-} PerCpuInfoMgns;
-
-/* cpu */
-
-typedef struct FloatingPointUnit {
-  uint8_t fpr[8][16];
-  uint16_t fcw;
-  uint16_t fsw;
-  uint8_t ftwx;
-  uint8_t pad1;
-  uint16_t last_opcode;
-  uint64_t last_ip;
-  uint64_t last_dp;
-  uint8_t xmm[16][16];
-  uint32_t mxcsr;
-  uint32_t pad2;
-} FloatingPointUnit;
-
-typedef struct X64Registers {
-  const uint32_t *names;
-  const uint64_t *values;
-  uintptr_t count;
-} X64Registers;
-
-typedef struct MshvCpuTopology {
-    uint8_t id;
-    uint8_t n_dies;
-    uint8_t n_cores_per_die;
-    uint8_t n_threads_per_core;
-} MshvCpuTopology;
-
-typedef enum MshvVmExit {
-	MshvVmExitIgnore   = 0,
-	MshvVmExitShutdown = 1,
-	MshvVmExitSpecial  = 2,
-} MshvVmExit;
-
-void mshv_init_cpu_logic(void);
-int mshv_create_vcpu(int vm_fd, uint8_t vp_index, int *cpu_fd);
-void mshv_remove_vcpu(int vm_fd, int cpu_fd);
-int mshv_configure_vcpu(CPUState *cpu, const FloatingPointUnit *fpu,
-                        uint64_t xcr0);
-int mshv_get_standard_regs(CPUState *cpu);
-int mshv_get_special_regs(CPUState *cpu);
-int mshv_run_vcpu(int vm_fd, CPUState *cpu, hv_message *msg, MshvVmExit *exit);
-
-/* TODO: for use in the local sw emu, can probably become static */
-int mshv_load_regs(CPUState *cpu);
-int mshv_store_regs(CPUState *cpu);
-int mshv_set_standard_regs(CPUState *cpu);
-
-/* for use in the remote sw emu */
-int guest_mem_read_fn(uint64_t gpa, uint8_t *data, uintptr_t size,
-					  bool is_secure_mode, bool instruction_fetch);
-int guest_mem_write_fn(uint64_t gpa, const uint8_t *data, uintptr_t size,
-					   bool is_secure_mode);
-
-/* pio */
-int pio_write_fn(uint64_t port, const uint8_t *data, uintptr_t size,
-				 bool is_secure_mode);
-void pio_read_fn(uint64_t port, uint8_t *data, uintptr_t size,
-                 bool is_secure_mode);
-
-/* msr */
-typedef struct MshvMsrEntry {
-  uint32_t index;
-  uint32_t reserved;
-  uint64_t data;
-} MshvMsrEntry;
-
-int mshv_configure_msr(int cpu_fd, const MshvMsrEntry *msrs, size_t n_msrs);
-int mshv_is_supported_msr(uint32_t msr);
-int mshv_msr_to_hv_reg_name(uint32_t msr, uint32_t *hv_reg);
-
-/* memory */
-void init_dirty_log_slots_mgns(void);
 void mshv_init_mem_manager(void);
-int set_dirty_log_slot_mgns(uint64_t guest_pfn, uint64_t memory_size);
-int remove_dirty_log_slot_mgns(uint64_t guest_pfn);
 int mshv_add_mem(int vm_fd, const MshvMemoryRegion *mr);
 int mshv_remove_mem(int vm_fd, const MshvMemoryRegion *mr);
-bool find_entry_idx_by_gpa(uint64_t addr, size_t *index);
+bool mshv_find_entry_idx_by_gpa(uint64_t addr, size_t *index);
 bool mshv_map_overlapped_region(int vm_fd, uint64_t gpa);
+int mshv_guest_mem_read(uint64_t gpa, uint8_t *data, uintptr_t size,
+					    bool is_secure_mode, bool instruction_fetch);
+int mshv_guest_mem_write(uint64_t gpa, const uint8_t *data, uintptr_t size,
+					     bool is_secure_mode);
 
 /* interrupt */
 void mshv_init_msicontrol(void);
@@ -256,118 +228,12 @@ int mshv_request_interrupt(int vm_fd, uint32_t interrupt_type, uint32_t vector,
 						   uint32_t vp_index, bool logical_destination_mode,
 						   bool level_triggered);
 
-int mshv_hvcall(int mshv_fd, const struct mshv_root_hvcall *args);
-int init_vcpu_mgns(CPUState *cpu);
-
 int mshv_irqchip_add_msi_route(int vector, PCIDevice *dev);
 int mshv_irqchip_update_msi_route(int virq, MSIMessage msg, PCIDevice *dev);
 void mshv_irqchip_commit_routes(void);
 void mshv_irqchip_release_virq(int virq);
-// int mshv_irqchip_add_irqfd_notifier_gsi(EventNotifier *n, EventNotifier *rn,
-//                                         int virq);
 int mshv_irqchip_add_irqfd_notifier_gsi(const EventNotifier *n,
                                         const EventNotifier *rn, int virq);
 int mshv_irqchip_remove_irqfd_notifier_gsi(const EventNotifier *n, int virq);
-
-/* taken from github.com/rust-vmm/mshv-ioctls/src/ioctls/system.rs */
-static const uint32_t msr_list_mgns[] = {
-    IA32_MSR_TSC,
-    IA32_MSR_EFER,
-    IA32_MSR_KERNEL_GS_BASE,
-    IA32_MSR_APIC_BASE,
-    IA32_MSR_PAT,
-    IA32_MSR_SYSENTER_CS,
-    IA32_MSR_SYSENTER_ESP,
-    IA32_MSR_SYSENTER_EIP,
-    IA32_MSR_STAR,
-    IA32_MSR_LSTAR,
-    IA32_MSR_CSTAR,
-    IA32_MSR_SFMASK,
-    IA32_MSR_MTRR_DEF_TYPE,
-    IA32_MSR_MTRR_PHYSBASE0,
-    IA32_MSR_MTRR_PHYSMASK0,
-    IA32_MSR_MTRR_PHYSBASE1,
-    IA32_MSR_MTRR_PHYSMASK1,
-    IA32_MSR_MTRR_PHYSBASE2,
-    IA32_MSR_MTRR_PHYSMASK2,
-    IA32_MSR_MTRR_PHYSBASE3,
-    IA32_MSR_MTRR_PHYSMASK3,
-    IA32_MSR_MTRR_PHYSBASE4,
-    IA32_MSR_MTRR_PHYSMASK4,
-    IA32_MSR_MTRR_PHYSBASE5,
-    IA32_MSR_MTRR_PHYSMASK5,
-    IA32_MSR_MTRR_PHYSBASE6,
-    IA32_MSR_MTRR_PHYSMASK6,
-    IA32_MSR_MTRR_PHYSBASE7,
-    IA32_MSR_MTRR_PHYSMASK7,
-    IA32_MSR_MTRR_FIX64K_00000,
-    IA32_MSR_MTRR_FIX16K_80000,
-    IA32_MSR_MTRR_FIX16K_A0000,
-    IA32_MSR_MTRR_FIX4K_C0000,
-    IA32_MSR_MTRR_FIX4K_C8000,
-    IA32_MSR_MTRR_FIX4K_D0000,
-    IA32_MSR_MTRR_FIX4K_D8000,
-    IA32_MSR_MTRR_FIX4K_E0000,
-    IA32_MSR_MTRR_FIX4K_E8000,
-    IA32_MSR_MTRR_FIX4K_F0000,
-    IA32_MSR_MTRR_FIX4K_F8000,
-    IA32_MSR_TSC_AUX,
-    IA32_MSR_DEBUG_CTL,
-	HV_X64_MSR_GUEST_OS_ID,
-	HV_X64_MSR_SINT0,
-	HV_X64_MSR_SINT1,
-	HV_X64_MSR_SINT2,
-	HV_X64_MSR_SINT3,
-	HV_X64_MSR_SINT4,
-	HV_X64_MSR_SINT5,
-	HV_X64_MSR_SINT6,
-	HV_X64_MSR_SINT7,
-	HV_X64_MSR_SINT8,
-	HV_X64_MSR_SINT9,
-	HV_X64_MSR_SINT10,
-	HV_X64_MSR_SINT11,
-	HV_X64_MSR_SINT12,
-	HV_X64_MSR_SINT13,
-	HV_X64_MSR_SINT14,
-	HV_X64_MSR_SINT15,
-	HV_X64_MSR_SCONTROL,
-	HV_X64_MSR_SIEFP,
-	HV_X64_MSR_SIMP,
-	HV_X64_MSR_REFERENCE_TSC,
-	HV_X64_MSR_EOM,
-};
-
-#define MSR_LIST_SIZE_mgns (sizeof(msr_list_mgns) / sizeof(msr_list_mgns[0]))
-
-
-// EFER (technically not a register) bits
-#define EFER_LMA   ((uint64_t)0x400)
-#define EFER_LME   ((uint64_t)0x100)
-
-// CR0 bits
-#define CR0_PE     ((uint64_t)0x1)
-#define CR0_PG     ((uint64_t)0x80000000)
-
-// CR4 bits
-#define CR4_PAE    ((uint64_t)0x20)
-#define CR4_LA57   ((uint64_t)0x1000)
-
-// RFlags bits (shift values)
-#define CF_SHIFT   0
-#define PF_SHIFT   2
-#define AF_SHIFT   4
-#define ZF_SHIFT   6
-#define SF_SHIFT   7
-#define DF_SHIFT   10
-#define OF_SHIFT   11
-
-// RFlags bits (bit masks)
-#define CF         ((uint64_t)1 << CF_SHIFT)
-#define PF         ((uint64_t)1 << PF_SHIFT)
-#define AF         ((uint64_t)1 << AF_SHIFT)
-#define ZF         ((uint64_t)1 << ZF_SHIFT)
-#define SF         ((uint64_t)1 << SF_SHIFT)
-#define DF         ((uint64_t)1 << DF_SHIFT)
-#define OF         ((uint64_t)1 << OF_SHIFT)
 
 #endif

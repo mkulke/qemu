@@ -1,85 +1,88 @@
 #include "qemu/osdep.h"
 #include "system/mshv.h"
 #include "hw/hyperv/linux-mshv.h"
+#include "qemu/error-report.h"
+
+#define MSR_ENTRIES_COUNT 64
 
 static uint32_t SUPPORTED_MSRS[64] = {
-	IA32_MSR_TSC,
-	IA32_MSR_EFER,
-	IA32_MSR_KERNEL_GS_BASE,
-	IA32_MSR_APIC_BASE,
-	IA32_MSR_PAT,
-	IA32_MSR_SYSENTER_CS,
-	IA32_MSR_SYSENTER_ESP,
-	IA32_MSR_SYSENTER_EIP,
-	IA32_MSR_STAR,
-	IA32_MSR_LSTAR,
-	IA32_MSR_CSTAR,
-	IA32_MSR_SFMASK,
-	IA32_MSR_MTRR_DEF_TYPE,
-	IA32_MSR_MTRR_PHYSBASE0,
-	IA32_MSR_MTRR_PHYSMASK0,
-	IA32_MSR_MTRR_PHYSBASE1,
-	IA32_MSR_MTRR_PHYSMASK1,
-	IA32_MSR_MTRR_PHYSBASE2,
-	IA32_MSR_MTRR_PHYSMASK2,
-	IA32_MSR_MTRR_PHYSBASE3,
-	IA32_MSR_MTRR_PHYSMASK3,
-	IA32_MSR_MTRR_PHYSBASE4,
-	IA32_MSR_MTRR_PHYSMASK4,
-	IA32_MSR_MTRR_PHYSBASE5,
-	IA32_MSR_MTRR_PHYSMASK5,
-	IA32_MSR_MTRR_PHYSBASE6,
-	IA32_MSR_MTRR_PHYSMASK6,
-	IA32_MSR_MTRR_PHYSBASE7,
-	IA32_MSR_MTRR_PHYSMASK7,
-	IA32_MSR_MTRR_FIX64K_00000,
-	IA32_MSR_MTRR_FIX16K_80000,
-	IA32_MSR_MTRR_FIX16K_A0000,
-	IA32_MSR_MTRR_FIX4K_C0000,
-	IA32_MSR_MTRR_FIX4K_C8000,
-	IA32_MSR_MTRR_FIX4K_D0000,
-	IA32_MSR_MTRR_FIX4K_D8000,
-	IA32_MSR_MTRR_FIX4K_E0000,
-	IA32_MSR_MTRR_FIX4K_E8000,
-	IA32_MSR_MTRR_FIX4K_F0000,
-	IA32_MSR_MTRR_FIX4K_F8000,
-	IA32_MSR_TSC_AUX,
-	IA32_MSR_DEBUG_CTL,
-	HV_X64_MSR_GUEST_OS_ID,
-	HV_X64_MSR_SINT0,
-	HV_X64_MSR_SINT1,
-	HV_X64_MSR_SINT2,
-	HV_X64_MSR_SINT3,
-	HV_X64_MSR_SINT4,
-	HV_X64_MSR_SINT5,
-	HV_X64_MSR_SINT6,
-	HV_X64_MSR_SINT7,
-	HV_X64_MSR_SINT8,
-	HV_X64_MSR_SINT9,
-	HV_X64_MSR_SINT10,
-	HV_X64_MSR_SINT11,
-	HV_X64_MSR_SINT12,
-	HV_X64_MSR_SINT13,
-	HV_X64_MSR_SINT14,
-	HV_X64_MSR_SINT15,
-	HV_X64_MSR_SCONTROL,
-	HV_X64_MSR_SIEFP,
-	HV_X64_MSR_SIMP,
-	HV_X64_MSR_REFERENCE_TSC,
-	HV_X64_MSR_EOM,
+    IA32_MSR_TSC,
+    IA32_MSR_EFER,
+    IA32_MSR_KERNEL_GS_BASE,
+    IA32_MSR_APIC_BASE,
+    IA32_MSR_PAT,
+    IA32_MSR_SYSENTER_CS,
+    IA32_MSR_SYSENTER_ESP,
+    IA32_MSR_SYSENTER_EIP,
+    IA32_MSR_STAR,
+    IA32_MSR_LSTAR,
+    IA32_MSR_CSTAR,
+    IA32_MSR_SFMASK,
+    IA32_MSR_MTRR_DEF_TYPE,
+    IA32_MSR_MTRR_PHYSBASE0,
+    IA32_MSR_MTRR_PHYSMASK0,
+    IA32_MSR_MTRR_PHYSBASE1,
+    IA32_MSR_MTRR_PHYSMASK1,
+    IA32_MSR_MTRR_PHYSBASE2,
+    IA32_MSR_MTRR_PHYSMASK2,
+    IA32_MSR_MTRR_PHYSBASE3,
+    IA32_MSR_MTRR_PHYSMASK3,
+    IA32_MSR_MTRR_PHYSBASE4,
+    IA32_MSR_MTRR_PHYSMASK4,
+    IA32_MSR_MTRR_PHYSBASE5,
+    IA32_MSR_MTRR_PHYSMASK5,
+    IA32_MSR_MTRR_PHYSBASE6,
+    IA32_MSR_MTRR_PHYSMASK6,
+    IA32_MSR_MTRR_PHYSBASE7,
+    IA32_MSR_MTRR_PHYSMASK7,
+    IA32_MSR_MTRR_FIX64K_00000,
+    IA32_MSR_MTRR_FIX16K_80000,
+    IA32_MSR_MTRR_FIX16K_A0000,
+    IA32_MSR_MTRR_FIX4K_C0000,
+    IA32_MSR_MTRR_FIX4K_C8000,
+    IA32_MSR_MTRR_FIX4K_D0000,
+    IA32_MSR_MTRR_FIX4K_D8000,
+    IA32_MSR_MTRR_FIX4K_E0000,
+    IA32_MSR_MTRR_FIX4K_E8000,
+    IA32_MSR_MTRR_FIX4K_F0000,
+    IA32_MSR_MTRR_FIX4K_F8000,
+    IA32_MSR_TSC_AUX,
+    IA32_MSR_DEBUG_CTL,
+    HV_X64_MSR_GUEST_OS_ID,
+    HV_X64_MSR_SINT0,
+    HV_X64_MSR_SINT1,
+    HV_X64_MSR_SINT2,
+    HV_X64_MSR_SINT3,
+    HV_X64_MSR_SINT4,
+    HV_X64_MSR_SINT5,
+    HV_X64_MSR_SINT6,
+    HV_X64_MSR_SINT7,
+    HV_X64_MSR_SINT8,
+    HV_X64_MSR_SINT9,
+    HV_X64_MSR_SINT10,
+    HV_X64_MSR_SINT11,
+    HV_X64_MSR_SINT12,
+    HV_X64_MSR_SINT13,
+    HV_X64_MSR_SINT14,
+    HV_X64_MSR_SINT15,
+    HV_X64_MSR_SCONTROL,
+    HV_X64_MSR_SIEFP,
+    HV_X64_MSR_SIMP,
+    HV_X64_MSR_REFERENCE_TSC,
+    HV_X64_MSR_EOM,
 };
 
 static int compare_msr_index(const void *a, const void *b)
 {
-	return (*(uint32_t *)a - *(uint32_t *)b);
+    return (*(uint32_t *)a - *(uint32_t *)b);
 }
 
 int mshv_is_supported_msr(uint32_t msr)
 {
-	return bsearch(&msr, SUPPORTED_MSRS,
-				   sizeof(SUPPORTED_MSRS) / sizeof(uint32_t),
-				   sizeof(uint32_t),
-				   compare_msr_index) != NULL;
+    return bsearch(&msr, SUPPORTED_MSRS,
+                   sizeof(SUPPORTED_MSRS) / sizeof(uint32_t),
+                   sizeof(uint32_t),
+                   compare_msr_index) != NULL;
 }
 
 int mshv_msr_to_hv_reg_name(uint32_t msr, uint32_t *hv_reg)
@@ -298,4 +301,59 @@ int mshv_msr_to_hv_reg_name(uint32_t msr, uint32_t *hv_reg)
     }
 }
 
+static int set_msrs(int cpu_fd, GList *msrs)
+{
+    size_t n_msrs;
+    GList *entries;
+    MshvMsrEntry *entry;
+    enum hv_register_name name;
+    struct hv_register_assoc *assoc;
+    int ret;
+    size_t i = 0;
 
+    n_msrs = g_list_length(msrs);
+    hv_register_assoc *assocs = g_new0(hv_register_assoc, n_msrs);
+
+    entries = msrs;
+    for(GList* elem = entries; elem != NULL; elem = elem->next) {
+        entry = elem->data;
+        ret = mshv_msr_to_hv_reg_name(entry->index, &name);
+        if (ret < 0) {
+            g_free(assocs);
+            return ret;
+        }
+        assoc = &assocs[i];
+        assoc->name = name;
+        /* the union has been initialized to 0 */
+        assoc->value.reg64 = entry->data;
+        i++;
+    }
+    ret = mshv_set_generic_regs(cpu_fd, assocs, n_msrs);
+    g_free(assocs);
+    if (ret < 0) {
+        error_report("failed to set msrs");
+        return -1;
+    }
+    return 0;
+}
+
+
+int mshv_configure_msr(int cpu_fd, const MshvMsrEntry *msrs, size_t n_msrs)
+{
+    GList *valid_msrs = NULL;
+    uint32_t msr_index;
+    int ret;
+
+    for (size_t i = 0; i < n_msrs; i++) {
+        msr_index = msrs[i].index;
+        /* check whether index of msrs is in SUPPORTED_MSRS */
+        if (mshv_is_supported_msr(msr_index)) {
+            valid_msrs = g_list_append(valid_msrs, (void*) &msrs[i]);
+        }
+    }
+
+    ret = set_msrs(cpu_fd, valid_msrs);
+    g_list_free(valid_msrs);
+
+    return ret;
+}

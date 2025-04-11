@@ -1,6 +1,5 @@
 mshv_ss = ss.source_set()
 mshv_ss.add(if_true: files(
-  'cpu.c',
   'irq.c',
   'mem.c',
   'msr.c',

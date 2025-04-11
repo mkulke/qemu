@@ -182,12 +182,7 @@ bool x86_read_segment_descriptor(CPUState *cpu,
 
 	gva = base + sel.index * 8;
 	emul_ops->read_mem(cpu, desc, gva, sizeof(*desc));
-    /* void (*read_mem)(CPUState *cpu, void *data, target_ulong addr, int bytes); */
-    /* ret = guest_mem_read_mgns(cpu, gva, (void *)desc, sizeof(*desc)); */
-	/* if (ret < 0) { */
-	/* 	perror("failed to read segment descriptor"); */
-	/* 	return false; */
-	/* } */
+
 	return true;
 }
 
@@ -216,13 +211,6 @@ bool x86_write_segment_descriptor(CPUState *cpu,
 
 	gva = base + sel.index * 8;
 	emul_ops->write_mem(cpu, desc, gva, sizeof(*desc));
-    /* void (*write_mem)(CPUState *cpu, void *data, target_ulong addr, int bytes); */
-
-	/* ret = guest_mem_write_mgns(cpu, gva, (void*) desc, sizeof(*desc)); */
-	/* if (ret < 0) { */
-	/* 	perror("failed to write segment descriptor"); */
-	/* 	return false; */
-	/* } */
 
 	return true;
 }
@@ -247,13 +235,8 @@ bool x86_read_call_gate(CPUState *cpu, struct x86_call_gate *idt_desc,
     }
 
 	gva = base + gate * 8;
-	/* ret = guest_mem_read_mgns(cpu, gva, (void*)idt_desc, sizeof(*idt_desc)); */
 	emul_ops->read_mem(cpu, idt_desc, gva, sizeof(*idt_desc));
-	/* void (*read_mem)(CPUState *cpu, void *data, target_ulong addr, int bytes); */
-	/* if (ret < 0) { */
-	/* 	perror("failed to read call gate"); */
-	/* 	return false; */
-	/* } */
+
 	return true;
 }
 

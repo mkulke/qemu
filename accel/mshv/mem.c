@@ -30,33 +30,17 @@ void mshv_init_mem_manager(void)
     mem_manager->mem_entries = NULL;
 }
 
-static MshvMemoryEntry *find_entry_by_userspace_addr(uint64_t addr)
-{
-    MshvMemoryEntry *entry;
-    GList *entries;
-
-    entries = mem_manager->mem_entries;
-    for (GList* elem = entries; elem != NULL; elem = elem->next) {
-        entry = elem->data;
-        /* Check whether addr falls into the range of an already mapped
-         * region */
-        if (entry->mr.userspace_addr <= addr
-            && addr - entry->mr.userspace_addr < entry->mr.memory_size
-            && entry->mapped) {
-            return entry;
-        }
-    }
-
-    return NULL;
-}
-
 static int set_guest_memory(int vm_fd, const mshv_user_mem_region *region)
 {
     int ret;
+    GList *entries;
+    uint64_t addr;
 
     ret = ioctl(vm_fd, MSHV_SET_GUEST_MEMORY, region);
     if (ret < 0) {
-        if (find_entry_by_userspace_addr(region->userspace_addr)) {
+        addr = region->userspace_addr;
+        entries = mem_manager->mem_entries;
+        if (mshv_find_entry_by_userspace_addr(entries, addr)) {
             return -MSHV_USERSPACE_ADDR_REMAP_ERROR;
         }
 
@@ -90,28 +74,12 @@ static int map_or_unmap(int vm_fd, const MshvMemoryRegion *mr, bool add)
 
 bool mshv_find_entry_idx_by_gpa(uint64_t addr, size_t *index)
 {
-    MshvMemoryEntry *entry;
     GList *entries;
-    size_t i = 0;
-    uint64_t gpa_offset;
 
     assert(mem_manager);
 
     entries = mem_manager->mem_entries;
-    for(GList* elem = entries; elem != NULL; elem = elem->next) {
-        entry = elem->data;
-        gpa_offset = addr - entry->mr.guest_phys_addr;
-        if (entry->mr.guest_phys_addr <= addr
-            && gpa_offset < entry->mr.memory_size) {
-            if (index != NULL) {
-                *index = i;
-            }
-            return true;
-        }
-        i++;
-    }
-
-    return false;
+    return mshv_find_idx_by_gpa_in_entries(entries, addr, index);
 }
 
 static bool find_overlap_region(size_t gpa_idx, const MshvMemoryRegion *mr,

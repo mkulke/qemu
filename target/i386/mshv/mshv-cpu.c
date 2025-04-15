@@ -181,12 +181,12 @@ static int guest_mem_write_with_gva(const CPUState *cpu, uint64_t gva,
     flags = HV_TRANSLATE_GVA_VALIDATE_WRITE;
     ret = translate_gva(cpu_fd, gva, &gpa, flags);
     if (ret < 0) {
-        perror("failed to translate gva to gpa");
+        error_report("failed to translate gva to gpa");
         return -1;
     }
     ret = mshv_guest_mem_write(gpa, data, size, false);
     if (ret < 0) {
-        perror("failed to write to guest memory");
+        error_report("failed to write to guest memory");
         return -1;
     }
     return 0;
@@ -741,8 +741,9 @@ static int register_intercept_result_cpuid_entry(int cpu_fd,
 
     ret = ioctl(cpu_fd, MSHV_VP_REGISTER_INTERCEPT_RESULT, &args);
     if (ret < 0) {
-        perror("failed to register intercept result for cpuid");
-        return -errno;
+        error_report("failed to register intercept result for cpuid: %s",
+                     strerror(errno));
+        return -1;
     }
 
     return 0;
@@ -1091,7 +1092,7 @@ static int set_memory_info(const struct hyperv_message *msg,
     if (msg->header.message_type != HVMSG_GPA_INTERCEPT
             && msg->header.message_type != HVMSG_UNMAPPED_GPA
             && msg->header.message_type != HVMSG_UNACCEPTED_GPA) {
-        perror("invalid message type");
+        error_report("invalid message type");
         return -1;
     }
     // copy the content of the message to info
@@ -1114,8 +1115,11 @@ static int read_memory(int cpu_fd, uint64_t initial_gva, uint64_t initial_gpa,
             return -1;
         }
 
-        /* TODO: it's unfortunate that this fn doesn't fail */
-        mshv_guest_mem_read(gpa, data, len, false, false);
+        ret = mshv_guest_mem_read(gpa, data, len, false, false);
+        if (ret < 0) {
+            error_report("failed to read guest mem");
+            return -1;
+        }
     }
 
     return 0;
@@ -1239,7 +1243,7 @@ static int handle_unmapped_mem(int vm_fd, CPUState *cpu,
 
     ret = set_memory_info(msg, &info);
     if (ret < 0) {
-        perror("failed to convert message to memory info");
+        error_report("failed to convert message to memory info");
         return -1;
     }
     gpa = info.guest_physical_address;
@@ -1259,98 +1263,130 @@ static int handle_unmapped_mem(int vm_fd, CPUState *cpu,
     return 0;
 }
 
-static int handle_pio_str(CPUState *cpu, hv_x64_io_port_intercept_message *info)
+/* This function is used to fetch the guest state from the hypervisor.
+ * It retrieves the standard and special registers and updates the CPU state
+ * accordingly. */
+static int fetch_guest_state(CPUState *cpu)
 {
+    int ret;
+
+    ret = mshv_get_standard_regs(cpu);
+    if (ret < 0) {
+        error_report("Failed to get standard registers");
+        return -1;
+    }
+    ret = mshv_get_special_regs(cpu);
+    if (ret < 0) {
+        error_report("Failed to get special registers");
+        return -1;
+    }
+
+    return 0;
+}
+
+static int handle_pio_str_read(CPUState *cpu,
+                                hv_x64_io_port_intercept_message *info,
+                                size_t repeat, uint16_t port,
+                                bool direction_flag)
+{
+    int ret;
+    uint64_t dst;
     size_t len = info->access_info.access_size;
+    uint8_t data[4] = { 0 };
+    int cpu_fd = mshv_vcpufd(cpu);
+
+    dst = linear_addr(cpu, info->rdi, R_ES);
+
+    for (size_t i = 0; i < repeat; i++) {
+        mshv_pio_read(port, data, len, false);
+
+        ret = write_memory(cpu_fd, 0, 0, dst, data, len);
+        if (ret < 0) {
+            error_report("Failed to write memory");
+            return -1;
+        }
+        dst += direction_flag ? -len : len;
+        info->rdi += direction_flag ? -len : len;
+    }
+
+    return 0;
+}
+
+
+static int handle_pio_str_write(CPUState *cpu,
+                                hv_x64_io_port_intercept_message *info,
+                                size_t repeat, uint16_t port,
+                                bool direction_flag)
+{
+    int ret;
+    uint64_t src;
+    uint8_t data[4] = { 0 };
+    size_t len = info->access_info.access_size;
+    int cpu_fd = mshv_vcpufd(cpu);
+
+    src = linear_addr(cpu, info->rsi, R_DS);
+
+    for (size_t i = 0; i < repeat; i++) {
+        ret = read_memory(cpu_fd, 0, 0, src, data, len);
+        if (ret < 0) {
+            error_report("Failed to read memory");
+            return -1;
+        }
+        ret = mshv_pio_write(port, data, len, false);
+        if (ret < 0) {
+            error_report("Failed to write to io port");
+            return -1;
+        }
+        src += direction_flag ? -len : len;
+        info->rsi += direction_flag ? -len : len;
+    }
+
+    return 0;
+}
+
+static int handle_pio_str(CPUState *cpu,
+                          hv_x64_io_port_intercept_message *info)
+{
     uint8_t access_type = info->header.intercept_access_type;
     uint16_t port = info->port_number;
     bool repop = info->access_info.rep_prefix == 1;
     size_t repeat = repop ? info->rcx : 1;
     size_t insn_len = info->header.instruction_length;
-    uint8_t data[4] = { 0 };
     bool direction_flag;
     uint32_t reg_names[3];
     uint64_t reg_values[3];
     int ret;
-    uint64_t src, dst, rip, rax, rsi, rdi;
     struct X64Registers x64_regs = { 0 };
     X86CPU *x86_cpu = X86_CPU(cpu);
     CPUX86State *env = &x86_cpu->env;
     int cpu_fd = mshv_vcpufd(cpu);
 
-    ret = mshv_get_standard_regs(cpu);
+    ret = fetch_guest_state(cpu);
     if (ret < 0) {
-        error_report("failed to get standard registers");
-        return -1;
-    }
-    ret = mshv_get_special_regs(cpu);
-    if (ret < 0) {
-        error_report("failed to get special registers");
+        error_report("Failed to fetch guest state");
         return -1;
     }
 
     direction_flag = (env->eflags & DF) != 0;
 
     if (access_type == HV_X64_INTERCEPT_ACCESS_TYPE_WRITE) {
-        src = linear_addr(cpu, info->rsi, R_DS);
-
-        for (size_t i = 0; i < repeat; i++) {
-            ret = read_memory(cpu_fd, 0, 0, src, data, len);
-            if (ret < 0) {
-                perror("failed to read memory");
-                return -1;
-            }
-            ret = mshv_pio_write(port, data, len, false);
-            if (ret < 0) {
-                perror("failed to write to io port");
-                return -1;
-            }
-            if (direction_flag) {
-                src -= (uint64_t)len;
-                info->rsi -= (uint64_t)len;
-            } else {
-                src += (uint64_t)len;
-                info->rsi += (uint64_t)len;
-            }
+        ret = handle_pio_str_write(cpu, info, repeat, port, direction_flag);
+        if (ret < 0) {
+            error_report("Failed to handle pio str write");
+            return -1;
         }
-        rip = info->header.rip + insn_len;
-        rax = info->rax;
-        rsi = info->rsi;
-        reg_names[0] = HV_X64_REGISTER_RIP;
-        reg_values[0] = rip;
-        reg_names[1] = HV_X64_REGISTER_RAX;
-        reg_values[1] = rax;
-        reg_names[2] = HV_X64_REGISTER_RSI;
-        reg_values[2] = rsi;
+        reg_names[0] = HV_X64_REGISTER_RSI;
+        reg_values[0] = info->rsi;
     } else {
-        dst = linear_addr(cpu, info->rdi, R_ES);
-
-        for (size_t i = 0; i < repeat; i++) {
-            mshv_pio_read(port, data, len, false);
-
-            ret = write_memory(cpu_fd, 0, 0, dst, data, len);
-            if (ret < 0) {
-                perror("failed to write memory");
-                return -1;
-            }
-            if (direction_flag) {
-                dst -= (uint64_t)len;
-                info->rdi -= (uint64_t)len;
-            } else {
-                dst += (uint64_t)len;
-                info->rdi += (uint64_t)len;
-            }
-        }
-        rip = info->header.rip + insn_len;
-        rax = info->rax;
-        rdi = info->rdi;
-        reg_names[0] = HV_X64_REGISTER_RIP;
-        reg_values[0] = rip;
-        reg_names[1] = HV_X64_REGISTER_RAX;
-        reg_values[1] = rax;
-        reg_names[2] = HV_X64_REGISTER_RDI;
-        reg_values[2] = rdi;
+        ret = handle_pio_str_read(cpu, info, repeat, port, direction_flag);
+        reg_names[0] = HV_X64_REGISTER_RDI;
+        reg_values[0] = info->rdi;
     }
+
+    reg_names[1] = HV_X64_REGISTER_RIP;
+    reg_values[1] = info->header.rip + insn_len;
+    reg_names[2] = HV_X64_REGISTER_RAX;
+    reg_values[2] = info->rax;
 
     x64_regs.names = reg_names;
     x64_regs.values = reg_values;
@@ -1358,7 +1394,7 @@ static int handle_pio_str(CPUState *cpu, hv_x64_io_port_intercept_message *info)
 
     ret = set_x64_registers(cpu_fd, &x64_regs);
     if (ret < 0) {
-        perror("failed to set x64 registers");
+        error_report("Failed to set x64 registers");
         return -1;
     }
 
@@ -1391,7 +1427,7 @@ static int handle_pio_non_str(const CPUState *cpu,
         /* secure mode is set to false */
         ret = mshv_pio_write(port, conv.bytes, len, false);
         if (ret < 0) {
-            perror("failed to write to io port");
+            error_report("Failed to write to io port");
             return -1;
         }
     } else {
@@ -1422,7 +1458,7 @@ static int handle_pio_non_str(const CPUState *cpu,
 
     ret = set_x64_registers(cpu_fd, &x64_regs);
     if (ret < 0) {
-        error_report("failed to set x64 registers");
+        error_report("Failed to set x64 registers");
         return -1;
     }
 
@@ -1433,7 +1469,7 @@ static int set_ioport_info(const struct hyperv_message *msg,
                            hv_x64_io_port_intercept_message *info)
 {
     if (msg->header.message_type != HVMSG_X64_IO_PORT_INTERCEPT) {
-        perror("invalid message type");
+        error_report("Invalid message type");
         return -1;
     }
     // copy the content of the message to info
@@ -1448,7 +1484,7 @@ static int handle_pio(CPUState *cpu, const struct hyperv_message *msg)
 
     ret = set_ioport_info(msg, &info);
     if (ret < 0) {
-        perror("failed to convert message to ioport info");
+        error_report("Failed to convert message to ioport info");
         return -1;
     }
 

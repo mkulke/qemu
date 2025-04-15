@@ -21,29 +21,29 @@
 #include "system/mshv.h"
 
 /* RW or Exec segment */
-static uint8_t RWRX_SEGMENT_TYPE = 0x2;
-static uint8_t CODE_SEGMENT_TYPE = 0x8;
-static uint8_t EXPAND_DOWN_SEGMENT_TYPE = 0x4;
+static const uint8_t RWRX_SEGMENT_TYPE        = 0x2;
+static const uint8_t CODE_SEGMENT_TYPE        = 0x8;
+static const uint8_t EXPAND_DOWN_SEGMENT_TYPE = 0x4;
 
 typedef enum CpuMode {
-	REAL_MODE,
-	PROTECTED_MODE,
-	LONG_MODE,
+    REAL_MODE,
+    PROTECTED_MODE,
+    LONG_MODE,
 } CpuMode;
 
 static CpuMode cpu_mode(CPUState *cpu)
 {
-	enum CpuMode m = REAL_MODE;
+    enum CpuMode m = REAL_MODE;
 
-	if (x86_is_protected(cpu)) {
-		m = PROTECTED_MODE;
+    if (x86_is_protected(cpu)) {
+        m = PROTECTED_MODE;
 
-		if (x86_is_long_mode(cpu)) {
-			m = LONG_MODE;
-		}
-	}
+        if (x86_is_long_mode(cpu)) {
+            m = LONG_MODE;
+        }
+    }
 
-	return m;
+    return m;
 }
 
 static bool segment_type_ro(const SegmentCache *seg)
@@ -62,23 +62,23 @@ static bool segment_expands_down(const SegmentCache *seg)
 {
     uint32_t type_ = (seg->flags >> DESC_TYPE_SHIFT) & 15;
 
-	if (segment_type_code(seg)) {
-		return false;
-	}
+    if (segment_type_code(seg)) {
+        return false;
+    }
 
-	return (type_ & EXPAND_DOWN_SEGMENT_TYPE) != 0;
+    return (type_ & EXPAND_DOWN_SEGMENT_TYPE) != 0;
 }
 
 static uint32_t segment_limit(const SegmentCache *seg)
 {
-	uint32_t limit = seg->limit;
+    uint32_t limit = seg->limit;
     uint32_t granularity = (seg->flags & DESC_G_MASK) != 0;
 
-	if (granularity != 0) {
-		limit = (limit << 12) | 0xFFF;
-	}
+    if (granularity != 0) {
+        limit = (limit << 12) | 0xFFF;
+    }
 
-	return limit;
+    return limit;
 }
 
 static uint8_t segment_db(const SegmentCache *seg)
@@ -86,64 +86,68 @@ static uint8_t segment_db(const SegmentCache *seg)
     return (seg->flags >> DESC_B_SHIFT) & 1;
 }
 
-static int linearize(CPUState *cpu,
-					 target_ulong logical_addr, target_ulong *linear_addr,
-					 X86Seg seg_idx)
+static uint32_t segment_max_limit(const SegmentCache *seg)
 {
-	enum CpuMode mode;
+    if (segment_db(seg) != 0) {
+        return 0xFFFFFFFF;
+    }
+    return 0xFFFF;
+}
+
+static int linearize(CPUState *cpu,
+                     target_ulong logical_addr, target_ulong *linear_addr,
+                     X86Seg seg_idx)
+{
+    enum CpuMode mode;
     X86CPU *x86_cpu = X86_CPU(cpu);
     CPUX86State *env = &x86_cpu->env;
-	SegmentCache *seg = &env->segs[seg_idx];
-	target_ulong base = seg->base;
-	target_ulong logical_addr_32b;
-	uint32_t limit;
-	/* TODO: the emulator will not pass us "write" indicator yet */
-	bool write = false;
+    SegmentCache *seg = &env->segs[seg_idx];
+    target_ulong base = seg->base;
+    target_ulong logical_addr_32b;
+    uint32_t limit;
+    /* TODO: the emulator will not pass us "write" indicator yet */
+    bool write = false;
 
-	mode = cpu_mode(cpu);
+    mode = cpu_mode(cpu);
 
-	switch (mode) {
-	case LONG_MODE:
-		if (__builtin_add_overflow(logical_addr, base, linear_addr)) {
-			perror("address overflow");
-			return -1;
-		}
-		break;
-	case PROTECTED_MODE:
-	case REAL_MODE:
-		if (segment_type_ro(seg) && write) {
-			perror("cannot write to read-only segment");
-			return -1;
-		}
+    switch (mode) {
+    case LONG_MODE:
+        if (__builtin_add_overflow(logical_addr, base, linear_addr)) {
+            error_report("Address overflow");
+            return -1;
+        }
+        break;
+    case PROTECTED_MODE:
+    case REAL_MODE:
+        if (segment_type_ro(seg) && write) {
+            error_report("Cannot write to read-only segment");
+            return -1;
+        }
 
-		logical_addr_32b = logical_addr & 0xFFFFFFFF;
-		limit = segment_limit(seg);
+        logical_addr_32b = logical_addr & 0xFFFFFFFF;
+        limit = segment_limit(seg);
 
-		if (segment_expands_down(seg)) {
-			if (logical_addr_32b >= limit) {
-				perror("address exceeds limit (expands down)");
-				return -1;
-			}
+        if (segment_expands_down(seg)) {
+            if (logical_addr_32b >= limit) {
+                error_report("Address exceeds limit (expands down)");
+                return -1;
+            }
 
-			if (segment_db(seg) != 0) {
-				limit = 0xFFFFFFFF;
-			} else {
-				limit = 0xFFFF;
-			}
-		}
+            limit = segment_max_limit(seg);
+        }
 
-		if (logical_addr_32b > limit) {
-			error_report("address exceeds limit %u", limit);
-			return -1;
-		}
-		*linear_addr = logical_addr_32b + base;
-		break;
-	default:
-		perror("unknown cpu mode");
-		return -1;
-	}
+        if (logical_addr_32b > limit) {
+            error_report("Address exceeds limit %u", limit);
+            return -1;
+        }
+        *linear_addr = logical_addr_32b + base;
+        break;
+    default:
+        error_report("Unknown cpu mode: %d", mode);
+        return -1;
+    }
 
-	return 0;
+    return 0;
 }
 
 bool x86_read_segment_descriptor(CPUState *cpu,
@@ -154,8 +158,8 @@ bool x86_read_segment_descriptor(CPUState *cpu,
     uint32_t limit;
     X86CPU *x86_cpu = X86_CPU(cpu);
     CPUX86State *env = &x86_cpu->env;
-	target_ulong gva;
-	/* int ret; */
+    target_ulong gva;
+    /* int ret; */
 
     memset(desc, 0, sizeof(*desc));
 
@@ -165,21 +169,21 @@ bool x86_read_segment_descriptor(CPUState *cpu,
     }
 
     if (GDT_SEL == sel.ti) {
-		base = env->gdt.base;
-		limit = env->gdt.limit;
+        base = env->gdt.base;
+        limit = env->gdt.limit;
     } else {
-		base = env->ldt.base;
-		limit = env->ldt.limit;
+        base = env->ldt.base;
+        limit = env->ldt.limit;
     }
 
     if (sel.index * 8 >= limit) {
         return false;
     }
 
-	gva = base + sel.index * 8;
-	emul_ops->read_mem(cpu, desc, gva, sizeof(*desc));
+    gva = base + sel.index * 8;
+    emul_ops->read_mem(cpu, desc, gva, sizeof(*desc));
 
-	return true;
+    return true;
 }
 
 bool x86_write_segment_descriptor(CPUState *cpu,
@@ -190,63 +194,58 @@ bool x86_write_segment_descriptor(CPUState *cpu,
     uint32_t limit;
     X86CPU *x86_cpu = X86_CPU(cpu);
     CPUX86State *env = &x86_cpu->env;
-	/* int ret; */
-	target_ulong gva;
+    /* int ret; */
+    target_ulong gva;
 
     if (GDT_SEL == sel.ti) {
-		base = env->gdt.base;
-		limit = env->gdt.limit;
+        base = env->gdt.base;
+        limit = env->gdt.limit;
     } else {
-		base = env->ldt.base;
-		limit = env->ldt.limit;
+        base = env->ldt.base;
+        limit = env->ldt.limit;
     }
 
     if (sel.index * 8 >= limit) {
         return false;
     }
 
-	gva = base + sel.index * 8;
-	emul_ops->write_mem(cpu, desc, gva, sizeof(*desc));
+    gva = base + sel.index * 8;
+    emul_ops->write_mem(cpu, desc, gva, sizeof(*desc));
 
-	return true;
+    return true;
 }
 
 bool x86_read_call_gate(CPUState *cpu, struct x86_call_gate *idt_desc,
                         int gate)
 {
-	target_ulong base;
-	uint32_t limit;
+    target_ulong base;
+    uint32_t limit;
     X86CPU *x86_cpu = X86_CPU(cpu);
     CPUX86State *env = &x86_cpu->env;
-	/* int ret; */
-	int gva;
+    target_ulong gva;
 
-	base = env->idt.base;
-	limit = env->idt.limit;
+    base = env->idt.base;
+    limit = env->idt.limit;
 
     memset(idt_desc, 0, sizeof(*idt_desc));
     if (gate * 8 >= limit) {
-		perror("call gate exceeds idt limit");
+        perror("call gate exceeds idt limit");
         return false;
     }
 
-	gva = base + gate * 8;
-	emul_ops->read_mem(cpu, idt_desc, gva, sizeof(*idt_desc));
+    gva = base + gate * 8;
+    emul_ops->read_mem(cpu, idt_desc, gva, sizeof(*idt_desc));
 
-	return true;
+    return true;
 }
 
 bool x86_is_protected(CPUState *cpu)
 {
     X86CPU *x86_cpu = X86_CPU(cpu);
     CPUX86State *env = &x86_cpu->env;
-	uint64_t cr0 = env->cr[0];
+    uint64_t cr0 = env->cr[0];
 
-	if (cr0 & CR0_PE_MASK) {
-		return true;
-	}
-
-	return false;
+    return cr0 & CR0_PE_MASK;
 }
 
 bool x86_is_real(CPUState *cpu)
@@ -265,48 +264,48 @@ bool x86_is_long_mode(CPUState *cpu)
 {
     X86CPU *x86_cpu = X86_CPU(cpu);
     CPUX86State *env = &x86_cpu->env;
-	uint64_t efer = env->efer;
+    uint64_t efer = env->efer;
 
-	return ((efer & (EFER_LME | EFER_LMA)) == (EFER_LME | EFER_LMA));
+    return ((efer & (EFER_LME | EFER_LMA)) == (EFER_LME | EFER_LMA));
 }
 
 bool x86_is_long64_mode(CPUState *cpu)
 {
-	perror("unimplemented: is_long64_mode()");
-	abort();
+    error_report("unimplemented: is_long64_mode()");
+    abort();
 }
 
 bool x86_is_paging_mode(CPUState *cpu)
 {
     X86CPU *x86_cpu = X86_CPU(cpu);
     CPUX86State *env = &x86_cpu->env;
-	uint64_t cr0 = env->cr[0];
+    uint64_t cr0 = env->cr[0];
 
-	return cr0 & CR0_PG_MASK;
+    return cr0 & CR0_PG_MASK;
 }
 
 bool x86_is_pae_enabled(CPUState *cpu)
 {
     X86CPU *x86_cpu = X86_CPU(cpu);
     CPUX86State *env = &x86_cpu->env;
-	uint64_t cr4 = env->cr[4];
+    uint64_t cr4 = env->cr[4];
 
-	return cr4 & CR4_PAE_MASK;
+    return cr4 & CR4_PAE_MASK;
 }
 
 target_ulong linear_addr(CPUState *cpu, target_ulong addr, X86Seg seg)
 {
-	int ret;
-	target_ulong linear_addr;
+    int ret;
+    target_ulong linear_addr;
 
     /* return vmx_read_segment_base(cpu, seg) + addr; */
-	ret = linearize(cpu, addr, &linear_addr, seg);
-	if (ret < 0) {
-		error_report("failed to linearize address");
-		abort();
-	}
+    ret = linearize(cpu, addr, &linear_addr, seg);
+    if (ret < 0) {
+        error_report("failed to linearize address");
+        abort();
+    }
 
-	return linear_addr;
+    return linear_addr;
 }
 
 target_ulong linear_addr_size(CPUState *cpu, target_ulong addr, int size,

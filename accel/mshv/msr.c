@@ -16,9 +16,7 @@
 #include "hw/hyperv/linux-mshv.h"
 #include "qemu/error-report.h"
 
-#define MSR_ENTRIES_COUNT 64
-
-static uint32_t SUPPORTED_MSRS[64] = {
+static uint32_t supported_msrs[64] = {
     IA32_MSR_TSC,
     IA32_MSR_EFER,
     IA32_MSR_KERNEL_GS_BASE,
@@ -84,17 +82,22 @@ static uint32_t SUPPORTED_MSRS[64] = {
     HV_X64_MSR_REFERENCE_TSC,
     HV_X64_MSR_EOM,
 };
+static const size_t msr_count = ARRAY_SIZE(supported_msrs);
 
 static int compare_msr_index(const void *a, const void *b)
 {
     return (*(uint32_t *)a - *(uint32_t *)b);
 }
 
+__attribute__((constructor))
+static void init_sorted_msr_map(void)
+{
+    qsort(supported_msrs, msr_count, sizeof(uint32_t), compare_msr_index);
+}
+
 int mshv_is_supported_msr(uint32_t msr)
 {
-    return bsearch(&msr, SUPPORTED_MSRS,
-                   sizeof(SUPPORTED_MSRS) / sizeof(uint32_t),
-                   sizeof(uint32_t),
+    return bsearch(&msr, supported_msrs, msr_count, sizeof(uint32_t),
                    compare_msr_index) != NULL;
 }
 
@@ -309,7 +312,7 @@ int mshv_msr_to_hv_reg_name(uint32_t msr, uint32_t *hv_reg)
         *hv_reg = HV_REGISTER_EOM;
         return 0;
     default:
-        perror("failed to map MSR to HV register name");
+        error_report("failed to map MSR %u to HV register name", msr);
         return -1;
     }
 }

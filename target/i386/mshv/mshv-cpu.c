@@ -120,7 +120,8 @@ static enum hv_register_name FPU_REGISTER_NAMES[26] = {
     HV_X64_REGISTER_XMM_CONTROL_STATUS,
 };
 
-static int translate_gva(int cpu_fd, uint64_t gva, uint64_t *gpa, uint64_t flags)
+static int translate_gva(int cpu_fd, uint64_t gva, uint64_t *gpa,
+                         uint64_t flags)
 {
     int ret;
     union hv_translate_gva_result result = { 0 };
@@ -236,8 +237,8 @@ static void read_segment_descriptor_emu(CPUState *cpu,
     }
 }
 
-static void handle_io_emu(CPUState *cpu, uint16_t port, void *data, int direction,
-                          int size, int count)
+static void handle_io_emu(CPUState *cpu, uint16_t port, void *data,
+                          int direction, int size, int count)
 {
     error_report("handle_io_emu not implemented");
     abort();
@@ -350,25 +351,25 @@ int mshv_set_generic_regs(int cpu_fd, hv_register_assoc *assocs, size_t n_regs)
 static void populate_standard_regs(const hv_register_assoc *assocs,
                                    CPUX86State *env)
 {
-	env->regs[R_EAX] = assocs[0].value.reg64;
-	env->regs[R_EBX] = assocs[1].value.reg64;
-	env->regs[R_ECX] = assocs[2].value.reg64;
-	env->regs[R_EDX] = assocs[3].value.reg64;
-	env->regs[R_ESI] = assocs[4].value.reg64;
-	env->regs[R_EDI] = assocs[5].value.reg64;
-	env->regs[R_ESP] = assocs[6].value.reg64;
-	env->regs[R_EBP] = assocs[7].value.reg64;
-	env->regs[R_R8]  = assocs[8].value.reg64;
-	env->regs[R_R9]  = assocs[9].value.reg64;
-	env->regs[R_R10] = assocs[10].value.reg64;
-	env->regs[R_R11] = assocs[11].value.reg64;
-	env->regs[R_R12] = assocs[12].value.reg64;
-	env->regs[R_R13] = assocs[13].value.reg64;
-	env->regs[R_R14] = assocs[14].value.reg64;
-	env->regs[R_R15] = assocs[15].value.reg64;
+    env->regs[R_EAX] = assocs[0].value.reg64;
+    env->regs[R_EBX] = assocs[1].value.reg64;
+    env->regs[R_ECX] = assocs[2].value.reg64;
+    env->regs[R_EDX] = assocs[3].value.reg64;
+    env->regs[R_ESI] = assocs[4].value.reg64;
+    env->regs[R_EDI] = assocs[5].value.reg64;
+    env->regs[R_ESP] = assocs[6].value.reg64;
+    env->regs[R_EBP] = assocs[7].value.reg64;
+    env->regs[R_R8]  = assocs[8].value.reg64;
+    env->regs[R_R9]  = assocs[9].value.reg64;
+    env->regs[R_R10] = assocs[10].value.reg64;
+    env->regs[R_R11] = assocs[11].value.reg64;
+    env->regs[R_R12] = assocs[12].value.reg64;
+    env->regs[R_R13] = assocs[13].value.reg64;
+    env->regs[R_R14] = assocs[14].value.reg64;
+    env->regs[R_R15] = assocs[15].value.reg64;
 
     env->eip = assocs[16].value.reg64;
-	env->eflags = assocs[17].value.reg64;
+    env->eflags = assocs[17].value.reg64;
     rflags_to_lflags(env);
 }
 
@@ -425,9 +426,9 @@ static void populate_special_regs(const hv_register_assoc *assocs,
     env->cr[3] = assocs[12].value.reg64;
     env->cr[4] = assocs[13].value.reg64;
 
-	cpu_set_apic_tpr(x86cpu->apic_state, assocs[14].value.reg64);
-	env->efer = assocs[15].value.reg64;
-	cpu_set_apic_base(x86cpu->apic_state, assocs[16].value.reg64);
+    cpu_set_apic_tpr(x86cpu->apic_state, assocs[14].value.reg64);
+    env->efer = assocs[15].value.reg64;
+    cpu_set_apic_base(x86cpu->apic_state, assocs[16].value.reg64);
 
     /* TODO: should we set those? */
     /* pending_reg = assocs[17].value.pending_interruption.as_uint64; */
@@ -712,12 +713,14 @@ static int register_intercept_result_cpuid_entry(int cpu_fd,
         .input.subleaf_specific = subleaf_specific,
         .input.always_override = always_override,
         .input.padding = 0,
-        /* With regard to masks - these are to specify bits to be overwritten. */
-        /* The current CpuidEntry structure wouldn't allow to carry the masks */
-        /* in addition to the actual register values. For this reason, the */
-        /* masks are set to the exact values of the corresponding register bits */
-        /* to be registered for an overwrite. To view resulting values the */
-        /* hypervisor would return, HvCallGetVpCpuidValues hypercall can be used. */
+        /* With regard to masks - these are to specify bits to be overwritten
+         * The current CpuidEntry structure wouldn't allow to carry the masks
+         * in addition to the actual register values. For this reason, the
+         * masks are set to the exact values of the corresponding register bits
+         * to be registered for an overwrite. To view resulting values the
+         * hypervisor would return, HvCallGetVpCpuidValues hypercall can be
+         * used.
+         * */
         .result.eax = entry->eax,
         .result.eax_mask = entry->eax,
         .result.ebx = entry->ebx,
@@ -1010,7 +1013,6 @@ static int set_lint(int cpu_fd)
     if (ret < 0) {
         return ret;
     }
-
 
     lvt_lint0 = &lapic_state.apic_lvt_lint0;
     *lvt_lint0 = set_apic_delivery_mode(*lvt_lint0, APIC_MODE_EXTINT);
@@ -1503,36 +1505,36 @@ int mshv_run_vcpu(int vm_fd, CPUState *cpu, hv_message *msg, MshvVmExit *exit)
 
 int mshv_store_regs(CPUState *cpu)
 {
-	int ret;
+    int ret;
 
-	ret = set_standard_regs(cpu);
-	if (ret < 0) {
-		perror("Failed to store standard registers");
-		return -1;
-	}
+    ret = set_standard_regs(cpu);
+    if (ret < 0) {
+        error_report("Failed to store standard registers");
+        return -1;
+    }
 
     /* TODO: should store special registers? the equivalent hvf code doesn't */
 
-	return 0;
+    return 0;
 }
 
 int mshv_load_regs(CPUState *cpu)
 {
-	int ret;
+    int ret;
 
-	ret = mshv_get_standard_regs(cpu);
-	if (ret < 0) {
-		error_report("Failed to load standard registers");
-		return -1;
-	}
+    ret = mshv_get_standard_regs(cpu);
+    if (ret < 0) {
+        error_report("Failed to load standard registers");
+        return -1;
+    }
 
-	ret = mshv_get_special_regs(cpu);
-	if (ret < 0) {
-		error_report("Failed to load special registers");
-		return -1;
-	}
+    ret = mshv_get_special_regs(cpu);
+    if (ret < 0) {
+        error_report("Failed to load special registers");
+        return -1;
+    }
 
-	return 0;
+    return 0;
 }
 
 static int put_regs(const CPUState *cpu)
@@ -1560,7 +1562,7 @@ struct MsrPair {
 
 static int put_msrs(const CPUState *cpu)
 {
-	int ret = 0;
+    int ret = 0;
     X86CPU *x86cpu = X86_CPU(cpu);
     CPUX86State *env = &x86cpu->env;
     MshvMsrEntries *msrs = g_malloc0(sizeof(MshvMsrEntries));

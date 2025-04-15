@@ -21,6 +21,9 @@
 #include <stdint.h>
 #include <sys/ioctl.h>
 
+#define MSHV_IRQFD_RESAMPLE_FLAG (1 << MSHV_IRQFD_BIT_RESAMPLE)
+#define MSHV_IRQFD_BIT_DEASSIGN_FLAG (1 << MSHV_IRQFD_BIT_DEASSIGN)
+
 static MshvMsiControl *msi_control;
 static QemuMutex msi_control_mutex;
 
@@ -44,6 +47,8 @@ static int set_msi_routing(uint32_t gsi, uint64_t addr, uint32_t data)
         error_report("gsi >= MSHV_MAX_MSI_ROUTES");
         return -1;
     }
+
+    assert(msi_control);
 
     WITH_QEMU_LOCK_GUARD(&msi_control_mutex) {
         gsi_routes = msi_control->gsi_routes;
@@ -85,6 +90,8 @@ static int add_msi_routing(uint64_t addr, uint32_t data)
 
     trace_mshv_add_msi_routing(addr, data);
 
+    assert(msi_control);
+
     WITH_QEMU_LOCK_GUARD(&msi_control_mutex) {
         /* find an empty slot */
         gsi = 0;
@@ -124,6 +131,8 @@ static int commit_msi_routing_table(void)
     GHashTableIter iter;
     gpointer key, value;
     int vm_fd = mshv_state->vm;
+
+    assert(msi_control);
 
     WITH_QEMU_LOCK_GUARD(&msi_control_mutex) {
         if (!msi_control->updated) {
@@ -165,6 +174,13 @@ static int remove_msi_routing(uint32_t gsi)
 
     trace_mshv_remove_msi_routing(gsi);
 
+    if (gsi >= MSHV_MAX_MSI_ROUTES) {
+        error_report("Invalid GSI: %u", gsi);
+        return -1;
+    }
+
+    assert(msi_control);
+
     WITH_QEMU_LOCK_GUARD(&msi_control_mutex) {
         gsi_routes = msi_control->gsi_routes;
         route_entry = g_hash_table_lookup(gsi_routes, GINT_TO_POINTER(gsi));
@@ -192,8 +208,8 @@ static int irqfd(int vm_fd, int fd, int resample_fd, uint32_t gsi,
 
     ret = ioctl(vm_fd, MSHV_IRQFD, &arg);
     if (ret < 0) {
-        error_report("Failed to set irqfd");
-        return -errno;
+        error_report("Failed to set irqfd: gsi=%u, fd=%d", gsi, fd);
+        return -1;
     }
     return ret;
 }
@@ -206,8 +222,8 @@ static int register_irqfd(int vm_fd, int event_fd, uint32_t gsi)
 
     ret = irqfd(vm_fd, event_fd, 0, gsi, 0);
     if (ret < 0) {
-        error_report("Failed to register irqfd");
-        return -errno;
+        error_report("Failed to register irqfd: gsi=%u", gsi);
+        return -1;
     }
     return 0;
 }
@@ -216,11 +232,11 @@ static int register_irqfd_with_resample(int vm_fd, int event_fd,
                                         int resample_fd, uint32_t gsi)
 {
     int ret;
-    uint32_t flags = (1 << MSHV_IRQFD_BIT_RESAMPLE);
+    uint32_t flags = MSHV_IRQFD_RESAMPLE_FLAG;
 
     ret = irqfd(vm_fd, event_fd, resample_fd, gsi, flags);
     if (ret < 0) {
-        error_report("Failed to register irqfd with resample");
+        error_report("Failed to register irqfd with resample: gsi=%u", gsi);
         return -errno;
     }
     return 0;
@@ -229,11 +245,11 @@ static int register_irqfd_with_resample(int vm_fd, int event_fd,
 static int unregister_irqfd(int vm_fd, int event_fd, uint32_t gsi)
 {
     int ret;
-    uint32_t flags = (1 << MSHV_IRQFD_BIT_DEASSIGN);
+    uint32_t flags = MSHV_IRQFD_BIT_DEASSIGN_FLAG;
 
     ret = irqfd(vm_fd, event_fd, 0, gsi, flags);
     if (ret < 0) {
-        error_report("Failed to unregister irqfd");
+        error_report("Failed to unregister irqfd: gsi=%u", gsi);
         return -errno;
     }
     return 0;
@@ -299,7 +315,7 @@ int mshv_request_interrupt(int vm_fd, uint32_t interrupt_type, uint32_t vector,
     int ret;
 
     if (vector == 0) {
-        // TODO: why do we receive this?
+        /* TODO: why do we receive this? */
         return 0;
     }
 

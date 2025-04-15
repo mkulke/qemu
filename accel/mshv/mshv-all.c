@@ -33,6 +33,7 @@
 #include "system/mshv.h"
 #include "system/reset.h" //register reset
 #include "trace.h"
+#include <err.h>
 #include <stdint.h>
 #include <sys/ioctl.h>
 
@@ -249,101 +250,13 @@ static int create_vm_with_type(MshvVmType vm_type, int mshv_fd)
     return vm_fd;
 }
 
-static int set_memory(const MshvMemoryRegion *mshv_mr, bool add)
-{
-    int ret = 0;
-
-    if (!mshv_mr) {
-        error_report("Invalid mshv_mr");
-        return -1;
-    }
-
-    trace_mshv_set_memory(add, mshv_mr->guest_phys_addr,
-                          mshv_mr->memory_size,
-                          mshv_mr->userspace_addr, mshv_mr->readonly,
-                          ret);
-    if (add) {
-        return mshv_add_mem(mshv_state->vm, mshv_mr);
-    }
-    return mshv_remove_mem(mshv_state->vm, mshv_mr);
-}
-
-/*
- * Calculate and align the start address and the size of the section.
- * Return the size. If the size is 0, the aligned section is empty.
- */
-static hwaddr align_section(MemoryRegionSection *section, hwaddr *start)
-{
-    hwaddr size = int128_get64(section->size);
-    hwaddr delta, aligned;
-
-    /* works in page size chunks, but the function may be called
-   with sub-page size and unaligned start address. Pad the start
-   address to next and truncate size to previous page boundary. */
-    aligned = ROUND_UP(section->offset_within_address_space,
-                       qemu_real_host_page_size());
-    delta = aligned - section->offset_within_address_space;
-    *start = aligned;
-    if (delta > size) {
-        return 0;
-    }
-
-    return (size - delta) & qemu_real_host_page_mask();
-}
-
-static void set_phys_mem(MshvMemoryListener *mml,
-                        MemoryRegionSection *section, bool add,
-                        const char *name)
-{
-    int ret = 0;
-    MemoryRegion *area = section->mr;
-    bool writable = !area->readonly && !area->rom_device;
-    hwaddr start_addr, mr_offset, size;
-    void *ram;
-    MshvMemoryRegion tmp, *mshv_mr = &tmp;
-
-    if (!memory_region_is_ram(area)) {
-        if (writable) {
-            return;
-        } else if (!memory_region_is_romd(area)) {
-            /* If the memory device is not in romd_mode, then we
-             * actually want to remove the memory slot so all accesses
-             * will trap.
-             */
-            add = false;
-        }
-    }
-
-    size = align_section(section, &start_addr);
-    if (!size) {
-        return;
-    }
-
-    mr_offset = section->offset_within_region + start_addr -
-                section->offset_within_address_space;
-
-    ram = memory_region_get_ram_ptr(area) + mr_offset;
-
-    memset(mshv_mr, 0, sizeof(*mshv_mr));
-    mshv_mr->guest_phys_addr = start_addr;
-    mshv_mr->memory_size = size;
-    mshv_mr->readonly = !writable;
-    mshv_mr->userspace_addr = (uint64_t)ram;
-
-    ret = set_memory(mshv_mr, add);
-    if (ret < 0) {
-        error_report("Failed to set memory region");
-        abort();
-    }
-}
-
 static void mem_region_add(MemoryListener *listener,
                            MemoryRegionSection *section)
 {
     MshvMemoryListener *mml;
     mml = container_of(listener, MshvMemoryListener, listener);
     memory_region_ref(section->mr);
-    set_phys_mem(mml, section, true, "add");
+    mshv_set_phys_mem(mml, section, true);
 }
 
 static void mem_region_del(MemoryListener *listener,
@@ -351,7 +264,7 @@ static void mem_region_del(MemoryListener *listener,
 {
     MshvMemoryListener *mml;
     mml = container_of(listener, MshvMemoryListener, listener);
-    set_phys_mem(mml, section, false, "remove");
+    mshv_set_phys_mem(mml, section, false);
     memory_region_unref(section->mr);
 }
 

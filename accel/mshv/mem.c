@@ -36,9 +36,9 @@ static MshvMemoryEntry *find_entry_by_userspace_addr(uint64_t addr)
     GList *entries;
 
     entries = mem_manager->mem_entries;
-    for(GList* elem = entries; elem != NULL; elem = elem->next) {
+    for (GList* elem = entries; elem != NULL; elem = elem->next) {
         entry = elem->data;
-        /* check whether addr falls into the range of an already mapped
+        /* Check whether addr falls into the range of an already mapped
          * region */
         if (entry->mr.userspace_addr <= addr
             && addr - entry->mr.userspace_addr < entry->mr.memory_size
@@ -95,6 +95,8 @@ bool mshv_find_entry_idx_by_gpa(uint64_t addr, size_t *index)
     size_t i = 0;
     uint64_t gpa_offset;
 
+    assert(mem_manager);
+
     entries = mem_manager->mem_entries;
     for(GList* elem = entries; elem != NULL; elem = elem->next) {
         entry = elem->data;
@@ -117,15 +119,16 @@ static bool find_overlap_region(size_t gpa_idx, const MshvMemoryRegion *mr,
 {
     MshvMemoryEntry *entry;
     GList *entries;
-    size_t i = 0, entry_addr;
+    size_t i = 0;
+    uint64_t userspace_addr;
 
     entries = mem_manager->mem_entries;
     for(GList* elem = entries; elem != NULL; elem = elem->next) {
         entry = elem->data;
-        entry_addr = entry->mr.userspace_addr;
+        userspace_addr = entry->mr.userspace_addr;
         if(i != gpa_idx
-            && (entry_addr < mr->userspace_addr + mr->memory_size)
-            && (entry_addr + entry->mr.memory_size > mr->userspace_addr)
+            && (userspace_addr < mr->userspace_addr + mr->memory_size)
+            && (userspace_addr + entry->mr.memory_size > mr->userspace_addr)
             && entry->mapped) {
             *overlap_idx = i;
             return true;
@@ -164,6 +167,8 @@ static inline int add_del_mem(int vm_fd, const MshvMemoryRegion *mr, bool add)
     MshvMemoryEntry *entry;
     GList *entries;
     int ret;
+
+    assert(mem_manager);
 
     WITH_QEMU_LOCK_GUARD(&mem_manager->mutex) {
         entries = mem_manager->mem_entries;
@@ -222,6 +227,8 @@ bool mshv_map_overlapped_region(int vm_fd, uint64_t gpa)
     size_t gpa_idx, overlap_idx;
     MshvMemoryEntry *gpa_entry, *overlap_entry;
     int ret;
+
+    assert(mem_manager);
 
     WITH_QEMU_LOCK_GUARD(&mem_manager->mutex) {
         if (!mshv_find_entry_idx_by_gpa(gpa, &gpa_idx)) {
@@ -304,11 +311,16 @@ int mshv_guest_mem_read(uint64_t gpa, uint8_t *data, uintptr_t size,
 int mshv_guest_mem_write(uint64_t gpa, const uint8_t *data, uintptr_t size,
                          bool is_secure_mode)
 {
-    int ret = 0;
+    int ret;
 
     trace_mshv_mem_write(gpa, size);
     MemTxAttrs memattr = get_mem_attrs(is_secure_mode);
     ret = address_space_rw(&address_space_memory, gpa, memattr, (void *)data,
                            size, true);
-    return ret;
+    if (ret != MEMTX_OK) {
+        error_report("Failed to write guest memory");
+        return -1;
+    }
+
+    return 0;
 }

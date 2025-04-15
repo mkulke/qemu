@@ -75,15 +75,17 @@ typedef struct MshvMemoryListener {
   int as_id;
 } MshvMemoryListener;
 
+typedef struct MshvAddressSpace {
+    MshvMemoryListener *ml;
+    AddressSpace *as;
+} MshvAddressSpace;
+
 typedef struct MshvState {
   AccelState parent_obj;
   int vm;
   MshvMemoryListener memory_listener;
   int nr_as; // number of listener;
-  struct MshvAs {
-    MshvMemoryListener *ml;
-    AddressSpace *as;
-  } * as;
+  MshvAddressSpace *as;
 } MshvState;
 extern MshvState *mshv_state;
 

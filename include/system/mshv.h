@@ -236,6 +236,12 @@ int mshv_guest_mem_read(uint64_t gpa, uint8_t *data, uintptr_t size,
 int mshv_guest_mem_write(uint64_t gpa, const uint8_t *data, uintptr_t size,
 					     bool is_secure_mode);
 
+/* mem: exposed for unit testing */
+bool mshv_find_idx_by_gpa_in_entries(const GList *entries, uint64_t addr,
+                                     size_t *index);
+MshvMemoryEntry *mshv_find_entry_by_userspace_addr(const GList *entries,
+                                                   uint64_t addr);
+
 /* interrupt */
 void mshv_init_msicontrol(void);
 int mshv_request_interrupt(int vm_fd, uint32_t interrupt_type, uint32_t vector,

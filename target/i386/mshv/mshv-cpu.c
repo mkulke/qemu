@@ -812,23 +812,22 @@ static void add_cpuid_entry(GList *cpuid_entries,
     cpuid_entries = g_list_append(cpuid_entries, entry);
 }
 
-static void collect_cpuid_entries(CPUState *cpu, GList *cpuid_entries)
+static void collect_cpuid_entries(const CPUState *cpu, GList *cpuid_entries)
 {
     X86CPU *x86_cpu = X86_CPU(cpu);
     CPUX86State *env = &x86_cpu->env;
     uint32_t eax, ebx, ecx, edx;
     uint32_t leaf, subleaf;
-    const size_t max_leaf = 0x1F;
-    const size_t max_subleaf = 0x20;
+    size_t max_leaf = 0x1F;
+    size_t max_subleaf = 0x20;
 
-    // Example leaves to iterate through
-    const uint32_t leaves_with_subleaves[] = {0x4, 0x7, 0xD, 0xF, 0x10};
-    const int num_subleaf_leaves = sizeof(leaves_with_subleaves)/sizeof(leaves_with_subleaves[0]);
+    uint32_t leaves_with_subleaves[] = {0x4, 0x7, 0xD, 0xF, 0x10};
+    int n_subleaf_leaves = ARRAY_SIZE(leaves_with_subleaves);
 
-    // Regular leaves without subleaves
+    /* Regular leaves without subleaves */
     for (leaf = 0; leaf <= max_leaf; leaf++) {
         bool has_subleaves = false;
-        for (int i = 0; i < num_subleaf_leaves; i++) {
+        for (int i = 0; i < n_subleaf_leaves; i++) {
             if (leaf == leaves_with_subleaves[i]) {
                 has_subleaves = true;
                 break;

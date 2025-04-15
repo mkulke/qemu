@@ -554,7 +554,7 @@ static int mshv_cpu_exec(CPUState *cpu)
 
     do {
         if (cpu->vcpu_dirty) {
-            ret = mshv_arch_put_registers(mshv_state, cpu);
+            ret = mshv_arch_put_registers(cpu);
             if (ret) {
                 cpu->vcpu_dirty = false;
             }
@@ -674,7 +674,7 @@ static void mshv_start_vcpu_thread(CPUState *cpu)
 
 static void mshv_cpu_synchronize_post_init(CPUState *cpu)
 {
-    mshv_arch_put_registers(mshv_state, cpu);
+    mshv_arch_put_registers(cpu);
 
     cpu->vcpu_dirty = false;
 }

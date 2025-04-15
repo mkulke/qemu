@@ -947,48 +947,52 @@ static int set_vp_state(int cpu_fd, const mshv_get_set_vp_state *state)
     return 0;
 }
 
-static int get_lapic(int cpu_fd, struct hv_local_interrupt_controller_state *lapic_state)
+static int get_lapic(int cpu_fd,
+                     struct hv_local_interrupt_controller_state *state)
 {
     int ret;
     size_t size = 4096;
     /* buffer aligned to 4k, as *state requires that */
     void *buffer = qemu_memalign(size, size);
-    struct mshv_get_set_vp_state state = { 0 };
+    struct mshv_get_set_vp_state mshv_state = { 0 };
 
-    state.buf_ptr = (uint64_t) buffer;
-    state.buf_sz = size;
-    state.type = MSHV_VP_STATE_LAPIC;
+    mshv_state.buf_ptr = (uint64_t) buffer;
+    mshv_state.buf_sz = size;
+    mshv_state.type = MSHV_VP_STATE_LAPIC;
 
-    ret = get_vp_state(cpu_fd, &state);
+    ret = get_vp_state(cpu_fd, &mshv_state);
     if (ret == 0) {
-        memcpy(lapic_state, buffer, sizeof(*lapic_state));
+        memcpy(state, buffer, sizeof(*state));
     }
     qemu_vfree(buffer);
     if (ret < 0) {
-        perror("failed to get lapic");
-        return ret;
+        error_report("failed to get lapic");
+        return -1;
     }
 
     return 0;
 }
 
-static int set_lapic(int cpu_fd, struct hv_local_interrupt_controller_state *lapic_state)
+static int set_lapic(int cpu_fd,
+                     const struct hv_local_interrupt_controller_state *state)
 {
-
     int ret;
     size_t size = 4096;
     /* buffer aligned to 4k, as *state requires that */
     void *buffer = qemu_memalign(size, size);
-    struct mshv_get_set_vp_state state = { 0 };
+    struct mshv_get_set_vp_state mshv_state = { 0 };
 
-    assert(lapic_state);
-    memcpy(lapic_state, buffer, sizeof(*lapic_state));
+    if (!state) {
+        error_report("lapic state is NULL");
+        return -1;
+    }
+    memcpy(buffer, state, sizeof(*state));
 
-    state.buf_ptr = (uint64_t) buffer;
-    state.buf_sz = size;
-    state.type = MSHV_VP_STATE_LAPIC;
+    mshv_state.buf_ptr = (uint64_t) buffer;
+    mshv_state.buf_sz = size;
+    mshv_state.type = MSHV_VP_STATE_LAPIC;
 
-    ret = set_vp_state(cpu_fd, &state);
+    ret = set_vp_state(cpu_fd, &mshv_state);
     qemu_vfree(buffer);
     if (ret < 0) {
         error_report("failed to set lapic: %s", strerror(errno));
@@ -1310,7 +1314,6 @@ static int handle_pio_str_read(CPUState *cpu,
 
     return 0;
 }
-
 
 static int handle_pio_str_write(CPUState *cpu,
                                 hv_x64_io_port_intercept_message *info,

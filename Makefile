@@ -338,3 +338,23 @@ print-%:
 scp: all
 	scp qemu-system-x86_64 cloud@172.22.0.5:/opt/qemu-mshv/bin/qemu-system-x86_64-mgns
 	scp ~/dev/mshv-c/local/lib/libmshv.so cloud@172.22.0.5:lib/libmshv.so
+
+cp: all
+	cp qemu-system-x86_64 ~/tmp/qemu-remote/bin/qemu-system-x86_64-mgns
+
+REMOTE_USER = cloud
+REMOTE_HOST = 172.22.0.5
+REMOTE_PATH = /home/cloud/build/qemu-src
+
+SRC_DIR = ..
+EXCLUDES = \
+	--exclude '.cache' \
+	--exclude 'rust/target' \
+	--exclude 'build' \
+	--exclude .git \
+	--exclude '*.o' \
+	--exclude '*.swp'
+
+sync:
+	rsync -avz $(EXCLUDES) -e "ssh -p 22" \
+		$(SRC_DIR)/ $(REMOTE_USER)@$(REMOTE_HOST):$(REMOTE_PATH)

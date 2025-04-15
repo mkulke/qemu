@@ -409,7 +409,7 @@ static void register_mshv_memory_listener(MshvState *s, MshvMemoryListener *mml,
 }
 static void mshv_reset(void *param)
 {
-    fprintf(stderr, "mshv_reset\n");
+    warn_report("mshv reset");
 }
 
 static void mshv_init_irq(MshvState *s) {}
@@ -513,7 +513,7 @@ static int mshv_init(MachineState *ms)
     /* MAX number of address spaces: */
     /* address_space_memory */
     s->nr_as = 1;
-    s->as = g_new0(struct MshvAs, s->nr_as);
+    s->as = g_new0(MshvAddressSpace, s->nr_as);
 
     mshv_state = s;
 

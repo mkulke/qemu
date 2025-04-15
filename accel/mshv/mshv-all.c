@@ -90,8 +90,8 @@ static int pause_vm(int vm_fd)
 
     ret = set_time_freeze(vm_fd, 1);
     if (ret < 0) {
-        error_report("Failed to pause partition");
-        ret = -1;
+        error_report("Failed to pause partition: %s", strerror(errno));
+        return -1;
     }
 
     return 0;
@@ -103,8 +103,8 @@ static int resume_vm(int vm_fd)
 
     ret = set_time_freeze(vm_fd, 0);
     if (ret < 0) {
-        error_report("Failed to resume partition");
-        ret = -1;
+        error_report("Failed to resume partition: %s", strerror(errno));
+        return -1;
     }
 
     return 0;

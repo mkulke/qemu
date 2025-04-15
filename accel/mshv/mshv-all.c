@@ -181,8 +181,8 @@ static int initialize_vm(int vm_fd)
 {
     int ret = ioctl(vm_fd, MSHV_INITIALIZE_PARTITION);
     if (ret < 0) {
-        error_report("Failed to initialize partition");
-        return -errno;
+        error_report("Failed to initialize partition: %s", strerror(errno));
+        return -1;
     }
     return 0;
 }
@@ -286,7 +286,6 @@ typedef struct {
 static int ioeventfd(int vm_fd, int event_fd, uint64_t addr, Datamatch dm,
                      uint32_t flags)
 {
-    int ret = 0;
     mshv_user_ioeventfd args = {0};
     args.fd = event_fd;
     args.addr = addr;
@@ -306,8 +305,7 @@ static int ioeventfd(int vm_fd, int event_fd, uint64_t addr, Datamatch dm,
         }
     }
 
-    ret = ioctl(vm_fd, MSHV_IOEVENTFD, &args);
-    return ret;
+    return ioctl(vm_fd, MSHV_IOEVENTFD, &args);
 }
 
 static int unregister_ioevent(int vm_fd, int event_fd, uint64_t mmio_addr)
@@ -447,7 +445,10 @@ void mshv_pio_read(uint64_t port, uint8_t *data, uintptr_t size,
     MemTxAttrs memattr = get_mem_attrs(is_secure_mode);
     ret = address_space_rw(&address_space_io, port, memattr, (void *)data, size,
                            false);
-    assert(ret == MEMTX_OK);
+    if (ret != MEMTX_OK) {
+        error_report("Failed to read from port %lx: %d", port, ret);
+        abort();
+    }
 }
 
 int mshv_pio_write(uint64_t port, const uint8_t *data, uintptr_t size,
@@ -581,7 +582,7 @@ static int mshv_cpu_exec(CPUState *cpu)
 
         ret = mshv_run_vcpu(mshv_state->vm, cpu, &mshv_msg, &exit_reason);
         if (ret < 0) {
-            error_report("Failed to to run on vcpu");
+            error_report("Failed to run on vcpu %d", cpu->cpu_index);
             abort();
         }
 
@@ -631,9 +632,10 @@ static void mshv_init_signal(CPUState *cpu)
     pthread_sigmask(SIG_SETMASK, &set, NULL);
 }
 
-static void *mshv_vcpu_thread_fn(void *arg)
+static void *mshv_vcpu_thread(void *arg)
 {
     CPUState *cpu = arg;
+    int ret;
 
     rcu_register_thread();
 
@@ -641,7 +643,11 @@ static void *mshv_vcpu_thread_fn(void *arg)
     qemu_thread_get_self(cpu->thread);
     cpu->thread_id = qemu_get_thread_id();
     current_cpu = cpu;
-    mshv_init_vcpu(cpu);
+    ret = mshv_init_vcpu(cpu);
+    if (ret < 0) {
+        error_report("Failed to init vcpu %d", cpu->cpu_index);
+        goto cleanup;
+    }
     mshv_init_signal(cpu);
 
     /* signal CPU creation */
@@ -654,7 +660,9 @@ static void *mshv_vcpu_thread_fn(void *arg)
         }
         qemu_wait_io_event(cpu);
     } while (!cpu->unplug || cpu_can_run(cpu));
+
     mshv_destroy_vcpu(cpu);
+cleanup:
     cpu_thread_signal_destroyed(cpu);
     bql_unlock();
     rcu_unregister_thread();
@@ -671,7 +679,7 @@ static void mshv_start_vcpu_thread(CPUState *cpu)
     qemu_cond_init(cpu->halt_cond);
 
     trace_mshv_start_vcpu_thread(thread_name, cpu->cpu_index);
-    qemu_thread_create(cpu->thread, thread_name, mshv_vcpu_thread_fn, cpu,
+    qemu_thread_create(cpu->thread, thread_name, mshv_vcpu_thread, cpu,
                        QEMU_THREAD_JOINABLE);
 }
 

@@ -13,6 +13,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/atomic.h"
 #include "qemu/lockable.h"
 #include "qemu/error-report.h"
 #include "qemu/memalign.h"
@@ -20,14 +21,11 @@
 #include "system/mshv.h"
 #include "hw/hyperv/linux-mshv.h"
 #include "cpu.h"
-#include <stdint.h>
 #include <sys/ioctl.h>
 #include <sys/types.h>
-
 #include "emulate/x86_decode.h"
 #include "emulate/x86_emu.h"
 #include "emulate/x86_flags.h"
-#include "qemu/atomic.h"
 #include "trace-accel_mshv.h"
 #include "trace.h"
 
@@ -462,7 +460,7 @@ int mshv_get_standard_regs(CPUState *cpu)
     return 0;
 }
 
-static int set_standard_regs(CPUState *cpu)
+static int set_standard_regs(const CPUState *cpu)
 {
     X86CPU *x86cpu = X86_CPU(cpu);
     CPUX86State *env = &x86cpu->env;
@@ -558,7 +556,7 @@ static void populate_hv_table_reg(const struct SegmentCache *seg,
     memset(hv_reg->pad, 0, sizeof(hv_reg->pad));
 }
 
-static int set_special_regs(CPUState *cpu)
+static int set_special_regs(const CPUState *cpu)
 {
     X86CPU *x86cpu = X86_CPU(cpu);
     CPUX86State *env = &x86cpu->env;
@@ -678,7 +676,8 @@ static int set_xc_reg(int cpu_fd, uint64_t xcr0)
     return 0;
 }
 
-static int set_cpu_state(CPUState *cpu, const MshvFPU *fpu_regs, uint64_t xcr0)
+static int set_cpu_state(const CPUState *cpu, const MshvFPU *fpu_regs,
+                         uint64_t xcr0)
 {
     int ret;
     int cpu_fd = mshv_vcpufd(cpu);
@@ -852,11 +851,12 @@ static void collect_cpuid_entries(CPUState *cpu, GList *cpuid_entries)
                 break;
             }
             add_cpuid_entry(cpuid_entries, leaf, 0, eax, ebx, ecx, edx);
+            subleaf++;
         }
     }
 }
 
-static int set_cpuid2(CPUState *cpu)
+static int set_cpuid2(const CPUState *cpu)
 {
     int ret;
     size_t n_entries, cpuid_size;
@@ -1028,7 +1028,8 @@ static int set_lint(int cpu_fd)
  * CPUX86State *env = &x86cpu->env;
  * X86CPUTopoInfo *topo_info = &env->topo_info;
  */
-int mshv_configure_vcpu(CPUState *cpu, const struct MshvFPU *fpu, uint64_t xcr0)
+int mshv_configure_vcpu(const CPUState *cpu, const struct MshvFPU *fpu,
+                        uint64_t xcr0)
 {
     int ret;
     int cpu_fd = mshv_vcpufd(cpu);
@@ -1143,9 +1144,9 @@ static int write_memory(int cpu_fd, uint64_t initial_gva, uint64_t initial_gpa,
     return 0;
 }
 
-static int emulate_insn(CPUState *cpu,
-                        const uint8_t *insn_bytes, size_t insn_len,
-                        uint64_t gva, uint64_t gpa)
+static int emulate_instruction(CPUState *cpu,
+                               const uint8_t *insn_bytes, size_t insn_len,
+                               uint64_t gva, uint64_t gpa)
 {
     X86CPU *x86_cpu = X86_CPU(cpu);
     CPUX86State *env = &x86_cpu->env;
@@ -1192,30 +1193,29 @@ static int handle_mmio(CPUState *cpu, const struct hyperv_message *msg,
 
     ret = set_memory_info(msg, &info);
     if (ret < 0) {
-        perror("failed to convert message to memory info");
-        /* TODO: rather return? */
-        abort();
+        error_report("Failed to convert message to memory info");
+        return -1;
     }
     insn_len = info.instruction_byte_count;
     access_type = info.header.intercept_access_type;
 
     if (access_type == HV_X64_INTERCEPT_ACCESS_TYPE_EXECUTE) {
-        perror("invalid intercept access type: execute");
-        abort();
+        error_report("Invalid intercept access type: execute");
+        return -1;
     }
 
     if (insn_len <= 0 || insn_len > 16) {
-        perror("invalid instruction length");
-        abort();
+        error_report("Invalid instruction length");
+        return -1;
     }
 
     /* TODO: insn_len != 16 is x-page access, do we handle it properly? */
 
     instruction_bytes = info.instruction_bytes;
 
-    ret = emulate_insn(cpu,
-                       instruction_bytes, insn_len,
-                       info.guest_virtual_address, info.guest_physical_address);
+    ret = emulate_instruction(cpu, instruction_bytes, insn_len,
+                              info.guest_virtual_address,
+                              info.guest_physical_address);
     if (ret < 0) {
         error_report("failed to emulate mmio");
         return -1;
@@ -1522,31 +1522,35 @@ int mshv_load_regs(CPUState *cpu)
 
 	ret = mshv_get_standard_regs(cpu);
 	if (ret < 0) {
-		perror("Failed to load standard registers");
+		error_report("Failed to load standard registers");
 		return -1;
 	}
 
 	ret = mshv_get_special_regs(cpu);
 	if (ret < 0) {
-		perror("Failed to load special registers");
+		error_report("Failed to load special registers");
 		return -1;
 	}
 
 	return 0;
 }
 
-static int mshv_put_regs(MshvState *mshv_state, CPUState *cpu)
+static int put_regs(const CPUState *cpu)
 {
     X86CPU *x86cpu = X86_CPU(cpu);
     CPUX86State *env = &x86cpu->env;
     MshvFPU fpu = {0};
-    int ret = 0;
+    int ret;
 
     memset(&fpu, 0, sizeof(fpu));
 
-    mshv_configure_vcpu(cpu, &fpu, env->xcr0);
+    ret = mshv_configure_vcpu(cpu, &fpu, env->xcr0);
+    if (ret < 0) {
+        error_report("failed to configure vcpu");
+        return ret;
+    }
 
-    return ret;
+    return 0;
 }
 
 struct MsrPair {
@@ -1554,7 +1558,7 @@ struct MsrPair {
     uint64_t value;
 };
 
-static int mshv_put_msrs(CPUState *cpu)
+static int put_msrs(const CPUState *cpu)
 {
 	int ret = 0;
     X86CPU *x86cpu = X86_CPU(cpu);
@@ -1607,19 +1611,21 @@ static int mshv_put_msrs(CPUState *cpu)
     return ret;
 }
 
-int mshv_arch_put_registers(MshvState *mshv_state, CPUState *cpu)
+int mshv_arch_put_registers(const CPUState *cpu)
 {
-    int ret = 0;
+    int ret;
 
-    ret = mshv_put_regs(mshv_state, cpu);
-    if (ret) {
-        return ret;
+    ret = put_regs(cpu);
+    if (ret < 0) {
+        error_report("Failed to put registers");
+        return -1;
     }
 
-    ret = mshv_put_msrs(cpu);
-    if (ret) {
-        return ret;
+    ret = put_msrs(cpu);
+    if (ret < 0) {
+        error_report("Failed to put msrs");
+        return -1;
     }
 
-    return ret;
+    return 0;
 }

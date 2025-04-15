@@ -291,8 +291,9 @@ static hwaddr align_section(MemoryRegionSection *section, hwaddr *start)
     return (size - delta) & qemu_real_host_page_mask();
 }
 
-static int set_phys_mem(MshvMemoryListener *mml, MemoryRegionSection *section,
-                        bool add, const char *name)
+static void set_phys_mem(MshvMemoryListener *mml,
+                        MemoryRegionSection *section, bool add,
+                        const char *name)
 {
     int ret = 0;
     MemoryRegion *area = section->mr;
@@ -303,7 +304,7 @@ static int set_phys_mem(MshvMemoryListener *mml, MemoryRegionSection *section,
 
     if (!memory_region_is_ram(area)) {
         if (writable) {
-            return ret;
+            return;
         } else if (!memory_region_is_romd(area)) {
             /* If the memory device is not in romd_mode, then we
              * actually want to remove the memory slot so all accesses
@@ -315,7 +316,7 @@ static int set_phys_mem(MshvMemoryListener *mml, MemoryRegionSection *section,
 
     size = align_section(section, &start_addr);
     if (!size) {
-        return ret;
+        return;
     }
 
     mr_offset = section->offset_within_region + start_addr -
@@ -330,16 +331,10 @@ static int set_phys_mem(MshvMemoryListener *mml, MemoryRegionSection *section,
     mshv_mr->userspace_addr = (uint64_t)ram;
 
     ret = set_memory(mshv_mr, add);
-    if (add && (ret == 17)) {
-        /* TODO: Qemu may create a memory alias as rom. However, mshv may not
-         * support the overlapped regions. We'll have to handle it in upper
-         * layers.
-         */
-        return ret;
+    if (ret < 0) {
+        error_report("Failed to set memory region");
+        abort();
     }
-    assert(ret == 0);
-
-    return ret;
 }
 
 static void mem_region_add(MemoryListener *listener,

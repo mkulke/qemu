@@ -101,10 +101,6 @@ typedef struct MshvCreatePartitionArgsMgns {
 	uint64_t pt_isolation;
 } MshvCreatePartitionArgsMgns;
 
-typedef enum MshvVmType {
-	MSHV_VM_TYPE_DEFAULT = 0,
-} MshvVmType;
-
 #define mshv_vcpufd(cpu) (cpu->accel->cpufd)
 
 #else //! CONFIG_MSHV_IS_POSSIBLE

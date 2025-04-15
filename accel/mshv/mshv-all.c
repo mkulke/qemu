@@ -213,14 +213,9 @@ static int set_unimplemented_msr_action(int vm_fd)
     return 0;
 }
 
-static int create_vm_with_type(MshvVmType vm_type, int mshv_fd)
+static int create_vm(int mshv_fd)
 {
     int vm_fd;
-
-    if (vm_type != MSHV_VM_TYPE_DEFAULT) {
-        error_report("Invalid VM type: %d", vm_type);
-        return -EINVAL;
-    }
 
     int ret = create_partition(mshv_fd);
     if (ret < 0) {
@@ -485,7 +480,6 @@ static int mshv_init_vcpu(CPUState *cpu)
 static int mshv_init(MachineState *ms)
 {
     MshvState *s;
-    MshvVmType vm_type;
     int mshv_fd, ret;
 
     s = MSHV_STATE(ms->accelerator);
@@ -509,13 +503,8 @@ static int mshv_init(MachineState *ms)
     // memory
     mshv_init_mem_manager();
 
-    /* TODO: object_property_find(OBJECT(current_machine), "mshv-type") */
-    vm_type = 0;
     do {
-        /* this creates an internal entry in the VM_DB hash table as a side */
-        /* effect, we can make the fn return the PerVMInfo struct instead and */
-        /* store it ourselves */
-        int vm_fd = create_vm_with_type(vm_type, mshv_fd);
+        int vm_fd = create_vm(mshv_fd);
         s->vm = vm_fd;
     } while (!s->vm);
 

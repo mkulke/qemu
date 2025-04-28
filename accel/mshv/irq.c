@@ -27,7 +27,8 @@
 static MshvMsiControl *msi_control;
 static QemuMutex msi_control_mutex;
 
-void mshv_init_msicontrol(void) {
+void mshv_init_msicontrol(void)
+{
     qemu_mutex_init(&msi_control_mutex);
     msi_control = g_new0(MshvMsiControl, 1);
     msi_control->gsi_routes = g_hash_table_new(g_direct_hash, g_direct_equal);
@@ -148,7 +149,7 @@ static int commit_msi_routing_table(void)
 
         g_hash_table_iter_init(&iter, msi_control->gsi_routes);
         i = 0;
-        while (g_hash_table_iter_next (&iter, &key, &value)) {
+        while (g_hash_table_iter_next(&iter, &key, &value)) {
             struct mshv_user_irq_entry *entry = value;
             table->entries[i] = *entry;
             i++;

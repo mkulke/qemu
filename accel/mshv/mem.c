@@ -91,15 +91,15 @@ static bool find_overlap_region(size_t gpa_idx, const MshvMemoryRegion *mr,
     uint64_t userspace_addr;
 
     entries = mem_manager->mem_entries;
-    for(GList* elem = entries; elem != NULL; elem = elem->next) {
+    for (const GList *elem = entries; elem != NULL; elem = elem->next) {
         entry = elem->data;
         userspace_addr = entry->mr.userspace_addr;
-        if(i != gpa_idx
+        if (i != gpa_idx
             && (userspace_addr < mr->userspace_addr + mr->memory_size)
             && (userspace_addr + entry->mr.memory_size > mr->userspace_addr)
             && entry->mapped) {
-            *overlap_idx = i;
-            return true;
+                *overlap_idx = i;
+                return true;
         }
         i++;
     }
@@ -114,7 +114,7 @@ static MshvMemoryEntry *find_mem_entry(const GList *entries,
     MshvMemoryRegion *mr_2;
     const GList *elem;
 
-    for(elem = entries; elem != NULL; elem = elem->next) {
+    for (elem = entries; elem != NULL; elem = elem->next) {
         item = elem->data;
         /* the list is corrupt if we have a NULL entry */
         assert(item != NULL);
@@ -127,9 +127,6 @@ static MshvMemoryEntry *find_mem_entry(const GList *entries,
     return NULL;
 }
 
-/* TODO: this is a port of mem_manager->add_del_mem. We have to see how
- * we can consolidate this.
- * */
 static inline int add_del_mem(int vm_fd, const MshvMemoryRegion *mr, bool add)
 {
     MshvMemoryEntry *entry;
@@ -321,7 +318,8 @@ static hwaddr align_section(MemoryRegionSection *section, hwaddr *start)
     hwaddr size = int128_get64(section->size);
     hwaddr delta, aligned;
 
-    /* works in page size chunks, but the function may be called
+    /*
+     * works in page size chunks, but the function may be called
      * with sub-page size and unaligned start address. Pad the start
      * address to next and truncate size to previous page boundary.
      */
@@ -350,7 +348,8 @@ void mshv_set_phys_mem(MshvMemoryListener *mml, MemoryRegionSection *section,
         if (writable) {
             return;
         } else if (!memory_region_is_romd(area)) {
-            /* If the memory device is not in romd_mode, then we
+            /*
+             * If the memory device is not in romd_mode, then we
              * actually want to remove the memory slot so all accesses
              * will trap.
              */

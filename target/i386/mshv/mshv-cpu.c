@@ -321,7 +321,8 @@ int mshv_create_vcpu(int vm_fd, uint8_t vp_index, int *cpu_fd)
 
 void mshv_remove_vcpu(int vm_fd, int cpu_fd)
 {
-    /* TODO: don't we have to perform an ioctl to remove the vcpu?
+    /*
+     * TODO: don't we have to perform an ioctl to remove the vcpu?
      * there is WHvDeleteVirtualProcessor in the WHV api
      */
     remove_cpu_guard(cpu_fd);
@@ -592,7 +593,8 @@ static int set_special_regs(const CPUState *cpu)
     assocs[15].value.reg64 = env->efer;
     assocs[16].value.reg64 = cpu_get_apic_base(x86cpu->apic_state);
 
-    /* TODO: support asserting an interrupt using interrup_bitmap
+    /*
+     * TODO: support asserting an interrupt using interrup_bitmap
      * it should be possible if we use the vm_fd
      */
 
@@ -713,14 +715,15 @@ static int register_intercept_result_cpuid_entry(int cpu_fd,
         .input.subleaf_specific = subleaf_specific,
         .input.always_override = always_override,
         .input.padding = 0,
-        /* With regard to masks - these are to specify bits to be overwritten
+        /*
+         * With regard to masks - these are to specify bits to be overwritten
          * The current CpuidEntry structure wouldn't allow to carry the masks
          * in addition to the actual register values. For this reason, the
          * masks are set to the exact values of the corresponding register bits
          * to be registered for an overwrite. To view resulting values the
          * hypervisor would return, HvCallGetVpCpuidValues hypercall can be
          * used.
-         * */
+         */
         .result.eax = entry->eax,
         .result.eax_mask = entry->eax,
         .result.ebx = entry->ebx,
@@ -774,8 +777,7 @@ static int register_intercept_result_cpuid(int cpu_fd, struct hv_cpuid *cpuid)
             || entry->function == 0x80000026) {
             subleaf_specific = 1;
             always_override = 1;
-        }
-        else if (entry->function == 0x00000001
+        } else if (entry->function == 0x00000001
             || entry->function == 0x80000000
             || entry->function == 0x80000001
             || entry->function == 0x80000008) {
@@ -1029,7 +1031,9 @@ static int set_lint(int cpu_fd)
     return set_lapic(cpu_fd, &lapic_state);
 }
 
-/* TODO: populate topology info:
+/*
+ * TODO: populate topology info:
+ *
  * X86CPU *x86cpu = X86_CPU(cpu);
  * CPUX86State *env = &x86cpu->env;
  * X86CPUTopoInfo *topo_info = &env->topo_info;
@@ -1098,8 +1102,8 @@ static int set_memory_info(const struct hyperv_message *msg,
         error_report("invalid message type");
         return -1;
     }
-    // copy the content of the message to info
     memcpy(info, msg->payload, sizeof(*info));
+
     return 0;
 }
 
@@ -1266,9 +1270,11 @@ static int handle_unmapped_mem(int vm_fd, CPUState *cpu,
     return 0;
 }
 
-/* This function is used to fetch the guest state from the hypervisor.
+/*
+ * This function is used to fetch the guest state from the hypervisor.
  * It retrieves the standard and special registers and updates the CPU state
- * accordingly. */
+ * accordingly.
+ */
 static int fetch_guest_state(CPUState *cpu)
 {
     int ret;
@@ -1474,8 +1480,8 @@ static int set_ioport_info(const struct hyperv_message *msg,
         error_report("Invalid message type");
         return -1;
     }
-    // copy the content of the message to info
     memcpy(info, msg->payload, sizeof(*info));
+
     return 0;
 }
 
@@ -1509,32 +1515,32 @@ int mshv_run_vcpu(int vm_fd, CPUState *cpu, hv_message *msg, MshvVmExit *exit)
         return MshvVmExitShutdown;
     }
 
-    switch(exit_msg.header.message_type) {
-        case HVMSG_UNRECOVERABLE_EXCEPTION:
-            *msg = exit_msg;
-            return MshvVmExitShutdown;
-        case HVMSG_UNMAPPED_GPA:
-            ret = handle_unmapped_mem(vm_fd, cpu, &exit_msg, &exit_reason);
-            if (ret < 0) {
-                error_report("failed to handle unmapped memory");
-                return -1;
-            }
-            return exit_reason;
-        case HVMSG_GPA_INTERCEPT:
-            ret = handle_mmio(cpu, &exit_msg, &exit_reason);
-            if (ret < 0) {
-                error_report("failed to handle mmio");
-                return -1;
-            }
-            return exit_reason;
-        case HVMSG_X64_IO_PORT_INTERCEPT:
-            ret = handle_pio(cpu, &exit_msg);
-            if (ret < 0) {
-                return MshvVmExitSpecial;
-            }
-            return MshvVmExitIgnore;
-        default:
-            msg = &exit_msg;
+    switch (exit_msg.header.message_type) {
+    case HVMSG_UNRECOVERABLE_EXCEPTION:
+        *msg = exit_msg;
+        return MshvVmExitShutdown;
+    case HVMSG_UNMAPPED_GPA:
+        ret = handle_unmapped_mem(vm_fd, cpu, &exit_msg, &exit_reason);
+        if (ret < 0) {
+            error_report("failed to handle unmapped memory");
+            return -1;
+        }
+        return exit_reason;
+    case HVMSG_GPA_INTERCEPT:
+        ret = handle_mmio(cpu, &exit_msg, &exit_reason);
+        if (ret < 0) {
+            error_report("failed to handle mmio");
+            return -1;
+        }
+        return exit_reason;
+    case HVMSG_X64_IO_PORT_INTERCEPT:
+        ret = handle_pio(cpu, &exit_msg);
+        if (ret < 0) {
+            return MshvVmExitSpecial;
+        }
+        return MshvVmExitIgnore;
+    default:
+        msg = &exit_msg;
     }
 
     *exit = MshvVmExitIgnore;

@@ -1,6 +1,10 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Type definitions for the hypervisor host interface to kernel.
+ * Type definitions for the mshv host interface.
+ *
+ * Copyright Microsoft, Corp. 2025
+ *
+ * This work is licensed under the terms of the GNU GPL, version 2 or later.
+ * See the COPYING file in the top-level directory.
  */
 #ifndef _HVHDK_MINI_H
 #define _HVHDK_MINI_H

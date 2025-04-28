@@ -37,10 +37,12 @@
 
 typedef struct hyperv_message hv_message;
 
-// Set to 0 if we do not want to use eventfd to optimize the MMIO events.
-// Set to 1 so that mshv kernel driver receives doorbell when the VM access
-// MMIO memory and then signal eventfd to notify the qemu device
-// without extra switching to qemu to emulate mmio access.
+/*
+ * Set to 0 if we do not want to use eventfd to optimize the MMIO events.
+ * Set to 1 so that mshv kernel driver receives doorbell when the VM access
+ * MMIO memory and then signal eventfd to notify the qemu device
+ * without extra switching to qemu to emulate mmio access.
+ */
 #define MSHV_USE_IOEVENTFD 1
 
 #define MSHV_USE_KERNEL_GSI_IRQFD 1
@@ -84,7 +86,8 @@ typedef struct MshvState {
   AccelState parent_obj;
   int vm;
   MshvMemoryListener memory_listener;
-  int nr_as; // number of listener;
+  /* number of listeners */
+  int nr_as;
   MshvAddressSpace *as;
 } MshvState;
 extern MshvState *mshv_state;
@@ -94,18 +97,18 @@ struct AccelCPUState {
 };
 
 typedef struct MshvMsiControl {
-	bool updated;
-	GHashTable *gsi_routes;
+    bool updated;
+    GHashTable *gsi_routes;
 } MshvMsiControl;
 
 typedef struct MshvCreatePartitionArgsMgns {
-	uint64_t pt_flags;
-	uint64_t pt_isolation;
+    uint64_t pt_flags;
+    uint64_t pt_isolation;
 } MshvCreatePartitionArgsMgns;
 
 #define mshv_vcpufd(cpu) (cpu->accel->cpufd)
 
-#else //! CONFIG_MSHV_IS_POSSIBLE
+#else /* CONFIG_MSHV_IS_POSSIBLE */
 #define mshv_enabled() false
 #endif
 #ifdef MSHV_USE_KERNEL_GSI_IRQFD
@@ -160,9 +163,9 @@ typedef struct MshvFPU {
 } MshvFPU;
 
 typedef enum MshvVmExit {
-	MshvVmExitIgnore   = 0,
-	MshvVmExitShutdown = 1,
-	MshvVmExitSpecial  = 2,
+    MshvVmExitIgnore   = 0,
+    MshvVmExitShutdown = 1,
+    MshvVmExitSpecial  = 2,
 } MshvVmExit;
 
 void mshv_init_cpu_logic(void);
@@ -179,13 +182,13 @@ int mshv_arch_put_registers(const CPUState *cpu);
 
 /* pio */
 int mshv_pio_write(uint64_t port, const uint8_t *data, uintptr_t size,
-			       bool is_secure_mode);
+                   bool is_secure_mode);
 void mshv_pio_read(uint64_t port, uint8_t *data, uintptr_t size,
                    bool is_secure_mode);
 
 /* generic */
 enum MshvMiscError {
-	MSHV_USERSPACE_ADDR_REMAP_ERROR = 2001,
+    MSHV_USERSPACE_ADDR_REMAP_ERROR = 2001,
 };
 
 int mshv_hvcall(int mshv_fd, const struct mshv_root_hvcall *args);
@@ -208,20 +211,20 @@ int mshv_msr_to_hv_reg_name(uint32_t msr, uint32_t *hv_reg);
 
 /* memory */
 typedef struct MshvMemoryRegion {
-	uint64_t guest_phys_addr;
-	uint64_t memory_size;
-	uint64_t userspace_addr;
-	bool readonly;
+    uint64_t guest_phys_addr;
+    uint64_t memory_size;
+    uint64_t userspace_addr;
+    bool readonly;
 } MshvMemoryRegion;
 
 typedef struct MshvMemoryEntry {
-	MshvMemoryRegion mr;
-	bool mapped;
+    MshvMemoryRegion mr;
+    bool mapped;
 } MshvMemoryEntry;
 
 typedef struct MshvMemManager {
-	GList *mem_entries;
- 	QemuMutex mutex;
+    GList *mem_entries;
+    QemuMutex mutex;
 } MshvMemManager;
 
 void mshv_init_mem_manager(void);
@@ -230,9 +233,9 @@ int mshv_remove_mem(int vm_fd, const MshvMemoryRegion *mr);
 bool mshv_find_entry_idx_by_gpa(uint64_t addr, size_t *index);
 bool mshv_map_overlapped_region(int vm_fd, uint64_t gpa);
 int mshv_guest_mem_read(uint64_t gpa, uint8_t *data, uintptr_t size,
-					    bool is_secure_mode, bool instruction_fetch);
+                        bool is_secure_mode, bool instruction_fetch);
 int mshv_guest_mem_write(uint64_t gpa, const uint8_t *data, uintptr_t size,
-					     bool is_secure_mode);
+                         bool is_secure_mode);
 void mshv_set_phys_mem(MshvMemoryListener *mml, MemoryRegionSection *section,
                        bool add);
 
@@ -245,8 +248,8 @@ MshvMemoryEntry *mshv_find_entry_by_userspace_addr(const GList *entries,
 /* interrupt */
 void mshv_init_msicontrol(void);
 int mshv_request_interrupt(int vm_fd, uint32_t interrupt_type, uint32_t vector,
-						   uint32_t vp_index, bool logical_destination_mode,
-						   bool level_triggered);
+                           uint32_t vp_index, bool logical_destination_mode,
+                           bool level_triggered);
 
 int mshv_irqchip_add_msi_route(int vector, PCIDevice *dev);
 int mshv_irqchip_update_msi_route(int virq, MSIMessage msg, PCIDevice *dev);

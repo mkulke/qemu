@@ -86,7 +86,7 @@ static const size_t msr_count = ARRAY_SIZE(supported_msrs);
 
 static int compare_msr_index(const void *a, const void *b)
 {
-    return (*(uint32_t *)a - *(uint32_t *)b);
+    return *(uint32_t *)a - *(uint32_t *)b;
 }
 
 __attribute__((constructor))
@@ -331,7 +331,7 @@ static int set_msrs(int cpu_fd, GList *msrs)
     hv_register_assoc *assocs = g_new0(hv_register_assoc, n_msrs);
 
     entries = msrs;
-    for(GList* elem = entries; elem != NULL; elem = elem->next) {
+    for (const GList *elem = entries; elem != NULL; elem = elem->next) {
         entry = elem->data;
         ret = mshv_msr_to_hv_reg_name(entry->index, &name);
         if (ret < 0) {
@@ -364,7 +364,7 @@ int mshv_configure_msr(int cpu_fd, const MshvMsrEntry *msrs, size_t n_msrs)
         msr_index = msrs[i].index;
         /* check whether index of msrs is in SUPPORTED_MSRS */
         if (mshv_is_supported_msr(msr_index)) {
-            valid_msrs = g_list_append(valid_msrs, (void*) &msrs[i]);
+            valid_msrs = g_list_append(valid_msrs, (void *) &msrs[i]);
         }
     }
 

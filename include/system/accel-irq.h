@@ -5,11 +5,13 @@
 #include "system/kvm.h"
 #include "system/mshv.h"
 
-static inline bool accel_msi_via_irqfd_enabled(void) {
+static inline bool accel_msi_via_irqfd_enabled(void)
+{
   return mshv_msi_via_irqfd_enabled() || kvm_msi_via_irqfd_enabled();
 }
 
-static inline bool accel_irqchip_is_split(void) {
+static inline bool accel_irqchip_is_split(void)
+{
   return mshv_msi_via_irqfd_enabled() || kvm_irqchip_is_split();
 }
 

@@ -27,11 +27,11 @@
 #include "qemu/guest-random.h"
 #include "system/accel-ops.h"
 #include "system/cpus.h"
-#include "system/runstate.h" //vm_stop
+#include "system/runstate.h"
 #include "system/accel-blocker.h"
 #include "system/address-spaces.h"
 #include "system/mshv.h"
-#include "system/reset.h" //register reset
+#include "system/reset.h"
 #include "trace.h"
 #include <err.h>
 #include <stdint.h>
@@ -48,7 +48,8 @@ bool mshv_allowed;
 
 MshvState *mshv_state;
 
-static int init_mshv(void) {
+static int init_mshv(void)
+{
     int mshv_fd = open("/dev/mshv", O_RDWR | O_CLOEXEC);
     if (mshv_fd < 0) {
         error_report("Failed to open /dev/mshv: %s", strerror(errno));
@@ -117,12 +118,12 @@ static int create_partition(int mshv_fd)
     int ret;
     struct mshv_create_partition args = {0};
 
-    // Initialize pt_flags with the desired features
+    /* Initialize pt_flags with the desired features */
     uint64_t pt_flags = (1ULL << MSHV_PT_BIT_LAPIC) |
                         (1ULL << MSHV_PT_BIT_X2APIC) |
                         (1ULL << MSHV_PT_BIT_GPA_SUPER_PAGES);
 
-    // Set default isolation type
+    /* Set default isolation type */
     uint64_t pt_isolation = MSHV_PT_ISOLATION_NONE;
 
     args.pt_flags = pt_flags;
@@ -136,14 +137,13 @@ static int create_partition(int mshv_fd)
     return ret;
 }
 
-static int set_synthetic_proc_features(int vm_fd) {
+static int set_synthetic_proc_features(int vm_fd)
+{
     int ret;
-
     struct hv_input_set_partition_property in = {0};
-
     union hv_partition_synthetic_processor_features features = {0};
 
-    // Access the bitfield and set the desired features
+    /* Access the bitfield and set the desired features */
     features.hypervisor_present = 1;
     features.hv1 = 1;
     features.access_partition_reference_counter = 1;
@@ -187,10 +187,12 @@ static int initialize_vm(int vm_fd)
     return 0;
 }
 
-/* Default Microsoft Hypervisor behavior for unimplemented MSR is to  send a
+/*
+ * Default Microsoft Hypervisor behavior for unimplemented MSR is to  send a
  * fault to the guest if it tries to access it. It is possible to override
  * this behavior with a more suitable option i.e., ignore writes from the guest
- * and return zero in attempt to read unimplemented */
+ * and return zero in attempt to read unimplemented.
+ */
 static int set_unimplemented_msr_action(int vm_fd)
 {
     struct hv_input_set_partition_property in = {0};
@@ -348,7 +350,7 @@ static void mem_ioeventfd_add(MemoryListener *listener,
     ret = register_ioevent(mshv_state->vm, fd, addr, data, is_64, match_data);
 
     if (ret < 0) {
-        error_report("Failed to register ioeventfd: %s (%d)\n", strerror(-ret),
+        error_report("Failed to register ioeventfd: %s (%d)", strerror(-ret),
                      -ret);
         abort();
     }
@@ -368,8 +370,8 @@ static void mem_ioeventfd_del(MemoryListener *listener,
 
     ret = unregister_ioevent(mshv_state->vm, fd, addr);
     if (ret < 0) {
-        error_report("Failed to unregister ioeventfd: %s (%d)\n",
-                     strerror(-ret), -ret);
+        error_report("Failed to unregister ioeventfd: %s (%d)", strerror(-ret),
+                     -ret);
         abort();
     }
 }
@@ -494,13 +496,10 @@ static int mshv_init(MachineState *ms)
     }
     mshv_fd = ret;
 
-    // cpu
     mshv_init_cpu_logic();
 
-    // irq
     mshv_init_msicontrol();
 
-    // memory
     mshv_init_mem_manager();
 
     do {
@@ -510,8 +509,6 @@ static int mshv_init(MachineState *ms)
 
     resume_vm(s->vm);
 
-    /* MAX number of address spaces: */
-    /* address_space_memory */
     s->nr_as = 1;
     s->as = g_new0(MshvAddressSpace, s->nr_as);
 
@@ -564,7 +561,8 @@ static int mshv_cpu_exec(CPUState *cpu)
             qemu_cpu_kick_self();
         }
 
-        /* Read cpu->exit_request before KVM_RUN reads run->immediate_exit.
+        /*
+         * Read cpu->exit_request before KVM_RUN reads run->immediate_exit.
          * Matching barrier in kvm_eat_signals.
          */
         smp_rmb();
@@ -596,11 +594,13 @@ static int mshv_cpu_exec(CPUState *cpu)
     return ret;
 }
 
-// The signal handler is triggered when QEMU's main thread receives a SIG_IPI
-// (SIGUSR1). This signal causes the current CPU thread to be kicked, forcing a
-// VM exit on the CPU. The VM exit generates an exit reason that breaks the loop
-// (see mshv_cpu_exec). If the exit is due to a Ctrl+A+x command, the system
-// will shut down. For other cases, the system will continue running.
+/*
+ * The signal handler is triggered when QEMU's main thread receives a SIG_IPI
+ * (SIGUSR1). This signal causes the current CPU thread to be kicked, forcing a
+ * VM exit on the CPU. The VM exit generates an exit reason that breaks the loop
+ * (see mshv_cpu_exec). If the exit is due to a Ctrl+A+x command, the system
+ * will shut down. For other cases, the system will continue running.
+ */
 static void sa_ipi_handler(int sig)
 {
     qemu_cpu_kick_self();

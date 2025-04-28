@@ -22,7 +22,6 @@
 #include "hw/hyperv/hvgdk.h"
 #include "hw/hyperv/linux-mshv.h"
 
-#include "exec/address-spaces.h"
 #include "hw/i386/x86.h"
 #include "qemu/accel.h"
 #include "qemu/guest-random.h"
@@ -30,6 +29,7 @@
 #include "system/cpus.h"
 #include "system/runstate.h" //vm_stop
 #include "system/accel-blocker.h"
+#include "system/address-spaces.h"
 #include "system/mshv.h"
 #include "system/reset.h" //register reset
 #include "trace.h"

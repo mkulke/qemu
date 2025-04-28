@@ -24,7 +24,7 @@
 #include "hw/hyperv/linux-mshv.h"
 #include "hw/hyperv/hvhdk.h"
 #include "qapi/qapi-types-common.h"
-#include "exec/memory.h"
+#include "system/memory.h"
 #include <stdint.h>
 
 #ifdef COMPILING_PER_TARGET

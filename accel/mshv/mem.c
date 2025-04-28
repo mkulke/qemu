@@ -14,9 +14,9 @@
 #include "qemu/osdep.h"
 #include "qemu/lockable.h"
 #include "qemu/error-report.h"
-#include "exec/address-spaces.h"
-#include "system/mshv.h"
 #include "hw/hyperv/linux-mshv.h"
+#include "system/address-spaces.h"
+#include "system/mshv.h"
 #include <stdint.h>
 #include <sys/ioctl.h>
 #include "trace.h"

@@ -190,6 +190,7 @@ void mshv_arch_init_vcpu(CPUState *cpu);
 void mshv_arch_destroy_vcpu(CPUState *cpu);
 void mshv_arch_amend_proc_features(
     union hv_partition_synthetic_processor_features *features);
+int mshv_arch_post_init_vm(int vm_fd);
 
 /* pio */
 int mshv_pio_write(uint64_t port, const uint8_t *data, uintptr_t size,

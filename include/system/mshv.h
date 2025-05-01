@@ -188,6 +188,8 @@ int mshv_set_generic_regs(int cpu_fd, hv_register_assoc *assocs, size_t n_regs);
 int mshv_arch_put_registers(const CPUState *cpu);
 void mshv_arch_init_vcpu(CPUState *cpu);
 void mshv_arch_destroy_vcpu(CPUState *cpu);
+void mshv_arch_amend_proc_features(
+    union hv_partition_synthetic_processor_features *features);
 
 /* pio */
 int mshv_pio_write(uint64_t port, const uint8_t *data, uintptr_t size,

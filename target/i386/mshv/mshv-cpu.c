@@ -1701,3 +1701,9 @@ void mshv_arch_destroy_vcpu(CPUState *cpu)
     g_free(env->emu_mmio_buf);
     env->emu_mmio_buf = NULL;
 }
+
+void mshv_arch_amend_proc_features(
+    union hv_partition_synthetic_processor_features *features)
+{
+    features->access_guest_idle_reg = 1;
+}

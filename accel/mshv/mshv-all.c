@@ -154,10 +154,11 @@ static int set_synthetic_proc_features(int vm_fd)
     features.access_intr_ctrl_regs = 1;
     features.access_vp_index = 1;
     features.access_hypercall_regs = 1;
-    features.access_guest_idle_reg = 1;
     features.tb_flush_hypercalls = 1;
     features.synthetic_cluster_ipi = 1;
     features.direct_synthetic_timers = 1;
+
+    mshv_arch_amend_proc_features(&features);
 
     in.property_code = HV_PARTITION_PROPERTY_SYNTHETIC_PROC_FEATURES;
     in.property_value = features.as_uint64[0];

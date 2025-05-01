@@ -6,6 +6,7 @@
  * Authors:
  *  Ziqiao Zhou       <ziqiaozhou@microsoft.com>
  *  Magnus Kulke      <magnuskulke@microsoft.com>
+ *  Jinank Jain       <jinankjain@microsoft.com>
  *
  * This work is licensed under the terms of the GNU GPL, version 2 or later.
  * See the COPYING file in the top-level directory.
@@ -185,6 +186,8 @@ int mshv_load_regs(CPUState *cpu);
 int mshv_store_regs(CPUState *cpu);
 int mshv_set_generic_regs(int cpu_fd, hv_register_assoc *assocs, size_t n_regs);
 int mshv_arch_put_registers(const CPUState *cpu);
+void mshv_arch_init_vcpu(CPUState *cpu);
+void mshv_arch_destroy_vcpu(CPUState *cpu);
 
 /* pio */
 int mshv_pio_write(uint64_t port, const uint8_t *data, uintptr_t size,

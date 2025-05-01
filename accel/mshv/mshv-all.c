@@ -188,34 +188,6 @@ static int initialize_vm(int vm_fd)
     return 0;
 }
 
-/*
- * Default Microsoft Hypervisor behavior for unimplemented MSR is to  send a
- * fault to the guest if it tries to access it. It is possible to override
- * this behavior with a more suitable option i.e., ignore writes from the guest
- * and return zero in attempt to read unimplemented.
- */
-static int set_unimplemented_msr_action(int vm_fd)
-{
-    struct hv_input_set_partition_property in = {0};
-    struct mshv_root_hvcall args = {0};
-
-    in.property_code  = HV_PARTITION_PROPERTY_UNIMPLEMENTED_MSR_ACTION;
-    in.property_value = HV_UNIMPLEMENTED_MSR_ACTION_IGNORE_WRITE_READ_ZERO;
-
-    args.code   = HVCALL_SET_PARTITION_PROPERTY;
-    args.in_sz  = sizeof(in);
-    args.in_ptr = (uint64_t)&in;
-
-    trace_mshv_hvcall_args("unimplemented_msr_action", args.code, args.in_sz);
-
-    int ret = mshv_hvcall(vm_fd, &args);
-    if (ret < 0) {
-        error_report("Failed to set unimplemented MSR action");
-        return -1;
-    }
-    return 0;
-}
-
 static int create_vm(int mshv_fd)
 {
     int vm_fd;
@@ -237,7 +209,7 @@ static int create_vm(int mshv_fd)
         return -1;
     }
 
-    ret = set_unimplemented_msr_action(vm_fd);
+    ret = mshv_arch_post_init_vm(vm_fd);
     if (ret < 0) {
         return -1;
     }

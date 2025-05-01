@@ -6,6 +6,7 @@
  * Authors:
  *  Ziqiao Zhou       <ziqiaozhou@microsoft.com>
  *  Magnus Kulke      <magnuskulke@microsoft.com>
+ *  Jinank Jain       <jinankjain@microsoft.com>
  *
  * This work is licensed under the terms of the GNU GPL, version 2 or later.
  * See the COPYING file in the top-level directory.
@@ -15,14 +16,16 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
+#include "qemu/event_notifier.h"
 #include "qemu/module.h"
+#include "qemu/main-loop.h"
+#include "hw/boards.h"
 
 #include "hw/hyperv/hvhdk.h"
 #include "hw/hyperv/hvhdk_mini.h"
 #include "hw/hyperv/hvgdk.h"
 #include "hw/hyperv/linux-mshv.h"
 
-#include "hw/i386/x86.h"
 #include "qemu/accel.h"
 #include "qemu/guest-random.h"
 #include "system/accel-ops.h"
@@ -36,9 +39,6 @@
 #include <err.h>
 #include <stdint.h>
 #include <sys/ioctl.h>
-
-#include "emulate/x86_decode.h"
-#include "emulate/x86_emu.h"
 
 #define TYPE_MSHV_ACCEL ACCEL_CLASS_NAME("mshv")
 
@@ -460,13 +460,11 @@ int mshv_pio_write(uint64_t port, const uint8_t *data, uintptr_t size,
 
 static int mshv_init_vcpu(CPUState *cpu)
 {
-    X86CPU *x86_cpu = X86_CPU(cpu);
-    CPUX86State *env = &x86_cpu->env;
     int vm_fd = mshv_state->vm;
     uint8_t vp_index = cpu->cpu_index;
     int ret;
 
-    env->emu_mmio_buf = g_new(char, 4096);
+    mshv_arch_init_vcpu(cpu);
     cpu->accel = g_new0(AccelCPUState, 1);
 
     ret = mshv_create_vcpu(vm_fd, vp_index, &cpu->accel->cpufd);
@@ -527,15 +525,13 @@ static int mshv_init(MachineState *ms)
 
 static int mshv_destroy_vcpu(CPUState *cpu)
 {
-    X86CPU *x86_cpu = X86_CPU(cpu);
-    CPUX86State *env = &x86_cpu->env;
     int cpu_fd = mshv_vcpufd(cpu);
     int vm_fd = mshv_state->vm;
 
     mshv_remove_vcpu(vm_fd, cpu_fd);
     mshv_vcpufd(cpu) = 0;
 
-    g_free(env->emu_mmio_buf);
+    mshv_arch_destroy_vcpu(cpu);
     g_free(cpu->accel);
     return 0;
 }
@@ -728,6 +724,7 @@ static const TypeInfo mshv_accel_type = {
     .class_init = mshv_accel_class_init,
     .instance_size = sizeof(MshvState),
 };
+
 static void mshv_accel_ops_class_init(ObjectClass *oc, const void *data)
 {
     AccelOpsClass *ops = ACCEL_OPS_CLASS(oc);

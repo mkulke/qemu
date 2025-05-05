@@ -1260,7 +1260,7 @@ static int handle_unmapped_mem(int vm_fd, CPUState *cpu,
         return handle_mmio(cpu, msg, exit_reason);
     }
 
-    ret = mshv_map_overlapped_region(vm_fd, gpa);
+    ret = mshv_remap_overlapped_region(vm_fd, gpa);
     if (ret < 0) {
         *exit_reason = MshvVmExitSpecial;
     } else {

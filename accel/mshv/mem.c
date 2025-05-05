@@ -82,22 +82,28 @@ bool mshv_find_entry_idx_by_gpa(uint64_t addr, size_t *index)
     return mshv_find_idx_by_gpa_in_entries(entries, addr, index);
 }
 
-static bool find_overlap_region(size_t gpa_idx, const MshvMemoryRegion *mr,
-                                size_t *overlap_idx)
+static bool find_overlap_userspace_region(size_t gpa_idx,
+                                          const MshvMemoryRegion *mr,
+                                          size_t *overlap_idx)
 {
     MshvMemoryEntry *entry;
     GList *entries;
     size_t i = 0;
-    uint64_t userspace_addr;
+    uint64_t mr_start, mr_end, entry_start, entry_end;
 
     entries = mem_manager->mem_entries;
     for (const GList *elem = entries; elem != NULL; elem = elem->next) {
         entry = elem->data;
-        userspace_addr = entry->mr.userspace_addr;
-        if (i != gpa_idx
-            && (userspace_addr < mr->userspace_addr + mr->memory_size)
-            && (userspace_addr + entry->mr.memory_size > mr->userspace_addr)
-            && entry->mapped) {
+
+        mr_start = mr->userspace_addr;
+        mr_end = mr_start + mr->memory_size;
+        entry_start = entry->mr.userspace_addr;
+        entry_end = entry_start + entry->mr.memory_size;
+
+        if (i != gpa_idx &&
+            entry->mapped &&
+            entry_start < mr_end &&
+            entry_end > mr_start) {
                 *overlap_idx = i;
                 return true;
         }
@@ -156,8 +162,9 @@ static inline int add_del_mem(int vm_fd, const MshvMemoryRegion *mr, bool add)
 
             if (ret == -MSHV_USERSPACE_ADDR_REMAP_ERROR) {
                 warn_report(
-                    "ignoring failed remapping of userspace_addr: 0x%016lx",
-                    mr->userspace_addr);
+                    "ignoring failed remapping of userspace_addr: 0x%016lx "
+                    "to gpa 0x%08lx-0x%08lx", mr->userspace_addr,
+                    mr->guest_phys_addr, mr->guest_phys_addr + mr->memory_size);
                 ret = 0;
             }
 
@@ -187,12 +194,11 @@ static inline int add_del_mem(int vm_fd, const MshvMemoryRegion *mr, bool add)
     return 0;
 }
 
-bool mshv_map_overlapped_region(int vm_fd, uint64_t gpa)
+bool mshv_remap_overlapped_region(int vm_fd, uint64_t gpa)
 {
     size_t gpa_idx, overlap_idx;
     MshvMemoryEntry *gpa_entry, *overlap_entry;
     int ret;
-
     assert(mem_manager);
 
     WITH_QEMU_LOCK_GUARD(&mem_manager->mutex) {
@@ -205,7 +211,8 @@ bool mshv_map_overlapped_region(int vm_fd, uint64_t gpa)
             abort();
         }
 
-        if (!find_overlap_region(gpa_idx, &gpa_entry->mr, &overlap_idx)) {
+        if (!find_overlap_userspace_region(gpa_idx, &gpa_entry->mr,
+                                           &overlap_idx)) {
             return false;
         }
         if (gpa_idx == overlap_idx) {
@@ -228,7 +235,6 @@ bool mshv_map_overlapped_region(int vm_fd, uint64_t gpa)
             error_report("failed to map gpa region");
             abort();
         }
-        gpa_entry->mapped = true;
     }
 
     return true;
@@ -266,7 +272,7 @@ int mshv_guest_mem_read(uint64_t gpa, uint8_t *data, uintptr_t size,
     ret = address_space_rw(&address_space_memory, gpa, memattr, (void *)data,
                            size, false);
     if (ret != MEMTX_OK) {
-        error_report("Failed to read guest memory");
+        error_report("Failed to read guest memory at 0x%08lx", gpa);
         return -1;
     }
 

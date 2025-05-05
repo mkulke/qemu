@@ -69,6 +69,7 @@ typedef struct hyperv_message hv_message;
 #endif
 
 #ifdef CONFIG_MSHV_IS_POSSIBLE
+#include "ch-emulator.h"
 extern bool mshv_allowed;
 #define mshv_enabled() (mshv_allowed)
 
@@ -89,6 +90,7 @@ typedef struct MshvState {
   /* number of listeners */
   int nr_as;
   MshvAddressSpace *as;
+  bool use_ch_emu;
 } MshvState;
 extern MshvState *mshv_state;
 
@@ -258,5 +260,10 @@ void mshv_irqchip_release_virq(int virq);
 int mshv_irqchip_add_irqfd_notifier_gsi(const EventNotifier *n,
                                         const EventNotifier *rn, int virq);
 int mshv_irqchip_remove_irqfd_notifier_gsi(const EventNotifier *n, int virq);
+
+/* temp */
+void mshv_emulate_instruction_ch(CPUState *cpu,
+                                 struct hv_x64_memory_intercept_message *info);
+bool mshv_use_ch_emu(void);
 
 #endif

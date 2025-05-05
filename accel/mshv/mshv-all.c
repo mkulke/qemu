@@ -705,6 +705,25 @@ static bool mshv_cpus_are_resettable(void)
     return false;
 }
 
+static void mshv_set_ch_emu(Object *obj, bool value, Error **errp)
+{
+    MshvState *s = MSHV_STATE(obj);
+    if (s->vm) {
+        error_setg(errp, "Cannot set ch-emu after VM creation");
+        return;
+    }
+    s->use_ch_emu = value;
+}
+
+bool mshv_use_ch_emu(void)
+{
+    MshvState *s = mshv_state;
+    if (!s) {
+        return false;
+    }
+    return s->use_ch_emu;
+}
+
 static void mshv_accel_class_init(ObjectClass *oc, void *data)
 {
     AccelClass *ac = ACCEL_CLASS(oc);
@@ -712,6 +731,10 @@ static void mshv_accel_class_init(ObjectClass *oc, void *data)
     ac->name = "MSHV";
     ac->init_machine = mshv_init;
     ac->allowed = &mshv_allowed;
+
+    object_class_property_add_bool(oc, "ch-emu", NULL, mshv_set_ch_emu);
+    object_class_property_set_description(oc, "ch-emu", "Use Cloud Hypervisor "
+                                          "emulation for MMIO access");
 }
 
 static void mshv_accel_instance_init(Object *obj)

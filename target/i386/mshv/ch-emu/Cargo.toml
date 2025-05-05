@@ -1,0 +1,33 @@
+[package]
+name = "ch-emulator"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+hypervisor    = { git = "https://github.com/mkulke/cloud-hypervisor", rev = "85f6b196e", features = ["mshv"] }
+arch          = { git = "https://github.com/mkulke/cloud-hypervisor", rev = "85f6b196e" }
+mshv-ioctls   = { git = "https://github.com/mkulke/mshv",             rev = "629ecae" }
+mshv-bindings = { git = "https://github.com/mkulke/mshv", 		      rev = "629ecae", features = [
+	"fam-wrappers",
+	"with-serde",
+] }
+
+anyhow = "1.0.81"
+iced-x86 = {version = "1.21.0", default-features = false, features = [
+    "std",
+    "decoder",
+    "op_code_info",
+    "instr_info",
+    "fast_fmt"
+]}
+vmm-sys-util = { version = "0.12.1", features = ["with-serde"]}
+
+[build-dependencies]
+cbindgen = "0.27.0"
+cargo_metadata = "0.14"
+
+[package.metadata.build]
+output_dir = "./"

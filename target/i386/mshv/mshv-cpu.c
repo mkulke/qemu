@@ -1218,7 +1218,7 @@ static int handle_mmio(CPUState *cpu, const struct hyperv_message *msg,
     }
 
     if (insn_len <= 0 || insn_len > 16) {
-        error_report("Invalid instruction length");
+        error_report("Invalid instruction length: %zu", insn_len);
         return -1;
     }
 
@@ -1226,9 +1226,13 @@ static int handle_mmio(CPUState *cpu, const struct hyperv_message *msg,
 
     instruction_bytes = info.instruction_bytes;
 
-    ret = emulate_instruction(cpu, instruction_bytes, insn_len,
-                              info.guest_virtual_address,
-                              info.guest_physical_address);
+    if (mshv_use_ch_emu()) {
+        mshv_emulate_instruction_ch(cpu, &info);
+    } else {
+        ret = emulate_instruction(cpu, instruction_bytes, insn_len,
+                                  info.guest_virtual_address,
+                                  info.guest_physical_address);
+    }
     if (ret < 0) {
         error_report("failed to emulate mmio");
         return -1;

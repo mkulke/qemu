@@ -231,7 +231,7 @@ void mshv_init_mem_manager(void);
 int mshv_add_mem(int vm_fd, const MshvMemoryRegion *mr);
 int mshv_remove_mem(int vm_fd, const MshvMemoryRegion *mr);
 bool mshv_find_entry_idx_by_gpa(uint64_t addr, size_t *index);
-bool mshv_map_overlapped_region(int vm_fd, uint64_t gpa);
+bool mshv_remap_overlapped_region(int vm_fd, uint64_t gpa);
 int mshv_guest_mem_read(uint64_t gpa, uint8_t *data, uintptr_t size,
                         bool is_secure_mode, bool instruction_fetch);
 int mshv_guest_mem_write(uint64_t gpa, const uint8_t *data, uintptr_t size,

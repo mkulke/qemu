@@ -162,6 +162,7 @@ static int guest_mem_read_with_gva(const CPUState *cpu, uint64_t gva,
         error_report("failed to translate gva to gpa");
         return -1;
     }
+
     ret = mshv_guest_mem_read(gpa, data, size, false, fetch_instruction);
     if (ret < 0) {
         error_report("failed to read from guest memory");
@@ -1217,9 +1218,13 @@ static int handle_mmio(CPUState *cpu, const struct hyperv_message *msg,
         return -1;
     }
 
-    if (insn_len <= 0 || insn_len > 16) {
-        error_report("Invalid instruction length");
+    if (insn_len > 16) {
+        error_report("Invalid instruction length: %zu", insn_len);
         return -1;
+    }
+
+    if (insn_len == 0) {
+        warn_report("instruction length = 0");
     }
 
     /* TODO: insn_len != 16 is x-page access, do we handle it properly? */

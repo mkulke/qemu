@@ -17,6 +17,7 @@
 #include "hw/hyperv/linux-mshv.h"
 #include "system/address-spaces.h"
 #include "system/mshv.h"
+#include "exec/memattrs.h"
 #include <stdint.h>
 #include <sys/ioctl.h>
 #include "trace.h"
@@ -257,6 +258,34 @@ static inline MemTxAttrs get_mem_attrs(bool is_secure_mode)
     return memattr;
 }
 
+static int handle_unmapped_mmio_region_read(uint64_t gpa, uint64_t size,
+                                            uint8_t *data)
+{
+    warn_report("read from unmapped mmio region gpa=0x%lx size=%lu", gpa, size);
+    switch (size) {
+    case 1:
+        *(uint8_t *)data = UINT8_MAX;
+        break;
+    case 2:
+        *(uint16_t *)data = UINT16_MAX;
+        break;
+    case 4:
+        *(uint32_t *)data = UINT32_MAX;
+        break;
+    case 8:
+        *(uint64_t *)data = UINT64_MAX;
+        break;
+    case 16:
+        *(uint64_t *)data = ULONG_MAX;
+        break;
+    default:
+        error_report("invalid size for unmapped mmio region: %lu\n",
+                     size);
+        return -1;
+    }
+    return 0;
+}
+
 int mshv_guest_mem_read(uint64_t gpa, uint8_t *data, uintptr_t size,
                         bool is_secure_mode, bool instruction_fetch)
 {
@@ -271,8 +300,14 @@ int mshv_guest_mem_read(uint64_t gpa, uint8_t *data, uintptr_t size,
 
     ret = address_space_rw(&address_space_memory, gpa, memattr, (void *)data,
                            size, false);
-    if (ret != MEMTX_OK) {
-        error_report("Failed to read guest memory at 0x%08lx", gpa);
+    switch (ret) {
+    case MEMTX_OK:
+        break;
+    case MEMTX_DECODE_ERROR:
+        return handle_unmapped_mmio_region_read(gpa, size, data);
+        break;
+    default:
+        error_report("failed to read guest memory at 0x%08lx", gpa);
         return -1;
     }
 
@@ -353,13 +388,6 @@ void mshv_set_phys_mem(MshvMemoryListener *mml, MemoryRegionSection *section,
     if (!memory_region_is_ram(area)) {
         if (writable) {
             return;
-        } else if (!memory_region_is_romd(area)) {
-            /*
-             * If the memory device is not in romd_mode, then we
-             * actually want to remove the memory slot so all accesses
-             * will trap.
-             */
-            add = false;
         }
     }
 

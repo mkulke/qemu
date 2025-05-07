@@ -162,6 +162,7 @@ static int guest_mem_read_with_gva(const CPUState *cpu, uint64_t gva,
         error_report("failed to translate gva to gpa");
         return -1;
     }
+
     ret = mshv_guest_mem_read(gpa, data, size, false, fetch_instruction);
     if (ret < 0) {
         error_report("failed to read from guest memory");
@@ -1206,23 +1207,25 @@ static int handle_mmio(CPUState *cpu, const struct hyperv_message *msg,
 
     ret = set_memory_info(msg, &info);
     if (ret < 0) {
-        error_report("Failed to convert message to memory info");
+        error_report("failed to convert message to memory info");
         return -1;
     }
     insn_len = info.instruction_byte_count;
     access_type = info.header.intercept_access_type;
 
     if (access_type == HV_X64_INTERCEPT_ACCESS_TYPE_EXECUTE) {
-        error_report("Invalid intercept access type: execute");
+        error_report("invalid intercept access type: execute");
         return -1;
     }
 
-    if (insn_len <= 0 || insn_len > 16) {
-        error_report("Invalid instruction length");
+    if (insn_len > 16) {
+        error_report("invalid mmio instruction length: %zu", insn_len);
         return -1;
     }
 
-    /* TODO: insn_len != 16 is x-page access, do we handle it properly? */
+    if (insn_len == 0) {
+        warn_report("mmio instruction buffer empty");
+    }
 
     instruction_bytes = info.instruction_bytes;
 

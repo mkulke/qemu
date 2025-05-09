@@ -15,14 +15,16 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
+#include "qemu/event_notifier.h"
 #include "qemu/module.h"
+#include "qemu/main-loop.h"
+#include "hw/boards.h"
 
 #include "hw/hyperv/hvhdk.h"
 #include "hw/hyperv/hvhdk_mini.h"
 #include "hw/hyperv/hvgdk.h"
 #include "hw/hyperv/linux-mshv.h"
 
-#include "hw/i386/x86.h"
 #include "qemu/accel.h"
 #include "qemu/guest-random.h"
 #include "system/accel-ops.h"
@@ -36,9 +38,6 @@
 #include <err.h>
 #include <stdint.h>
 #include <sys/ioctl.h>
-
-#include "emulate/x86_decode.h"
-#include "emulate/x86_emu.h"
 
 #define TYPE_MSHV_ACCEL ACCEL_CLASS_NAME("mshv")
 
@@ -154,10 +153,11 @@ static int set_synthetic_proc_features(int vm_fd)
     features.access_intr_ctrl_regs = 1;
     features.access_vp_index = 1;
     features.access_hypercall_regs = 1;
-    features.access_guest_idle_reg = 1;
     features.tb_flush_hypercalls = 1;
     features.synthetic_cluster_ipi = 1;
     features.direct_synthetic_timers = 1;
+
+    mshv_arch_amend_proc_features(&features);
 
     in.property_code = HV_PARTITION_PROPERTY_SYNTHETIC_PROC_FEATURES;
     in.property_value = features.as_uint64[0];
@@ -187,34 +187,6 @@ static int initialize_vm(int vm_fd)
     return 0;
 }
 
-/*
- * Default Microsoft Hypervisor behavior for unimplemented MSR is to  send a
- * fault to the guest if it tries to access it. It is possible to override
- * this behavior with a more suitable option i.e., ignore writes from the guest
- * and return zero in attempt to read unimplemented.
- */
-static int set_unimplemented_msr_action(int vm_fd)
-{
-    struct hv_input_set_partition_property in = {0};
-    struct mshv_root_hvcall args = {0};
-
-    in.property_code  = HV_PARTITION_PROPERTY_UNIMPLEMENTED_MSR_ACTION;
-    in.property_value = HV_UNIMPLEMENTED_MSR_ACTION_IGNORE_WRITE_READ_ZERO;
-
-    args.code   = HVCALL_SET_PARTITION_PROPERTY;
-    args.in_sz  = sizeof(in);
-    args.in_ptr = (uint64_t)&in;
-
-    trace_mshv_hvcall_args("unimplemented_msr_action", args.code, args.in_sz);
-
-    int ret = mshv_hvcall(vm_fd, &args);
-    if (ret < 0) {
-        error_report("Failed to set unimplemented MSR action");
-        return -1;
-    }
-    return 0;
-}
-
 static int create_vm(int mshv_fd)
 {
     int vm_fd;
@@ -236,7 +208,7 @@ static int create_vm(int mshv_fd)
         return -1;
     }
 
-    ret = set_unimplemented_msr_action(vm_fd);
+    ret = mshv_arch_post_init_vm(vm_fd);
     if (ret < 0) {
         return -1;
     }
@@ -460,13 +432,11 @@ int mshv_pio_write(uint64_t port, const uint8_t *data, uintptr_t size,
 
 static int mshv_init_vcpu(CPUState *cpu)
 {
-    X86CPU *x86_cpu = X86_CPU(cpu);
-    CPUX86State *env = &x86_cpu->env;
     int vm_fd = mshv_state->vm;
     uint8_t vp_index = cpu->cpu_index;
     int ret;
 
-    env->emu_mmio_buf = g_new(char, 4096);
+    mshv_arch_init_vcpu(cpu);
     cpu->accel = g_new0(AccelCPUState, 1);
 
     ret = mshv_create_vcpu(vm_fd, vp_index, &cpu->accel->cpufd);
@@ -527,15 +497,13 @@ static int mshv_init(MachineState *ms)
 
 static int mshv_destroy_vcpu(CPUState *cpu)
 {
-    X86CPU *x86_cpu = X86_CPU(cpu);
-    CPUX86State *env = &x86_cpu->env;
     int cpu_fd = mshv_vcpufd(cpu);
     int vm_fd = mshv_state->vm;
 
     mshv_remove_vcpu(vm_fd, cpu_fd);
     mshv_vcpufd(cpu) = 0;
 
-    g_free(env->emu_mmio_buf);
+    mshv_arch_destroy_vcpu(cpu);
     g_free(cpu->accel);
     return 0;
 }
@@ -692,12 +660,24 @@ static void mshv_cpu_synchronize_pre_loadvm(CPUState *cpu)
 
 static void do_mshv_cpu_synchronize(CPUState *cpu, run_on_cpu_data arg)
 {
-    mshv_load_regs(cpu);
+    if (!cpu->vcpu_dirty) {
+        int ret = mshv_load_regs(cpu);
+        if (ret) {
+            error_report("Failed to load registers for vcpu %d", cpu->cpu_index);
+        }
+
+        cpu_dump_state(cpu, stderr, CPU_DUMP_CODE);
+        vm_stop(RUN_STATE_INTERNAL_ERROR);
+
+        cpu->vcpu_dirty = true;
+    }
 }
 
 static void mshv_cpu_synchronize(CPUState *cpu)
 {
-    run_on_cpu(cpu, do_mshv_cpu_synchronize, RUN_ON_CPU_NULL);
+    if (!cpu->vcpu_dirty) {
+        run_on_cpu(cpu, do_mshv_cpu_synchronize, RUN_ON_CPU_NULL);
+    }
 }
 
 static bool mshv_cpus_are_resettable(void)
@@ -705,7 +685,7 @@ static bool mshv_cpus_are_resettable(void)
     return false;
 }
 
-static void mshv_accel_class_init(ObjectClass *oc, void *data)
+static void mshv_accel_class_init(ObjectClass *oc, const void *data)
 {
     AccelClass *ac = ACCEL_CLASS(oc);
 
@@ -728,7 +708,8 @@ static const TypeInfo mshv_accel_type = {
     .class_init = mshv_accel_class_init,
     .instance_size = sizeof(MshvState),
 };
-static void mshv_accel_ops_class_init(ObjectClass *oc, void *data)
+
+static void mshv_accel_ops_class_init(ObjectClass *oc, const void *data)
 {
     AccelOpsClass *ops = ACCEL_OPS_CLASS(oc);
 

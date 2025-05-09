@@ -4,6 +4,13 @@ on:
     branches:
     - mkulke/mshvc-port/head
     - mkulke/ci
+  pull_request:
+    types:
+    - opened
+    - synchronize
+    - reopened
+    branches:
+    - mkulke/mshvc-port/head
 jobs:
   build:
     runs-on: ubuntu-latest

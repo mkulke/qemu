@@ -1418,6 +1418,8 @@ static int handle_pio_str(CPUState *cpu,
         return -1;
     }
 
+    cpu->accel->dirty = false;
+
     return 0;
 }
 
@@ -1481,6 +1483,8 @@ static int handle_pio_non_str(const CPUState *cpu,
         error_report("Failed to set x64 registers");
         return -1;
     }
+
+    cpu->accel->dirty = false;
 
     return 0;
 }

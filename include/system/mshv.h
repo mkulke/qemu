@@ -95,6 +95,7 @@ extern MshvState *mshv_state;
 
 struct AccelCPUState {
   int cpufd;
+  bool dirty;
 };
 
 typedef struct MshvMsiControl {

@@ -445,7 +445,7 @@ static int mshv_init_vcpu(CPUState *cpu)
         return -1;
     }
 
-    cpu->vcpu_dirty = false;
+    cpu->accel->dirty = true;
 
     return 0;
 }
@@ -519,11 +519,15 @@ static int mshv_cpu_exec(CPUState *cpu)
     cpu_exec_start(cpu);
 
     do {
-        if (cpu->vcpu_dirty) {
+        if (cpu->accel->dirty) {
             ret = mshv_arch_put_registers(cpu);
             if (ret) {
-                cpu->vcpu_dirty = false;
+                error_report("Failed to put registers after init: %s",
+                              strerror(-ret));
+                ret = -1;
+                break;
             }
+            cpu->accel->dirty = false;
         }
 
         if (qatomic_read(&cpu->exit_request)) {
@@ -641,17 +645,39 @@ static void mshv_start_vcpu_thread(CPUState *cpu)
                        QEMU_THREAD_JOINABLE);
 }
 
+static void do_mshv_cpu_synchronize_post_init(CPUState *cpu,
+                                              run_on_cpu_data arg)
+{
+    int ret = mshv_arch_put_registers(cpu);
+    if (ret < 0) {
+        error_report("Failed to put registers after init: %s", strerror(-ret));
+        abort();
+    }
+
+    cpu->accel->dirty = false;
+}
+
 static void mshv_cpu_synchronize_post_init(CPUState *cpu)
 {
-    mshv_arch_put_registers(cpu);
+    run_on_cpu(cpu, do_mshv_cpu_synchronize_post_init, RUN_ON_CPU_NULL);
+}
 
-    cpu->vcpu_dirty = false;
+static void mshv_cpu_synchronize_post_reset(CPUState *cpu)
+{
+    int ret = mshv_arch_put_registers(cpu);
+    if (ret) {
+        error_report("Failed to put registers after reset: %s",
+                     strerror(-ret));
+        cpu_dump_state(cpu, stderr, CPU_DUMP_CODE);
+        vm_stop(RUN_STATE_INTERNAL_ERROR);
+    }
+    cpu->accel->dirty = false;
 }
 
 static void do_mshv_cpu_synchronize_pre_loadvm(CPUState *cpu,
                                                run_on_cpu_data arg)
 {
-    cpu->vcpu_dirty = true;
+    cpu->accel->dirty = true;
 }
 
 static void mshv_cpu_synchronize_pre_loadvm(CPUState *cpu)
@@ -661,12 +687,25 @@ static void mshv_cpu_synchronize_pre_loadvm(CPUState *cpu)
 
 static void do_mshv_cpu_synchronize(CPUState *cpu, run_on_cpu_data arg)
 {
-    mshv_load_regs(cpu);
+    if (!cpu->accel->dirty) {
+        int ret = mshv_load_regs(cpu);
+        if (ret < 0) {
+            error_report("Failed to load registers for vcpu %d",
+                         cpu->cpu_index);
+
+            cpu_dump_state(cpu, stderr, CPU_DUMP_CODE);
+            vm_stop(RUN_STATE_INTERNAL_ERROR);
+        }
+
+        cpu->accel->dirty = true;
+    }
 }
 
 static void mshv_cpu_synchronize(CPUState *cpu)
 {
-    run_on_cpu(cpu, do_mshv_cpu_synchronize, RUN_ON_CPU_NULL);
+    if (!cpu->accel->dirty) {
+        run_on_cpu(cpu, do_mshv_cpu_synchronize, RUN_ON_CPU_NULL);
+    }
 }
 
 static bool mshv_cpus_are_resettable(void)
@@ -704,6 +743,7 @@ static void mshv_accel_ops_class_init(ObjectClass *oc, const void *data)
 
     ops->create_vcpu_thread = mshv_start_vcpu_thread;
     ops->synchronize_post_init = mshv_cpu_synchronize_post_init;
+    ops->synchronize_post_reset = mshv_cpu_synchronize_post_reset;
     ops->synchronize_state = mshv_cpu_synchronize;
     ops->synchronize_pre_loadvm = mshv_cpu_synchronize_pre_loadvm;
     ops->cpus_are_resettable = mshv_cpus_are_resettable;

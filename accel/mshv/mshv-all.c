@@ -660,12 +660,24 @@ static void mshv_cpu_synchronize_pre_loadvm(CPUState *cpu)
 
 static void do_mshv_cpu_synchronize(CPUState *cpu, run_on_cpu_data arg)
 {
-    mshv_load_regs(cpu);
+    if (!cpu->vcpu_dirty) {
+        int ret = mshv_load_regs(cpu);
+        if (ret) {
+            error_report("Failed to load registers for vcpu %d", cpu->cpu_index);
+        }
+
+        cpu_dump_state(cpu, stderr, CPU_DUMP_CODE);
+        vm_stop(RUN_STATE_INTERNAL_ERROR);
+
+        cpu->vcpu_dirty = true;
+    }
 }
 
 static void mshv_cpu_synchronize(CPUState *cpu)
 {
-    run_on_cpu(cpu, do_mshv_cpu_synchronize, RUN_ON_CPU_NULL);
+    if (!cpu->vcpu_dirty) {
+        run_on_cpu(cpu, do_mshv_cpu_synchronize, RUN_ON_CPU_NULL);
+    }
 }
 
 static bool mshv_cpus_are_resettable(void)

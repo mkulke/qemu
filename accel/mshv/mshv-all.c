@@ -705,7 +705,7 @@ static bool mshv_cpus_are_resettable(void)
     return false;
 }
 
-static void mshv_accel_class_init(ObjectClass *oc, void *data)
+static void mshv_accel_class_init(ObjectClass *oc, const void *data)
 {
     AccelClass *ac = ACCEL_CLASS(oc);
 
@@ -728,7 +728,7 @@ static const TypeInfo mshv_accel_type = {
     .class_init = mshv_accel_class_init,
     .instance_size = sizeof(MshvState),
 };
-static void mshv_accel_ops_class_init(ObjectClass *oc, void *data)
+static void mshv_accel_ops_class_init(ObjectClass *oc, const void *data)
 {
     AccelOpsClass *ops = ACCEL_OPS_CLASS(oc);
 

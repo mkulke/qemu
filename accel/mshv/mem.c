@@ -236,6 +236,7 @@ bool mshv_remap_overlapped_region(int vm_fd, uint64_t gpa)
             error_report("failed to map gpa region");
             abort();
         }
+		gpa_entry->mapped = true;
     }
 
     return true;

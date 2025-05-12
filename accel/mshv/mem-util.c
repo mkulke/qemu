@@ -14,10 +14,11 @@
 #include "qemu/osdep.h"
 #include "qemu/lockable.h"
 #include "qemu/error-report.h"
+#include "qemu/range.h"
 #include "system/mshv.h"
 
-bool mshv_find_idx_by_gpa_in_entries(const GList *entries, uint64_t addr,
-                                     size_t *index)
+bool mshv_find_idx_by_gpa_in_mem_entries(const GList *entries, uint64_t addr,
+                                         size_t *index)
 {
     MshvMemoryEntry *entry;
     size_t i = 0;
@@ -39,20 +40,18 @@ bool mshv_find_idx_by_gpa_in_entries(const GList *entries, uint64_t addr,
     return false;
 }
 
-MshvMemoryEntry *mshv_find_entry_by_userspace_addr(const GList *entries,
-                                                   uint64_t addr)
+MshvMemoryEntry *mshv_find_mem_entry_by_userspace_range(const GList *entries,
+                                                        uint64_t addr,
+                                                        size_t size)
 {
     MshvMemoryEntry *entry;
+    bool overlap;
 
     for (const GList *elem = entries; elem != NULL; elem = elem->next) {
         entry = elem->data;
-        /*
-         * Check whether addr falls into the range of an already mapped
-         * region
-         */
-        if (entry->mr.userspace_addr <= addr
-            && addr - entry->mr.userspace_addr < entry->mr.memory_size
-            && entry->mapped) {
+        overlap = ranges_overlap(entry->mr.userspace_addr,
+                                 entry->mr.memory_size, addr, size);
+        if (overlap && entry->mapped) {
             return entry;
         }
     }

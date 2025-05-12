@@ -168,6 +168,12 @@ typedef enum MshvVmExit {
     MshvVmExitSpecial  = 2,
 } MshvVmExit;
 
+typedef enum MshvRemapResult {
+    MshvRemapOk = 0,
+    MshvRemapNoMapping = 1,
+    MshvRemapNoOverlap = 2,
+} MshvRemapResult;
+
 void mshv_init_cpu_logic(void);
 int mshv_create_vcpu(int vm_fd, uint8_t vp_index, int *cpu_fd);
 void mshv_remove_vcpu(int vm_fd, int cpu_fd);
@@ -230,8 +236,7 @@ typedef struct MshvMemManager {
 void mshv_init_mem_manager(void);
 int mshv_add_mem(int vm_fd, const MshvMemoryRegion *mr);
 int mshv_remove_mem(int vm_fd, const MshvMemoryRegion *mr);
-bool mshv_find_entry_idx_by_gpa(uint64_t addr, size_t *index);
-bool mshv_remap_overlapped_region(int vm_fd, uint64_t gpa);
+MshvRemapResult mshv_remap_overlapped_region(int vm_fd, uint64_t gpa);
 int mshv_guest_mem_read(uint64_t gpa, uint8_t *data, uintptr_t size,
                         bool is_secure_mode, bool instruction_fetch);
 int mshv_guest_mem_write(uint64_t gpa, const uint8_t *data, uintptr_t size,
@@ -240,10 +245,11 @@ void mshv_set_phys_mem(MshvMemoryListener *mml, MemoryRegionSection *section,
                        bool add);
 
 /* mem: exposed for unit testing */
-bool mshv_find_idx_by_gpa_in_entries(const GList *entries, uint64_t addr,
-                                     size_t *index);
-MshvMemoryEntry *mshv_find_entry_by_userspace_addr(const GList *entries,
-                                                   uint64_t addr);
+bool mshv_find_idx_by_gpa_in_mem_entries(const GList *entries, uint64_t addr,
+                                         size_t *index);
+MshvMemoryEntry *mshv_find_mem_entry_by_userspace_range(const GList *entries,
+                                                        uint64_t addr,
+                                                        size_t size);
 
 /* interrupt */
 void mshv_init_msicontrol(void);

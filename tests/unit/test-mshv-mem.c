@@ -3,7 +3,7 @@
 #include <assert.h>
 #include <stdio.h>
 
-static void test_find_entry_by_userspace_addr(void)
+static void test_find_mem_entry_by_userspace_range(void)
 {
     GList *entries = NULL;
     MshvMemoryEntry *entry1, *entry2, *found;
@@ -24,19 +24,24 @@ static void test_find_entry_by_userspace_addr(void)
     entries = g_list_append(entries, entry2);
 
     /* Test address within entry1 */
-    found = mshv_find_entry_by_userspace_addr(entries, base1 + 0x8000);
+    found = mshv_find_mem_entry_by_userspace_range(entries, base1 + 0x8000, 1);
     g_assert(found == entry1);
 
     /* Test address within entry2 */
-    found = mshv_find_entry_by_userspace_addr(entries, base2 + 0x100000);
+    found = mshv_find_mem_entry_by_userspace_range(entries, base2 + 0x100000,
+                                                   1);
     g_assert(found == entry2);
 
+    /* Test overlapping entry */
+    found = mshv_find_mem_entry_by_userspace_range(entries, base1 - 1, 2);
+    g_assert(found == entry1);
+
     /* Test address outside any range */
-    found = mshv_find_entry_by_userspace_addr(entries, 0xdeadbeef);
+    found = mshv_find_mem_entry_by_userspace_range(entries, 0xdeadbeef, 1);
     g_assert(found == NULL);
 }
 
-static void test_mshv_find_entry_idx_by_gpa(void)
+static void test_find_mem_entry_idx_by_gpa(void)
 {
     GList *entries = NULL;
     MshvMemoryEntry *entry1, *entry2;
@@ -59,17 +64,17 @@ static void test_mshv_find_entry_idx_by_gpa(void)
     entries = g_list_append(entries, entry2);
 
     /* Test within entry1 */
-    found = mshv_find_idx_by_gpa_in_entries(entries, base1 + 0x4000, &index);
+    found = mshv_find_idx_by_gpa_in_mem_entries(entries, base1 + 0x4000, &index);
     g_assert(found);
     g_assert(index == 0);
 
     /* Test within entry2 */
-    found = mshv_find_idx_by_gpa_in_entries(entries, base2 + 0x100000, &index);
+    found = mshv_find_idx_by_gpa_in_mem_entries(entries, base2 + 0x100000, &index);
     g_assert(found);
     g_assert(index == 1);
 
     /* Test not found */
-    found = mshv_find_idx_by_gpa_in_entries(entries, 0xdeadbeef, &index);
+    found = mshv_find_idx_by_gpa_in_mem_entries(entries, 0xdeadbeef, &index);
     g_assert(!found);
 }
 
@@ -77,9 +82,9 @@ int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
 
-    g_test_add_func("/accel/mshv/mem-util/find_entry_by_userspace_addr",
-                    test_find_entry_by_userspace_addr);
-    g_test_add_func("/accel/mshv/mem-util/find_entry_idx_by_gpa",
-                    test_mshv_find_entry_idx_by_gpa);
+    g_test_add_func("/accel/mshv/mem-util/find_mem_entry_by_userspace_addr",
+                    test_find_mem_entry_by_userspace_range);
+    g_test_add_func("/accel/mshv/mem-util/find_mem_entry_idx_by_gpa",
+                    test_find_mem_entry_idx_by_gpa);
     return g_test_run();
 }

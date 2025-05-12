@@ -16,8 +16,8 @@
 #include "qemu/error-report.h"
 #include "system/mshv.h"
 
-bool mshv_find_idx_by_gpa_in_entries(const GList *entries, uint64_t addr,
-                                     size_t *index)
+bool mshv_find_idx_by_gpa_in_mem_entries(const GList *entries, uint64_t addr,
+                                         size_t *index)
 {
     MshvMemoryEntry *entry;
     size_t i = 0;
@@ -39,8 +39,8 @@ bool mshv_find_idx_by_gpa_in_entries(const GList *entries, uint64_t addr,
     return false;
 }
 
-MshvMemoryEntry *mshv_find_entry_by_userspace_addr(const GList *entries,
-                                                   uint64_t addr)
+MshvMemoryEntry *mshv_find_mem_entry_by_userspace_addr(const GList *entries,
+                                                       uint64_t addr)
 {
     MshvMemoryEntry *entry;
 

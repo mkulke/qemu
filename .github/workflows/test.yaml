@@ -1,0 +1,142 @@
+name: Test
+on:
+  push:
+    branches:
+    - mkulke/mshvc-port/head
+
+jobs:
+  test:
+    runs-on: self-hosted
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Build and install
+      run: |
+        mkdir -p install
+        ./configure \
+          --target-list=x86_64-softmmu \
+          --disable-xen \
+          --disable-vnc-jpeg  \
+          --enable-mshv  \
+          --disable-gtk \
+          --prefix="${PWD}/install"
+        cd build
+        make -j
+        make install
+
+    - name: Download OS image
+      run: |
+        mkdir -p images
+        cd images
+        wget https://cloud-images.ubuntu.com/minimal/releases/jammy/release/ubuntu-22.04-minimal-cloudimg-amd64.img
+
+    - name: Create SSH keypair
+      run: ssh-keygen -t rsa -b 4096 -f qemu_ssh -N ""
+
+    - name: Create cloud-init ISO
+      run: |
+        mkdir -p cidata
+        cd cidata
+        cat <<EOF> user-data
+        #cloud-config
+        users:
+        - name: cloud
+          sudo: ALL=(ALL) NOPASSWD:ALL
+          lock_passwd: false
+          ssh-authorized-keys:
+          - $(ssh-keygen -y -f ../qemu_ssh)
+        EOF
+        cat <<EOF> network-config
+        version: 2
+        ethernets:
+          eth0:
+            match:
+              macaddress: 00:10:20:30:40:50
+            dhcp4: true
+        EOF
+        cat <<EOF> meta-data
+        instance-id: qemu-ci
+        local-hostname: qemu-ci
+        EOF
+        genisoimage -output ../images/cidata.raw -volid cidata -joliet -rock \
+          user-data \
+          meta-data \
+          network-config
+
+    - name: Launch Qemu w/ SeaBIOS
+      run: |
+        cd build
+        ./qemu-system-x86_64 \
+          -machine q35 \
+          -blockdev qcow2,node-name=os,file.driver=file,file.filename=../images/ubuntu-22.04-minimal-cloudimg-amd64.img \
+          -device virtio-blk-pci,drive=os \
+          -snapshot \
+          -blockdev raw,node-name=cidata,file.driver=file,file.filename=../images/cidata.raw \
+          -device virtio-blk-pci,drive=cidata \
+          -m 2048M \
+          -netdev type=user,id=user-net,hostfwd=tcp::2222-:22 \
+          -device virtio-net,mac=00:10:20:30:40:50,netdev=user-net \
+          -accel mshv \
+          -smp cpus=2 \
+          -serial file:serial.log \
+          -rtc clock=vm \
+          -daemonize \
+          -pidfile ../qemu-bios.pid
+
+    - name: Sleep 30 seconds
+      run: sleep 30
+
+    - name: SSH into VM
+      run: |
+        ssh -p 2222 -i ./qemu_ssh \
+          -o PasswordAuthentication=no \
+          -o StrictHostKeyChecking=no \
+          -o UserKnownHostsFile=/dev/null \
+          cloud@localhost whoami
+
+    - name: Terminate Qemu process
+      if: always()
+      run: |
+        qemu_pid="$(cat ./qemu-bios.pid)"
+        kill -9 "$qemu_pid"
+        timeout 5 tail --pid="$qemu_pid" -f /dev/null
+
+    - name: Create copy of OVMF_VARS.fd
+      run: cp /usr/share/OVMF/OVMF_VARS.fd .
+
+    - name: Launch Qemu w/ OVMF
+      run: |
+        cd build
+        ./qemu-system-x86_64 \
+          -blockdev raw,node-name=ovmf_code,file.driver=file,file.filename=/usr/share/OVMF/OVMF_CODE.fd,read-only=on \
+          -blockdev raw,node-name=ovmf_vars,file.driver=file,file.filename=../OVMF_VARS.fd \
+          -machine q35,pflash0=ovmf_code,pflash1=ovmf_vars \
+          -blockdev qcow2,node-name=os,file.driver=file,file.filename=../images/ubuntu-22.04-minimal-cloudimg-amd64.img \
+          -device virtio-blk-pci,drive=os \
+          -snapshot \
+          -blockdev raw,node-name=cidata,file.driver=file,file.filename=../images/cidata.raw \
+          -device virtio-blk-pci,drive=cidata \
+          -m 2048M \
+          -netdev type=user,id=user-net,hostfwd=tcp::2222-:22 \
+          -device virtio-net,mac=00:10:20:30:40:50,netdev=user-net \
+          -accel mshv \
+          -smp cpus=2 \
+          -serial file:serial.log \
+          -rtc clock=vm \
+          -daemonize \
+          -pidfile ../qemu-ovmf.pid
+
+    - name: Sleep 30 seconds
+      run: sleep 30
+
+    - name: SSH into VM
+      run: |
+        ssh -p 2222 -i ./qemu_ssh \
+          -o PasswordAuthentication=no \
+          -o StrictHostKeyChecking=no \
+          -o UserKnownHostsFile=/dev/null \
+          cloud@localhost whoami
+
+    - name: Terminate Qemu process
+      if: always()
+      run: kill -9 "$(cat ./qemu-ovmf.pid)"

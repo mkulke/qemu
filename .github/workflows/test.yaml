@@ -1,0 +1,103 @@
+name: Test
+
+on:
+  push:
+    branches:
+    - mkulke/migration-ci
+
+jobs:
+  build:
+    runs-on:
+    - "mshv"
+    - "6.6.116"
+    - "self-hosted"
+    - "l1vh"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: |
+          mkdir -p install
+          ./configure \
+            --target-list=x86_64-softmmu \
+            --disable-xen \
+            --disable-vnc-jpeg \
+            --enable-mshv \
+            --disable-gtk \
+            --prefix="${PWD}/install"
+
+      - name: Cache build directory
+        uses: actions/cache@v4
+        with:
+          path: build
+          key: qemu-build-${{ github.sha }}
+          restore-keys: qemu-build-
+
+      - name: Build and install
+        run: |
+          cd build
+          make -j
+          make install
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-build
+          path: |
+            non-existing-file-to-keep-directory-structure.😑
+            install
+
+  migration:
+    needs: build
+    runs-on:
+    - "mshv"
+    - "6.6.116"
+    - "l1vh"
+    strategy:
+      matrix:
+        machine:
+        - q35
+        - pc
+        smp:
+        - 1
+        - 2
+        - 4
+        - 8
+        cpu_model:
+        - ""
+        - host
+        roundtrip:
+        - false
+        - true
+        exclude:
+        # keep matrix manageable: only roundtrip with default cpu, smp=2
+        - roundtrip: true
+          smp: 1
+        - roundtrip: true
+          smp: 4
+        - roundtrip: true
+          cpu_model: host
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: qemu-build
+          path: .
+
+      - name: Run migration test
+        env:
+          QEMU_BIN: install/bin/qemu-system-x86_64
+        run: |
+          chmod +x "$QEMU_BIN"
+          cmd=(python3 tests/mshv/test_migration.py "$QEMU_BIN"
+               --machine ${{ matrix.machine }}
+               --smp ${{ matrix.smp }})
+          if [[ -n "${{ matrix.cpu_model }}" ]]; then
+            cmd+=(--cpu ${{ matrix.cpu_model }})
+          fi
+          if [[ "${{ matrix.roundtrip }}" == "true" ]]; then
+            cmd+=(--roundtrip)
+          fi
+          "${cmd[@]}"

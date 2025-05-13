@@ -1,0 +1,130 @@
+name: Test
+
+on:
+  push:
+    branches:
+    - msft/stable-11.0/migration
+
+jobs:
+  build:
+    runs-on:
+    - "mshv"
+    - "l1vh"
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Configure
+        run: |
+          mkdir -p install
+          ./configure \
+            --target-list=x86_64-softmmu \
+            --disable-vnc-jpeg \
+            --disable-gtk \
+            --enable-mshv \
+            --enable-kvm \
+            --disable-xen \
+            --prefix="${PWD}/install"
+
+      - name: Cache build directory
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: build
+          key: qemu-build-${{ github.sha }}
+          restore-keys: qemu-build-
+
+      - name: Build and install
+        run: |
+          cd build
+          make -j
+          make install
+
+      - name: Tar files
+        run: tar -cvf qemu_install.tar install
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          archive: false
+          path: qemu_install.tar
+
+  mshv-l1vh:
+    name: mshv/l1vh
+    needs: build
+    permissions: {}
+    runs-on:
+    - "mshv"
+    - "l1vh"
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: qemu_install.tar
+
+      - name: Untar files
+        run: tar -xf qemu_install.tar
+
+      - name: Run functional tests
+        uses: mkulke/qemu-test@b9c5628118f50d5926510e032d0229ed235a0727
+        with:
+          qemu_bin: ${{ github.workspace }}/install/bin/qemu-system-x86_64
+          accel: mshv
+          test_jobs: 8
+          # disable all ovmf=true and pio x-page access tests
+          test_filter: "-ovmf=true,-pio,-reboot"
+
+  mshv-nested:
+    name: mshv/nested
+    needs: build
+    permissions: {}
+    runs-on:
+    - "mshv"
+    - "nested"
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: qemu_install.tar
+
+      - name: Untar files
+        run: tar -xf qemu_install.tar
+
+      - name: Run functional tests
+        uses: mkulke/qemu-test@b9c5628118f50d5926510e032d0229ed235a0727
+        with:
+          qemu_bin: ${{ github.workspace }}/install/bin/qemu-system-x86_64
+          accel: mshv
+          test_jobs: 1
+          # disable all ovmf=true and pio x-page access tests
+          test_filter: "-ovmf=true,-pio,-reboot"
+
+  kvm-nested:
+    name: kvm/nested
+    needs: build
+    permissions: {}
+    runs-on: 'ubuntu-24.04'
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nasm qemu-system-x86 wget mtools xmlstarlet
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: qemu_install.tar
+
+      - name: Untar files
+        run: tar -xf qemu_install.tar
+
+      - name: Run functional tests
+        uses: mkulke/qemu-test@b9c5628118f50d5926510e032d0229ed235a0727
+        with:
+          qemu_bin: ${{ github.workspace }}/install/bin/qemu-system-x86_64
+          accel: kvm
+          test_jobs: 2
+          # disable all ovmf=true and pio x-page access tests
+          test_filter: "-ovmf=true,-pio,-smp=4,-reboot"

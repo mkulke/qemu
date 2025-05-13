@@ -228,11 +228,6 @@ typedef struct MshvMemoryEntry {
     bool mapped;
 } MshvMemoryEntry;
 
-typedef struct MshvMemManager {
-    GList *mem_entries;
-    QemuMutex mutex;
-} MshvMemManager;
-
 void mshv_init_mem_manager(void);
 int mshv_add_mem(int vm_fd, const MshvMemoryRegion *mr);
 int mshv_remove_mem(int vm_fd, const MshvMemoryRegion *mr);

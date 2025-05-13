@@ -1,16 +1,8 @@
 name: Build
 on:
   push:
-    branches:
-    - mkulke/mshvc-port/head
-    - mkulke/ci
-  pull_request:
-    types:
-    - opened
-    - synchronize
-    - reopened
-    branches:
-    - mkulke/mshvc-port/head
+    tags:
+    - test-plz
 jobs:
   build:
     runs-on: ubuntu-latest

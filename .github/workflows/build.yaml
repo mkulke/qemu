@@ -1,0 +1,75 @@
+name: Build
+
+on:
+  push:
+    branches:
+    - na
+  pull_request:
+    branches:
+    - na
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libglib2.0-dev
+
+    - name: Build
+      run: |
+        ./configure \
+          --target-list=x86_64-softmmu \
+          --disable-xen \
+          --disable-vnc-jpeg \
+          --enable-mshv \
+          --disable-gtk
+        cd build
+        make -j
+
+  checkpatch:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Run checkpatch
+      run: |
+        commits="$(git rev-list --no-merges --reverse 'origin/master..HEAD')"
+        for commit in $commits; do
+          git show "$commit" | ./scripts/checkpatch.pl -
+        done
+
+  incremental-build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libglib2.0-dev
+
+    - name: Configure
+      run: |
+        ./configure \
+          --target-list=x86_64-softmmu \
+          --disable-xen \
+          --disable-vnc-jpeg \
+          --enable-mshv \
+          --disable-gtk
+
+    - name: Build incrementally
+      run: |
+        cd build
+        commits="$(git rev-list --no-merges --reverse 'origin/master..HEAD')"
+        for commit in $commits; do
+          git checkout "$commit"
+          make -j
+        done

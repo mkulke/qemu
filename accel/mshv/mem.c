@@ -80,11 +80,16 @@ static MshvMemoryEntry *find_overlap_mem_entry(const MshvMemoryEntry *entry_1)
         for (GList *l = entries; l != NULL; l = l->next) {
             entry_2 = l->data;
             assert(entry_2);
+
+            if (entry_2 == entry_1) {
+                continue;
+            }
+
             start_2 = entry_2->mr.userspace_addr;
             len_2 = entry_2->mr.memory_size;
 
             overlaps = ranges_overlap(start_1, len_1, start_2, len_2);
-            if (entry_2->mapped && overlaps) {
+            if (entry_2 != entry_1 && entry_2->mapped && overlaps) {
                 return entry_2;
             }
         }

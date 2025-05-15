@@ -40,6 +40,10 @@
  */
 #define MSHV_USE_IOEVENTFD 1
 
+#define MSHV_USE_KERNEL_GSI_IRQFD 1
+
+#define MSHV_MAX_MSI_ROUTES 4096
+
 #define MSHV_PAGE_SHIFT 12
 
 
@@ -71,6 +75,11 @@ struct AccelCPUState {
   int cpufd;
   bool dirty;
 };
+
+typedef struct MshvMsiControl {
+    bool updated;
+    GHashTable *gsi_routes;
+} MshvMsiControl;
 
 #else /* CONFIG_MSHV_IS_POSSIBLE */
 #define mshv_enabled() false
@@ -106,6 +115,11 @@ int mshv_remove_mem(int vm_fd, const MshvMemoryRegion *mr);
 void mshv_set_phys_mem(MshvMemoryListener *mml, MemoryRegionSection *section,
                        bool add);
 /* interrupt */
+void mshv_init_msicontrol(void);
+int mshv_request_interrupt(int vm_fd, uint32_t interrupt_type, uint32_t vector,
+                           uint32_t vp_index, bool logical_destination_mode,
+                           bool level_triggered);
+
 int mshv_irqchip_add_msi_route(int vector, PCIDevice *dev);
 int mshv_irqchip_update_msi_route(int virq, MSIMessage msg, PCIDevice *dev);
 void mshv_irqchip_commit_routes(void);

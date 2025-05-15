@@ -3595,6 +3595,7 @@ endif
 if have_system
   trace_events_subdirs += [
     'accel/kvm',
+    'accel/mshv',
     'audio',
     'backends',
     'backends/tpm',

@@ -46,12 +46,13 @@ typedef struct MshvAddressSpace {
 } MshvAddressSpace;
 
 typedef struct MshvState {
-    AccelState parent_obj;
-    int vm;
-    MshvMemoryListener memory_listener;
-    /* number of listeners */
-    int nr_as;
-    MshvAddressSpace *as;
+	AccelState parent_obj;
+	int vm;
+	MshvMemoryListener memory_listener;
+	/* number of listeners */
+	int nr_as;
+	MshvAddressSpace *as;
+    int fd;
 } MshvState;
 extern MshvState *mshv_state;
 
@@ -73,6 +74,12 @@ struct AccelCPUState {
 /* EFER (technically not a register) bits */
 #define EFER_LMA   ((uint64_t)0x400)
 #define EFER_LME   ((uint64_t)0x100)
+
+void mshv_arch_amend_proc_features(
+    union hv_partition_synthetic_processor_features *features);
+int mshv_arch_post_init_vm(int vm_fd);
+
+int mshv_hvcall(int mshv_fd, const struct mshv_root_hvcall *args);
 
 
 /* memory */

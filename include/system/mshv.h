@@ -32,6 +32,8 @@
 #define CONFIG_MSHV_IS_POSSIBLE
 #endif
 
+#define MSHV_PAGE_SHIFT 12
+
 
 #ifdef CONFIG_MSHV_IS_POSSIBLE
 extern bool mshv_allowed;
@@ -84,6 +86,15 @@ int mshv_hvcall(int mshv_fd, const struct mshv_root_hvcall *args);
 
 
 /* memory */
+typedef struct MshvMemoryRegion {
+    uint64_t guest_phys_addr;
+    uint64_t memory_size;
+    uint64_t userspace_addr;
+    bool readonly;
+} MshvMemoryRegion;
+
+int mshv_add_mem(int vm_fd, const MshvMemoryRegion *mr);
+int mshv_remove_mem(int vm_fd, const MshvMemoryRegion *mr);
 void mshv_set_phys_mem(MshvMemoryListener *mml, MemoryRegionSection *section,
                        bool add);
 /* interrupt */

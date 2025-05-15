@@ -52,6 +52,7 @@ typedef struct MshvState {
     /* number of listeners */
     int nr_as;
     MshvAddressSpace *as;
+    int fd;
 } MshvState;
 extern MshvState *mshv_state;
 
@@ -68,6 +69,13 @@ struct AccelCPUState {
 #else
 #define mshv_msi_via_irqfd_enabled() false
 #endif
+
+/* cpu */
+void mshv_arch_amend_proc_features(
+    union hv_partition_synthetic_processor_features *features);
+int mshv_arch_post_init_vm(int vm_fd);
+
+int mshv_hvcall(int mshv_fd, const struct mshv_root_hvcall *args);
 
 /* memory */
 void mshv_set_phys_mem(MshvMemoryListener *mml, MemoryRegionSection *section,

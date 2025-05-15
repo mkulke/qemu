@@ -417,6 +417,8 @@ static int mshv_init(MachineState *ms)
         return -1;
     }
 
+    mshv_init_msicontrol();
+
     do {
         int vm_fd = create_vm(mshv_fd);
         s->vm = vm_fd;

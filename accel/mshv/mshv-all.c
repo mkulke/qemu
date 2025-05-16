@@ -439,6 +439,8 @@ static int mshv_init(MachineState *ms)
 
     mshv_init_msicontrol();
 
+    mshv_init_mem_manager();
+
     do {
         int vm_fd = create_vm(mshv_fd);
         s->vm = vm_fd;

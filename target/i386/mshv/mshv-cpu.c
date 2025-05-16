@@ -109,6 +109,11 @@ static enum hv_register_name FPU_REGISTER_NAMES[26] = {
     HV_X64_REGISTER_XMM_CONTROL_STATUS,
 };
 
+/* MTRR constants */
+/* IA32_MTRR_DEF_TYPE MSR: E (MTRRs enabled) flag, bit 11 */
+static u_int64_t MTRR_ENABLE = 0x800;
+static u_int64_t MTRR_MEM_TYPE_WB = 0x6;
+
 /* Defines poached from apicdef.h kernel header. */
 static u_int32_t APIC_MODE_NMI = 0x4;
 static u_int32_t APIC_MODE_EXTINT = 0x7;
@@ -851,6 +856,33 @@ static int set_lint(int cpu_fd)
     return set_lapic(cpu_fd, &lapic_state);
 }
 
+static int setup_msrs(int cpu_fd)
+{
+    int ret;
+    uint64_t default_type = MTRR_ENABLE | MTRR_MEM_TYPE_WB;
+
+    /* boot msr entries */
+    MshvMsrEntry msrs[9] = {
+        { .index = IA32_MSR_SYSENTER_CS, .data = 0x0, },
+        { .index = IA32_MSR_SYSENTER_ESP, .data = 0x0, },
+        { .index = IA32_MSR_SYSENTER_EIP, .data = 0x0, },
+        { .index = IA32_MSR_STAR, .data = 0x0, },
+        { .index = IA32_MSR_CSTAR, .data = 0x0, },
+        { .index = IA32_MSR_LSTAR, .data = 0x0, },
+        { .index = IA32_MSR_KERNEL_GS_BASE, .data = 0x0, },
+        { .index = IA32_MSR_SFMASK, .data = 0x0, },
+        { .index = IA32_MSR_MTRR_DEF_TYPE, .data = default_type, },
+    };
+
+    ret = mshv_configure_msr(cpu_fd, msrs, 9);
+    if (ret < 0) {
+        error_report("failed to setup msrs");
+        return -1;
+    }
+
+    return 0;
+}
+
 /*
  * TODO: populate topology info:
  *
@@ -867,6 +899,12 @@ int mshv_configure_vcpu(const CPUState *cpu, const struct MshvFPU *fpu,
     ret = set_cpuid2(cpu);
     if (ret < 0) {
         error_report("failed to set cpuid");
+        return -1;
+    }
+
+    ret = setup_msrs(cpu_fd);
+    if (ret < 0) {
+        error_report("failed to setup msrs");
         return -1;
     }
 

@@ -1159,7 +1159,9 @@ static int handle_unmapped_mem(int vm_fd, CPUState *cpu,
                                MshvVmExit *exit_reason)
 {
     struct hv_x64_memory_intercept_message info = { 0 };
+    uint64_t gpa;
     int ret;
+    enum MshvRemapResult remap_result;
 
     ret = set_memory_info(msg, &info);
     if (ret < 0) {
@@ -1167,7 +1169,26 @@ static int handle_unmapped_mem(int vm_fd, CPUState *cpu,
         return -1;
     }
 
-    return handle_mmio(cpu, msg, exit_reason);
+    gpa = info.guest_physical_address;
+
+    /* attempt to remap the region, in case of overlapping userspase mappings */
+    remap_result = mshv_remap_overlapped_region(vm_fd, gpa);
+    *exit_reason = MshvVmExitIgnore;
+
+    switch (remap_result) {
+    case MshvRemapNoMapping:
+        /* if we didn't find a mapping, it is probably mmio */
+        return handle_mmio(cpu, msg, exit_reason);
+    case MshvRemapOk:
+        break;
+    case MshvRemapNoOverlap:
+        /* This should not happen, but we are forgiving it */
+        warn_report("found no overlap for unmapped region");
+        *exit_reason = MshvVmExitSpecial;
+        break;
+    }
+
+    return 0;
 }
 
 static int set_ioport_info(const struct hyperv_message *msg,

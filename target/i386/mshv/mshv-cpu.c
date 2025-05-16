@@ -14,6 +14,8 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/atomic.h"
+#include "qemu/lockable.h"
 #include "qemu/error-report.h"
 #include "qemu/typedefs.h"
 
@@ -29,6 +31,36 @@
 
 #include "trace-accel_mshv.h"
 #include "trace.h"
+
+#include <sys/ioctl.h>
+
+static QemuMutex *cpu_guards_lock;
+static GHashTable *cpu_guards;
+
+static void add_cpu_guard(int cpu_fd)
+{
+    QemuMutex *guard;
+
+    WITH_QEMU_LOCK_GUARD(cpu_guards_lock) {
+        guard = g_new0(QemuMutex, 1);
+        qemu_mutex_init(guard);
+        g_hash_table_insert(cpu_guards, GUINT_TO_POINTER(cpu_fd), guard);
+    }
+}
+
+static void remove_cpu_guard(int cpu_fd)
+{
+    QemuMutex *guard;
+
+    WITH_QEMU_LOCK_GUARD(cpu_guards_lock) {
+        guard = g_hash_table_lookup(cpu_guards, GUINT_TO_POINTER(cpu_fd));
+        if (guard) {
+            qemu_mutex_destroy(guard);
+            g_free(guard);
+            g_hash_table_remove(cpu_guards, GUINT_TO_POINTER(cpu_fd));
+        }
+    }
+}
 
 int mshv_store_regs(CPUState *cpu)
 {
@@ -62,20 +94,37 @@ int mshv_run_vcpu(int vm_fd, CPUState *cpu, hv_message *msg, MshvVmExit *exit)
 
 void mshv_remove_vcpu(int vm_fd, int cpu_fd)
 {
-	error_report("unimplemented");
-	abort();
+    /*
+     * TODO: don't we have to perform an ioctl to remove the vcpu?
+     * there is WHvDeleteVirtualProcessor in the WHV api
+     */
+    remove_cpu_guard(cpu_fd);
 }
+
 
 int mshv_create_vcpu(int vm_fd, uint8_t vp_index, int *cpu_fd)
 {
-	error_report("unimplemented");
-	abort();
+    int ret;
+    struct mshv_create_vp vp_arg = {
+        .vp_index = vp_index,
+    };
+    ret = ioctl(vm_fd, MSHV_CREATE_VP, &vp_arg);
+    if (ret < 0) {
+        error_report("failed to create mshv vcpu: %s", strerror(errno));
+        return -1;
+    }
+
+    add_cpu_guard(ret);
+    *cpu_fd = ret;
+
+    return 0;
 }
 
 void mshv_init_cpu_logic(void)
 {
-	error_report("unimplemented");
-	abort();
+    cpu_guards_lock = g_new0(QemuMutex, 1);
+    qemu_mutex_init(cpu_guards_lock);
+    cpu_guards = g_hash_table_new(g_direct_hash, g_direct_equal);
 }
 
 void mshv_arch_init_vcpu(CPUState *cpu)

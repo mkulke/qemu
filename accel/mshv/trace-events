@@ -15,3 +15,6 @@ mshv_commit_msi_routing_table(int vm_fd, int len) "vm_fd %d table_size %d"
 mshv_register_irqfd(int vm_fd, int event_fd, uint32_t gsi) "vm_fd %d event_fd %d gsi %d"
 mshv_irqchip_update_irqfd_notifier_gsi(int event_fd, int resample_fd, int virq, bool add) "event_fd %d resample_fd %d virq %d add %d"
 
+mshv_insn_fetch(uint64_t addr, size_t size) "gpa=%lx size=%lu"
+mshv_mem_write(uint64_t addr, size_t size) "\tgpa=%lx size=%lu"
+mshv_mem_read(uint64_t addr, size_t size) "\tgpa=%lx size=%lu"

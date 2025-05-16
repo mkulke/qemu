@@ -995,11 +995,138 @@ int mshv_create_vcpu(int vm_fd, uint8_t vp_index, int *cpu_fd)
     return 0;
 }
 
+static int translate_gva(int cpu_fd, uint64_t gva, uint64_t *gpa,
+                         uint64_t flags)
+{
+    int ret;
+    union hv_translate_gva_result result = { 0 };
+
+    *gpa = 0;
+    mshv_translate_gva args = {
+        .gva = gva,
+        .flags = flags,
+        .gpa = (__u64 *)gpa,
+        .result = &result,
+    };
+
+    ret = ioctl(cpu_fd, MSHV_TRANSLATE_GVA, &args);
+    if (ret < 0) {
+        error_report("failed to invoke gpa->gva translation");
+        return -errno;
+    }
+    if (result.result_code != HV_TRANSLATE_GVA_SUCCESS) {
+        error_report("failed to translate gva (" TARGET_FMT_lx ") to gpa", gva);
+        return -1;
+
+    }
+
+    return 0;
+}
+
+static int guest_mem_read_with_gva(const CPUState *cpu, uint64_t gva,
+                                   uint8_t *data, uintptr_t size,
+                                   bool fetch_instruction)
+{
+    int ret;
+    uint64_t gpa, flags;
+    int cpu_fd = mshv_vcpufd(cpu);
+
+    flags = HV_TRANSLATE_GVA_VALIDATE_READ;
+    ret = translate_gva(cpu_fd, gva, &gpa, flags);
+    if (ret < 0) {
+        error_report("failed to translate gva to gpa");
+        return -1;
+    }
+
+    ret = mshv_guest_mem_read(gpa, data, size, false, fetch_instruction);
+    if (ret < 0) {
+        error_report("failed to read from guest memory");
+        return -1;
+    }
+
+    return 0;
+}
+
+static int guest_mem_write_with_gva(const CPUState *cpu, uint64_t gva,
+                                    const uint8_t *data, uintptr_t size)
+{
+    int ret;
+    uint64_t gpa, flags;
+    int cpu_fd = mshv_vcpufd(cpu);
+
+    flags = HV_TRANSLATE_GVA_VALIDATE_WRITE;
+    ret = translate_gva(cpu_fd, gva, &gpa, flags);
+    if (ret < 0) {
+        error_report("failed to translate gva to gpa");
+        return -1;
+    }
+    ret = mshv_guest_mem_write(gpa, data, size, false);
+    if (ret < 0) {
+        error_report("failed to write to guest memory");
+        return -1;
+    }
+    return 0;
+}
+
+static void write_mem_emu(CPUState *cpu, void *data, target_ulong addr,
+                          int bytes)
+{
+    if (guest_mem_write_with_gva(cpu, addr, data, bytes) < 0) {
+        error_report("failed to write memory");
+        abort();
+    }
+}
+
+static void read_mem_emu(CPUState *cpu, void *data, target_ulong addr,
+                         int bytes)
+{
+    if (guest_mem_read_with_gva(cpu, addr, data, bytes, false) < 0) {
+        error_report("failed to read memory");
+        abort();
+    }
+}
+
+static void fetch_instruction_emu(CPUState *cpu, void *data,
+                                  target_ulong addr, int bytes)
+{
+    if (guest_mem_read_with_gva(cpu, addr, data, bytes, true) < 0) {
+        error_report("failed to fetch instruction");
+        abort();
+    }
+}
+
+static void read_segment_descriptor_emu(CPUState *cpu,
+                                        struct x86_segment_descriptor *desc,
+                                        enum X86Seg seg_idx)
+{
+    bool ret;
+    X86CPU *x86_cpu = X86_CPU(cpu);
+    CPUX86State *env = &x86_cpu->env;
+    SegmentCache *seg = &env->segs[seg_idx];
+    x86_segment_selector sel = { .sel = seg->selector & 0xFFFF };
+
+    ret = x86_read_segment_descriptor(cpu, desc, sel);
+    if (ret == false) {
+        error_report("failed to read segment descriptor");
+        abort();
+    }
+}
+
+static const struct x86_emul_ops mshv_x86_emul_ops = {
+    .fetch_instruction = fetch_instruction_emu,
+    .read_mem = read_mem_emu,
+    .write_mem = write_mem_emu,
+    .read_segment_descriptor = read_segment_descriptor_emu,
+};
+
 void mshv_init_cpu_logic(void)
 {
     cpu_guards_lock = g_new0(QemuMutex, 1);
     qemu_mutex_init(cpu_guards_lock);
     cpu_guards = g_hash_table_new(g_direct_hash, g_direct_equal);
+
+    init_decoder();
+    init_emu(&mshv_x86_emul_ops);
 }
 
 void mshv_arch_init_vcpu(CPUState *cpu)

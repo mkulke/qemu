@@ -15,7 +15,7 @@
 #include "qemu/lockable.h"
 #include "qemu/error-report.h"
 #include "qemu/rcu.h"
-#include "hw/hyperv/linux-mshv.h"
+#include "linux/mshv.h"
 #include "system/address-spaces.h"
 #include "system/mshv.h"
 #include "exec/memattrs.h"

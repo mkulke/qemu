@@ -73,14 +73,15 @@ static inline uint64_t decode_bytes(CPUX86State *env, struct x86_decode *decode,
         break;
     }
 
-	/* copy the bytes from the instruction stream, if available */
-	if (decode->stream && decode->len + size <= decode->stream->len) {
-		memcpy(&val, decode->stream->bytes + decode->len, size);
-	} else {
-		va = linear_rip(env_cpu(env), env->eip) + decode->len;
-		emul_ops->fetch_instruction(env_cpu(env), &val, va, size);
-	}
+    /* copy the bytes from the instruction stream, if available */
+    if (decode->stream && decode->len + size <= decode->stream->len) {
+        memcpy(&val, decode->stream->bytes + decode->len, size);
+    } else {
+        va = linear_rip(env_cpu(env), env->eip) + decode->len;
+        emul_ops->fetch_instruction(env_cpu(env), &val, va, size);
+    }
     decode->len += size;
+
 
     return val;
 }
@@ -2085,6 +2086,8 @@ static void decode_opcodes(CPUX86State *env, struct x86_decode *decode)
 
 static uint32_t decode_opcode(CPUX86State *env, struct x86_decode *decode)
 {
+    memset(decode, 0, sizeof(*decode));
+
     decode_prefix(env, decode);
     set_addressing_size(env, decode);
     set_operand_size(env, decode);
@@ -2096,18 +2099,16 @@ static uint32_t decode_opcode(CPUX86State *env, struct x86_decode *decode)
 
 uint32_t decode_instruction(CPUX86State *env, struct x86_decode *decode)
 {
-	memset(decode, 0, sizeof(*decode));
-	return decode_opcode(env, decode);
+    return decode_opcode(env, decode);
 }
 
 uint32_t decode_instruction_stream(CPUX86State *env, struct x86_decode *decode,
-		                           struct x86_insn_stream *stream)
+                                   struct x86_insn_stream *stream)
 {
-	memset(decode, 0, sizeof(*decode));
-	if (stream != NULL) {
-		decode->stream = stream;
-	}
-	return decode_opcode(env, decode);
+    if (stream != NULL) {
+        decode->stream = stream;
+    }
+    return decode_opcode(env, decode);
 }
 
 void init_decoder(void)

@@ -273,8 +273,8 @@ typedef struct x86_decode_op {
 } x86_decode_op;
 
 typedef struct x86_insn_stream {
-	const uint8_t *bytes;
-	size_t len;
+    const uint8_t *bytes;
+    size_t len;
 } x86_insn_stream;
 
 typedef struct x86_decode {

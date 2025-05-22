@@ -24,7 +24,7 @@
 #include "hw/hyperv/hvhdk.h"
 #include "hw/hyperv/hvhdk_mini.h"
 #include "hw/hyperv/hvgdk.h"
-#include "hw/hyperv/linux-mshv.h"
+#include "linux/mshv.h"
 
 #include "qemu/accel.h"
 #include "qemu/guest-random.h"

@@ -17,7 +17,7 @@
 #include "qemu/osdep.h"
 #include "qemu/accel.h"
 #include "hw/hyperv/hyperv-proto.h"
-#include "hw/hyperv/linux-mshv.h"
+#include "linux/mshv.h"
 #include "hw/hyperv/hvhdk.h"
 #include "qapi/qapi-types-common.h"
 #include "system/memory.h"
@@ -54,8 +54,8 @@ extern bool mshv_allowed;
 #define mshv_enabled() (mshv_allowed)
 
 typedef struct MshvMemoryListener {
-  MemoryListener listener;
-  int as_id;
+	MemoryListener listener;
+	int as_id;
 } MshvMemoryListener;
 
 typedef struct MshvAddressSpace {
@@ -64,18 +64,18 @@ typedef struct MshvAddressSpace {
 } MshvAddressSpace;
 
 typedef struct MshvState {
-  AccelState parent_obj;
-  int vm;
-  MshvMemoryListener memory_listener;
-  /* number of listeners */
-  int nr_as;
-  MshvAddressSpace *as;
+	AccelState parent_obj;
+	int vm;
+	MshvMemoryListener memory_listener;
+	/* number of listeners */
+	int nr_as;
+	MshvAddressSpace *as;
 } MshvState;
 extern MshvState *mshv_state;
 
 struct AccelCPUState {
-  int cpufd;
-  bool dirty;
+	int cpufd;
+	bool dirty;
 };
 
 typedef struct MshvMsiControl {
@@ -126,17 +126,17 @@ typedef struct MshvMsiControl {
 #define OF         ((uint64_t)1 << OF_SHIFT)
 
 typedef struct MshvFPU {
-  uint8_t fpr[8][16];
-  uint16_t fcw;
-  uint16_t fsw;
-  uint8_t ftwx;
-  uint8_t pad1;
-  uint16_t last_opcode;
-  uint64_t last_ip;
-  uint64_t last_dp;
-  uint8_t xmm[16][16];
-  uint32_t mxcsr;
-  uint32_t pad2;
+	uint8_t fpr[8][16];
+	uint16_t fcw;
+	uint16_t fsw;
+	uint8_t ftwx;
+	uint8_t pad1;
+	uint16_t last_opcode;
+	uint64_t last_ip;
+	uint64_t last_dp;
+	uint8_t xmm[16][16];
+	uint32_t mxcsr;
+	uint32_t pad2;
 } MshvFPU;
 
 typedef enum MshvVmExit {
@@ -183,9 +183,9 @@ int mshv_hvcall(int mshv_fd, const struct mshv_root_hvcall *args);
 
 /* msr */
 typedef struct MshvMsrEntry {
-  uint32_t index;
-  uint32_t reserved;
-  uint64_t data;
+	uint32_t index;
+	uint32_t reserved;
+	uint64_t data;
 } MshvMsrEntry;
 
 typedef struct MshvMsrEntries {

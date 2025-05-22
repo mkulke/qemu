@@ -324,13 +324,6 @@ else
 endif
 accelerator_targets += { 'CONFIG_XEN': xen_targets }
 
-if cpu == 'x86_64'
-  mshv_targets = ['x86_64-softmmu']
-else
-  mshv_targets = []
-endif
-accelerator_targets += { 'CONFIG_MSHV': mshv_targets }
-
 if cpu == 'aarch64'
   accelerator_targets += {
     'CONFIG_HVF': ['aarch64-softmmu']
@@ -340,6 +333,7 @@ elif cpu == 'x86_64'
     'CONFIG_HVF': ['x86_64-softmmu'],
     'CONFIG_NVMM': ['i386-softmmu', 'x86_64-softmmu'],
     'CONFIG_WHPX': ['i386-softmmu', 'x86_64-softmmu'],
+    'CONFIG_MSHV': ['x86_64-softmmu'],
   }
 endif
 

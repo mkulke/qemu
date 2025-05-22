@@ -3,17 +3,14 @@
  *
  * Copyright Microsoft, Corp. 2025
  *
- * Authors:
- *  Magnus Kulke      <magnuskulke@microsoft.com>
+ * Authors: Magnus Kulke  <magnuskulke@microsoft.com>
  *
- * This work is licensed under the terms of the GNU GPL, version 2 or later.
- * See the COPYING file in the top-level directory.
- *
+ * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
 #include "qemu/osdep.h"
 #include "system/mshv.h"
-#include "hw/hyperv/linux-mshv.h"
+#include "linux/mshv.h"
 #include "qemu/error-report.h"
 
 static uint32_t supported_msrs[64] = {

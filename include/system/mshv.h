@@ -3,13 +3,11 @@
  *
  * Copyright Microsoft, Corp. 2025
  *
- * Authors:
- *  Ziqiao Zhou       <ziqiaozhou@microsoft.com>
- *  Magnus Kulke      <magnuskulke@microsoft.com>
- *  Jinank Jain       <jinankjain@microsoft.com>
+ * Authors: Ziqiao Zhou  <ziqiaozhou@microsoft.com>
+ *          Magnus Kulke <magnuskulke@microsoft.com>
+ *          Jinank Jain  <jinankjain@microsoft.com>
  *
- * This work is licensed under the terms of the GNU GPL, version 2 or later.
- * See the COPYING file in the top-level directory.
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  */
 

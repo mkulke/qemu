@@ -3,12 +3,9 @@
  *
  * Copyright Microsoft, Corp. 2025
  *
- * Authors:
- *  Magnus Kulke      <magnuskulke@microsoft.com>
+ * Authors: Magnus Kulke <magnuskulke@microsoft.com>
  *
- * This work is licensed under the terms of the GNU GPL, version 2 or later.
- * See the COPYING file in the top-level directory.
- *
+ * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
 #include "qemu/osdep.h"
@@ -159,7 +156,6 @@ bool x86_read_segment_descriptor(CPUState *cpu,
     X86CPU *x86_cpu = X86_CPU(cpu);
     CPUX86State *env = &x86_cpu->env;
     target_ulong gva;
-    /* int ret; */
 
     memset(desc, 0, sizeof(*desc));
 
@@ -182,35 +178,6 @@ bool x86_read_segment_descriptor(CPUState *cpu,
 
     gva = base + sel.index * 8;
     emul_ops->read_mem(cpu, desc, gva, sizeof(*desc));
-
-    return true;
-}
-
-bool x86_write_segment_descriptor(CPUState *cpu,
-                                  struct x86_segment_descriptor *desc,
-                                  x86_segment_selector sel)
-{
-    target_ulong base;
-    uint32_t limit;
-    X86CPU *x86_cpu = X86_CPU(cpu);
-    CPUX86State *env = &x86_cpu->env;
-    /* int ret; */
-    target_ulong gva;
-
-    if (GDT_SEL == sel.ti) {
-        base = env->gdt.base;
-        limit = env->gdt.limit;
-    } else {
-        base = env->ldt.base;
-        limit = env->ldt.limit;
-    }
-
-    if (sel.index * 8 >= limit) {
-        return false;
-    }
-
-    gva = base + sel.index * 8;
-    emul_ops->write_mem(cpu, desc, gva, sizeof(*desc));
 
     return true;
 }
@@ -298,7 +265,6 @@ target_ulong linear_addr(CPUState *cpu, target_ulong addr, X86Seg seg)
     int ret;
     target_ulong linear_addr;
 
-    /* return vmx_read_segment_base(cpu, seg) + addr; */
     ret = linearize(cpu, addr, &linear_addr, seg);
     if (ret < 0) {
         error_report("failed to linearize address");

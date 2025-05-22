@@ -190,35 +190,32 @@ static int initialize_vm(int vm_fd)
     return 0;
 }
 
-static int create_vm(int mshv_fd)
+static int create_vm(int mshv_fd, int *vm_fd)
 {
-    int vm_fd;
-
-    int ret = create_partition(mshv_fd, &vm_fd);
-    if (ret < 0) {
-        close(mshv_fd);
-        return -errno;
-    }
-
-    ret = set_synthetic_proc_features(vm_fd);
-    if (ret < 0) {
-        return -errno;
-    }
-
-    ret = initialize_vm(vm_fd);
+    int ret = create_partition(mshv_fd, vm_fd);
     if (ret < 0) {
         return -1;
     }
 
-    ret = mshv_arch_post_init_vm(vm_fd);
+    ret = set_synthetic_proc_features(*vm_fd);
+    if (ret < 0) {
+        return -1;
+    }
+
+    ret = initialize_vm(*vm_fd);
+    if (ret < 0) {
+        return -1;
+    }
+
+    ret = mshv_arch_post_init_vm(*vm_fd);
     if (ret < 0) {
         return -1;
     }
 
     /* Always create a frozen partition */
-    pause_vm(vm_fd);
+    pause_vm(*vm_fd);
 
-    return vm_fd;
+    return 0;
 }
 
 static void mem_region_add(MemoryListener *listener,
@@ -383,16 +380,12 @@ static void register_mshv_memory_listener(MshvState *s, MshvMemoryListener *mml,
         }
     }
 }
-static void mshv_reset(void *param)
-{
-    warn_report("mshv reset");
-}
 
-int mshv_hvcall(int mshv_fd, const struct mshv_root_hvcall *args)
+int mshv_hvcall(int vm_fd, const struct mshv_root_hvcall *args)
 {
     int ret = 0;
 
-    ret = ioctl(mshv_fd, MSHV_ROOT_HVCALL, args);
+    ret = ioctl(vm_fd, MSHV_ROOT_HVCALL, args);
     if (ret < 0) {
         error_report("Failed to perform hvcall: %s", strerror(errno));
         return -1;
@@ -422,7 +415,7 @@ static int mshv_init_vcpu(CPUState *cpu)
 static int mshv_init(MachineState *ms)
 {
     MshvState *s;
-    int mshv_fd, ret;
+    int mshv_fd, vm_fd, ret;
 
     s = MSHV_STATE(ms->accelerator);
 
@@ -441,10 +434,8 @@ static int mshv_init(MachineState *ms)
 
     mshv_init_mem_manager();
 
-    do {
-        int vm_fd = create_vm(mshv_fd);
-        s->vm = vm_fd;
-    } while (!s->vm);
+    create_vm(mshv_fd, &vm_fd);
+    s->vm = vm_fd;
 
     resume_vm(s->vm);
 
@@ -452,8 +443,6 @@ static int mshv_init(MachineState *ms)
     s->as = g_new0(MshvAddressSpace, s->nr_as);
 
     mshv_state = s;
-
-    qemu_register_reset(mshv_reset, NULL);
 
     register_mshv_memory_listener(s, &s->memory_listener, &address_space_memory,
                                   0, "mshv-memory");

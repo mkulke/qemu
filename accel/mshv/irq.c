@@ -3,16 +3,13 @@
  *
  * Copyright Microsoft, Corp. 2025
  *
- * Authors:
- *  Ziqiao Zhou       <ziqiaozhou@microsoft.com>
- *  Magnus Kulke      <magnuskulke@microsoft.com>
+ * Authors: Ziqiao Zhou   <ziqiaozhou@microsoft.com>
+ *          Magnus Kulke  <magnuskulke@microsoft.com>
  *
- * This work is licensed under the terms of the GNU GPL, version 2 or later.
- * See the COPYING file in the top-level directory.
- *
+ * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
-#include "hw/hyperv/linux-mshv.h"
+#include "linux/mshv.h"
 #include "hw/hyperv/hvhdk_mini.h"
 #include "qemu/osdep.h"
 #include "hw/pci/msi.h"

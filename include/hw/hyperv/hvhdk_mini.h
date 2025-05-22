@@ -3,8 +3,7 @@
  *
  * Copyright Microsoft, Corp. 2025
  *
- * This work is licensed under the terms of the GNU GPL, version 2 or later.
- * See the COPYING file in the top-level directory.
+ * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #ifndef _HVHDK_MINI_H
 #define _HVHDK_MINI_H

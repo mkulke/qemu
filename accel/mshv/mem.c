@@ -124,7 +124,7 @@ static int set_guest_memory(int vm_fd, const mshv_user_mem_region *region)
     return 0;
 }
 
-static int map_or_unmap(int vm_fd, const MshvMemoryRegion *mr, bool add)
+static int map_or_unmap(int vm_fd, const MshvMemoryRegion *mr, bool map)
 {
     struct mshv_user_mem_region region = {0};
 
@@ -132,14 +132,14 @@ static int map_or_unmap(int vm_fd, const MshvMemoryRegion *mr, bool add)
     region.size = mr->memory_size;
     region.userspace_addr = mr->userspace_addr;
 
-    if (!add) {
-        region.flags |= (1 << MSHV_SET_MEM_BIT_UNMAP);
+    if (!map) {
+        region.flags |= BIT(MSHV_SET_MEM_BIT_UNMAP);
         return set_guest_memory(vm_fd, &region);
     }
 
-    region.flags = (1 << MSHV_SET_MEM_BIT_EXECUTABLE);
+    region.flags = BIT(MSHV_SET_MEM_BIT_EXECUTABLE);
     if (!mr->readonly) {
-        region.flags |= (1 << MSHV_SET_MEM_BIT_WRITABLE);
+        region.flags |= BIT(MSHV_SET_MEM_BIT_WRITABLE);
     }
 
     return set_guest_memory(vm_fd, &region);
@@ -163,7 +163,8 @@ static MshvMemoryEntry *find_mem_entry_by_region(const MshvMemoryRegion *mr)
     return NULL;
 }
 
-static inline int tracked_map_or_unmap(int vm_fd, const MshvMemoryRegion *mr, bool add)
+static inline int tracked_map_or_unmap(int vm_fd, const MshvMemoryRegion *mr,
+                                       bool add)
 {
     MshvMemoryEntry *entry;
     int ret;
@@ -402,7 +403,7 @@ void mshv_set_phys_mem(MshvMemoryListener *mml, MemoryRegionSection *section,
     bool writable = !area->readonly && !area->rom_device;
     hwaddr start_addr, mr_offset, size;
     void *ram;
-    MshvMemoryRegion tmp, *mshv_mr = &tmp;
+    MshvMemoryRegion mshv_mr = { 0 };
 
     if (!memory_region_is_ram(area)) {
         if (writable) {
@@ -420,13 +421,12 @@ void mshv_set_phys_mem(MshvMemoryListener *mml, MemoryRegionSection *section,
 
     ram = memory_region_get_ram_ptr(area) + mr_offset;
 
-    memset(mshv_mr, 0, sizeof(*mshv_mr));
-    mshv_mr->guest_phys_addr = start_addr;
-    mshv_mr->memory_size = size;
-    mshv_mr->readonly = !writable;
-    mshv_mr->userspace_addr = (uint64_t)ram;
+    mshv_mr.guest_phys_addr = start_addr;
+    mshv_mr.memory_size = size;
+    mshv_mr.readonly = !writable;
+    mshv_mr.userspace_addr = (uint64_t)ram;
 
-    ret = set_memory(mshv_mr, add);
+    ret = set_memory(&mshv_mr, add);
     if (ret < 0) {
         error_report("Failed to set memory region");
         abort();

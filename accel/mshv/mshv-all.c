@@ -46,7 +46,7 @@ DECLARE_INSTANCE_CHECKER(MshvState, MSHV_STATE, TYPE_MSHV_ACCEL)
 
 bool mshv_allowed;
 
-MshvState *mshv_state;
+MshvState *mshv_state = NULL;
 
 static int init_mshv(int *mshv_fd)
 {
@@ -417,6 +417,11 @@ static int mshv_init(MachineState *ms)
     MshvState *s;
     int mshv_fd, vm_fd, ret;
 
+    if (mshv_state) {
+        warn_report("MSHV accelerator already initialized");
+        return 0;
+    }
+
     s = MSHV_STATE(ms->accelerator);
 
     accel_blocker_init();
@@ -434,11 +439,21 @@ static int mshv_init(MachineState *ms)
 
     mshv_init_mem_manager();
 
-    create_vm(mshv_fd, &vm_fd);
+    ret = create_vm(mshv_fd, &vm_fd);
+    if (ret < 0) {
+        close(mshv_fd);
+        return -1;
+    }
+
+    ret = resume_vm(vm_fd);
+    if (ret < 0) {
+        close(mshv_fd);
+        close(vm_fd);
+        return -1;
+    }
+
     s->vm = vm_fd;
-
-    resume_vm(s->vm);
-
+    s->fd = mshv_fd;
     s->nr_as = 1;
     s->as = g_new0(MshvAddressSpace, s->nr_as);
 

@@ -70,6 +70,7 @@ typedef struct MshvState {
 	/* number of listeners */
 	int nr_as;
 	MshvAddressSpace *as;
+    int fd;
 } MshvState;
 extern MshvState *mshv_state;
 

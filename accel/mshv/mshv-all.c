@@ -202,6 +202,11 @@ static int create_vm(int mshv_fd, int *vm_fd)
         return -1;
     }
 
+    ret = mshv_reserve_ioapic_msi_routes(*vm_fd);
+    if (ret < 0) {
+        return -1;
+    }
+
     ret = mshv_arch_post_init_vm(*vm_fd);
     if (ret < 0) {
         return -1;
@@ -347,10 +352,8 @@ static MemoryListener mshv_memory_listener = {
     .priority = MEMORY_LISTENER_PRIORITY_ACCEL,
     .region_add = mem_region_add,
     .region_del = mem_region_del,
-#ifdef MSHV_USE_IOEVENTFD
     .eventfd_add = mem_ioeventfd_add,
     .eventfd_del = mem_ioeventfd_del,
-#endif
 };
 
 static MemoryListener mshv_io_listener = {
@@ -409,6 +412,8 @@ static int mshv_init(MachineState *ms)
     if (ret < 0) {
         return -1;
     }
+
+    mshv_init_msicontrol();
 
     ret = create_vm(mshv_fd, &vm_fd);
     if (ret < 0) {

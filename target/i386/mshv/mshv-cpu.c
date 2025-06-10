@@ -1147,8 +1147,8 @@ static int handle_unmapped_mem(int vm_fd, CPUState *cpu,
 
     gpa = info.guest_physical_address;
 
-    /* attempt to remap the region, in case of overlapping userspase mappings */
-    remap_result = mshv_remap_overlapped_region(vm_fd, gpa);
+    /* attempt to remap the region, in case of overlapping userspace mappings */
+    remap_result = mshv_remap_overlap_region(vm_fd, gpa);
     *exit_reason = MshvVmExitIgnore;
 
     switch (remap_result) {

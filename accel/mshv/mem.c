@@ -43,6 +43,8 @@ static int map_or_unmap(int vm_fd, const MshvMemoryRegion *mr, bool map)
 
     if (!map) {
         region.flags |= (1 << MSHV_SET_MEM_BIT_UNMAP);
+        trace_mshv_unmap_memory(slot->userspace_addr, slot->guest_phys_addr,
+                                slot->memory_size);
         return set_guest_memory(vm_fd, &region);
     }
 
@@ -51,6 +53,8 @@ static int map_or_unmap(int vm_fd, const MshvMemoryRegion *mr, bool map)
         region.flags |= BIT(MSHV_SET_MEM_BIT_WRITABLE);
     }
 
+    trace_mshv_map_memory(slot->userspace_addr, slot->guest_phys_addr,
+                          slot->memory_size);
     return set_guest_memory(vm_fd, &region);
 }
 
@@ -169,6 +173,8 @@ void mshv_set_phys_mem(MshvMemoryListener *mml, MemoryRegionSection *section,
     hwaddr start_addr, mr_offset, size;
     void *ram;
     MshvMemoryRegion mshv_mr = {0};
+
+    trace_mshv_set_phys_mem(add, section->mr->name);
 
     /* If the memory device is a writable non-ram area, we do not
      * want to map it into the guest memory. If it is not a ROM device,

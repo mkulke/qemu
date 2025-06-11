@@ -37,6 +37,15 @@
 static QemuMutex *cpu_guards_lock;
 static GHashTable *cpu_guards;
 
+static unsigned long MMIO_HITS;
+static unsigned long AHCI_HITS;
+static unsigned long HPET_HITS;
+
+#define AHCI_BASE  0xfebd4000
+#define AHCI_MASK  (~0xfffULL)
+#define HPET_BASE  0xfed00000
+#define HPET_MASK  (~0x3ffULL)
+
 static enum hv_register_name STANDARD_REGISTER_NAMES[18] = {
     HV_X64_REGISTER_RAX,
     HV_X64_REGISTER_RBX,
@@ -1086,6 +1095,16 @@ static int emulate_instruction(CPUState *cpu,
     return 0;
 }
 
+static inline int in_ahci_region(const uint64_t addr)
+{
+    return ((addr & AHCI_MASK) == AHCI_BASE);
+}
+
+static inline int in_hpet_region(const uint64_t addr)
+{
+    return ((addr & HPET_MASK) == HPET_BASE);
+}
+
 static int handle_mmio(CPUState *cpu, const struct hyperv_message *msg,
                        MshvVmExit *exit_reason)
 {
@@ -1102,6 +1121,24 @@ static int handle_mmio(CPUState *cpu, const struct hyperv_message *msg,
     }
     insn_len = info.instruction_byte_count;
     access_type = info.header.intercept_access_type;
+
+    unsigned long n, a, h, m;
+    n = qatomic_inc_fetch(&MMIO_HITS);
+    if (in_ahci_region(info.guest_physical_address)) {
+        a = qatomic_inc_fetch(&AHCI_HITS);
+        h = qatomic_read(&HPET_HITS);
+    } else if (in_hpet_region(info.guest_physical_address)) {
+        h = qatomic_inc_fetch(&HPET_HITS);
+        a = qatomic_read(&AHCI_HITS);
+    } else {
+        a = qatomic_read(&AHCI_HITS);
+        h = qatomic_read(&HPET_HITS);
+    }
+    m = n - a - h;
+
+    if (n % 10000 == 0) {
+        trace_mshv_mmio_count(n, a, h, m);
+    }
 
     if (access_type == HV_X64_INTERCEPT_ACCESS_TYPE_EXECUTE) {
         error_report("invalid intercept access type: execute");

@@ -1086,22 +1086,15 @@ static int emulate_instruction(CPUState *cpu,
     return 0;
 }
 
-static int handle_mmio(CPUState *cpu, const struct hyperv_message *msg,
-                       MshvVmExit *exit_reason)
+static int handle_mmio(CPUState *cpu,
+                       const struct hv_x64_memory_intercept_message *info)
 {
-    struct hv_x64_memory_intercept_message info = { 0 };
     size_t insn_len;
     uint8_t access_type;
-    uint8_t *instruction_bytes;
     int ret;
 
-    ret = set_memory_info(msg, &info);
-    if (ret < 0) {
-        error_report("failed to convert message to memory info");
-        return -1;
-    }
-    insn_len = info.instruction_byte_count;
-    access_type = info.header.intercept_access_type;
+    insn_len = info->instruction_byte_count;
+    access_type = info->header.intercept_access_type;
 
     if (access_type == HV_X64_INTERCEPT_ACCESS_TYPE_EXECUTE) {
         error_report("invalid intercept access type: execute");
@@ -1113,60 +1106,43 @@ static int handle_mmio(CPUState *cpu, const struct hyperv_message *msg,
         return -1;
     }
 
-    trace_mshv_handle_mmio(info.guest_virtual_address,
-                           info.guest_physical_address,
-                           info.instruction_byte_count, access_type);
+    trace_mshv_handle_mmio(info->guest_virtual_address,
+                           info->guest_physical_address,
+                           info->instruction_byte_count, access_type);
 
-    instruction_bytes = info.instruction_bytes;
-
-    ret = emulate_instruction(cpu, instruction_bytes, insn_len,
-                              info.guest_virtual_address,
-                              info.guest_physical_address);
+    ret = emulate_instruction(cpu,
+                              info->instruction_bytes,
+                              insn_len,
+                              info->guest_virtual_address,
+                              info->guest_physical_address);
     if (ret < 0) {
         error_report("failed to emulate mmio");
         return -1;
     }
 
-    *exit_reason = MshvVmExitIgnore;
-
     return 0;
 }
 
-static int handle_unmapped_mem(int vm_fd, CPUState *cpu,
-                               const struct hyperv_message *msg,
-                               MshvVmExit *exit_reason)
+static int handle_unmapped_mem_slot(uint64_t gpa, uint8_t access_type)
 {
-    struct hv_x64_memory_intercept_message info = { 0 };
-    uint64_t gpa;
     int ret;
-    enum MshvRemapResult remap_result;
+    MshvMemorySlot* unmapped_slot;
 
-    ret = set_memory_info(msg, &info);
+    trace_mshv_unmapped_gpa(gpa, access_type);
+
+    unmapped_slot = mshv_find_unmapped_slot(gpa);
+    if (unmapped_slot == NULL) {
+        return 0;
+    }
+
+    int vm_fd = mshv_state->vm;
+    ret = mshv_remap_overlapping_slots(vm_fd, unmapped_slot);
     if (ret < 0) {
-        error_report("failed to convert message to memory info");
+        error_report("failed to remap overlapping slots");
         return -1;
     }
 
-    gpa = info.guest_physical_address;
-
-    /* attempt to remap the region, in case of overlapping userspace mappings */
-    remap_result = mshv_remap_overlap_region(vm_fd, gpa);
-    *exit_reason = MshvVmExitIgnore;
-
-    switch (remap_result) {
-    case MshvRemapNoMapping:
-        /* if we didn't find a mapping, it is probably mmio */
-        return handle_mmio(cpu, msg, exit_reason);
-    case MshvRemapOk:
-        break;
-    case MshvRemapNoOverlap:
-        /* This should not happen, but we are forgiving it */
-        warn_report("found no overlap for unmapped region");
-        *exit_reason = MshvVmExitSpecial;
-        break;
-    }
-
-    return 0;
+    return 1;
 }
 
 static int set_ioport_info(const struct hyperv_message *msg,
@@ -1510,47 +1486,68 @@ static int handle_pio(CPUState *cpu, const struct hyperv_message *msg)
     return handle_pio_non_str(cpu, &info);
 }
 
-int mshv_run_vcpu(int vm_fd, CPUState *cpu, hv_message *msg, MshvVmExit *exit)
+int mshv_run_vcpu(CPUState *cpu, hv_message *exit_msg, MshvVmExit *vm_exit)
 {
     int ret;
-    hv_message exit_msg = { 0 };
-    enum MshvVmExit exit_reason;
     int cpu_fd = mshv_vcpufd(cpu);
+    struct hv_x64_memory_intercept_message info = { 0 };
+    uint64_t gpa;
+    uint8_t access_type;
 
-    ret = ioctl(cpu_fd, MSHV_RUN_VP, &exit_msg);
+    ret = ioctl(cpu_fd, MSHV_RUN_VP, exit_msg);
     if (ret < 0) {
-        return MshvVmExitShutdown;
+        if (errno == EINTR || errno == EAGAIN) {
+            *vm_exit = MshvVmExitSpecial;
+            return 0;
+        }
+        error_report("failed to run vcpu: %s", strerror(errno));
+        return -1;
     }
 
-    switch (exit_msg.header.message_type) {
+    switch (exit_msg->header.message_type) {
+    case HVMSG_X64_HALT:
+        *vm_exit = MshvVmExitReset;
+        return 0;
     case HVMSG_UNRECOVERABLE_EXCEPTION:
-        *msg = exit_msg;
-        return MshvVmExitShutdown;
+        error_report("unrecoverable exception occurred");
+        return -1;
     case HVMSG_UNMAPPED_GPA:
-        ret = handle_unmapped_mem(vm_fd, cpu, &exit_msg, &exit_reason);
+    case HVMSG_GPA_INTERCEPT:
+        ret = set_memory_info(exit_msg, &info);
         if (ret < 0) {
-            error_report("failed to handle unmapped memory");
+            error_report("failed to convert message to memory info");
             return -1;
         }
-        return exit_reason;
-    case HVMSG_GPA_INTERCEPT:
-        ret = handle_mmio(cpu, &exit_msg, &exit_reason);
+        gpa = info.guest_physical_address;
+        access_type = info.header.intercept_access_type;
+
+        ret = handle_unmapped_mem_slot(gpa, access_type);
+        if (ret < 0) {
+            error_report("failed to handle unmapped memory slot");
+            return -1;
+        }
+        if (ret == 1) {
+            break;
+        }
+
+        ret = handle_mmio(cpu, &info);
         if (ret < 0) {
             error_report("failed to handle mmio");
             return -1;
         }
-        return exit_reason;
+        break;
     case HVMSG_X64_IO_PORT_INTERCEPT:
-        ret = handle_pio(cpu, &exit_msg);
+        ret = handle_pio(cpu, exit_msg);
         if (ret < 0) {
-            return MshvVmExitSpecial;
+            error_report("failed to handle pio");
+            return -1;
         }
-        return MshvVmExitIgnore;
+        break;
     default:
-        msg = &exit_msg;
+        break;
     }
 
-    *exit = MshvVmExitIgnore;
+    *vm_exit = MshvVmExitIgnore;
     return 0;
 }
 

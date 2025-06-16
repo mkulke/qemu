@@ -100,7 +100,7 @@ typedef struct MshvFPU {
 
 typedef enum MshvVmExit {
     MshvVmExitIgnore   = 0,
-    MshvVmExitShutdown = 1,
+    MshvVmExitReset    = 1,
     MshvVmExitSpecial  = 2,
 } MshvVmExit;
 
@@ -116,7 +116,7 @@ void mshv_remove_vcpu(int vm_fd, int cpu_fd);
 int mshv_configure_vcpu(const CPUState *cpu, const MshvFPU *fpu, uint64_t xcr0);
 int mshv_get_standard_regs(CPUState *cpu);
 int mshv_get_special_regs(CPUState *cpu);
-int mshv_run_vcpu(int vm_fd, CPUState *cpu, hv_message *msg, MshvVmExit *exit);
+int mshv_run_vcpu(CPUState *cpu, hv_message *msg, MshvVmExit *exit);
 int mshv_load_regs(CPUState *cpu);
 int mshv_store_regs(CPUState *cpu);
 int mshv_set_generic_regs(int cpu_fd, hv_register_assoc *assocs, size_t n_regs);
@@ -156,9 +156,12 @@ typedef struct MshvMemorySlot {
     uint64_t userspace_addr;
     bool readonly;
     bool mapped;
+    int idx;
 } MshvMemorySlot;
 
 MshvRemapResult mshv_remap_overlap_region(int vm_fd, uint64_t gpa);
+MshvMemorySlot* mshv_find_unmapped_slot(uint64_t gpa);
+int mshv_remap_overlapping_slots(int vm_fd, MshvMemorySlot* unmapped_slot);
 int mshv_guest_mem_read(uint64_t gpa, uint8_t *data, uintptr_t size,
                         bool is_secure_mode, bool instruction_fetch);
 int mshv_guest_mem_write(uint64_t gpa, const uint8_t *data, uintptr_t size,

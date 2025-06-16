@@ -477,7 +477,7 @@ static int mshv_destroy_vcpu(CPUState *cpu)
 
 static int mshv_cpu_exec(CPUState *cpu)
 {
-    hv_message mshv_msg;
+    hv_message mshv_msg = { 0 };
     enum MshvVmExit exit_reason;
     int ret = 0;
 
@@ -506,7 +506,7 @@ static int mshv_cpu_exec(CPUState *cpu)
          */
         smp_rmb();
 
-        ret = mshv_run_vcpu(mshv_state->vm, cpu, &mshv_msg, &exit_reason);
+        ret = mshv_run_vcpu(cpu, &mshv_msg, &exit_reason);
         if (ret < 0) {
             error_report("Failed to run on vcpu %d", cpu->cpu_index);
             abort();
@@ -514,6 +514,9 @@ static int mshv_cpu_exec(CPUState *cpu)
 
         switch (exit_reason) {
         case MshvVmExitIgnore:
+            break;
+        case MshvVmExitReset:
+            ret = EXCP_HLT;
             break;
         default:
             ret = EXCP_INTERRUPT;

@@ -26,6 +26,7 @@ static MshvMemorySlot *find_free_mem_slot(void)
 {
     for (int i = 0; i < MSHV_MAX_MEM_SLOTS; i++) {
         if (mem_slots[i].memory_size == 0) {
+            mem_slots[i].idx = i;
             return &mem_slots[i];
         }
     }
@@ -83,7 +84,9 @@ static int map_or_unmap(int vm_fd, const MshvMemorySlot *slot, bool map)
 
     if (!map) {
         region.flags |= (1 << MSHV_SET_MEM_BIT_UNMAP);
-        trace_mshv_unmap_memory(slot->userspace_addr, slot->guest_phys_addr,
+        trace_mshv_unmap_memory(slot->idx,
+                                slot->userspace_addr,
+                                slot->guest_phys_addr,
                                 slot->memory_size);
         return set_guest_memory(vm_fd, &region);
     }
@@ -93,7 +96,9 @@ static int map_or_unmap(int vm_fd, const MshvMemorySlot *slot, bool map)
         region.flags |= BIT(MSHV_SET_MEM_BIT_WRITABLE);
     }
 
-    trace_mshv_map_memory(slot->userspace_addr, slot->guest_phys_addr,
+    trace_mshv_map_memory(slot->idx,
+                          slot->userspace_addr,
+                          slot->guest_phys_addr,
                           slot->memory_size);
     return set_guest_memory(vm_fd, &region);
 }
@@ -109,8 +114,11 @@ static MshvMemorySlot *find_mem_slot_by_region(uint64_t gpa, uint64_t size,
         if (slot->guest_phys_addr == gpa &&
             slot->userspace_addr  == userspace_addr &&
             slot->memory_size     == size) {
-            trace_mshv_found_slot(slot->userspace_addr, slot->guest_phys_addr,
-                                  slot->memory_size);
+            trace_mshv_found_slot(slot->idx,
+                                  slot->userspace_addr,
+                                  slot->guest_phys_addr,
+                                  slot->memory_size,
+                                  slot->mapped);
             return slot;
         }
     }
@@ -130,8 +138,89 @@ static MshvMemorySlot* find_mem_slot_by_gpa(uint64_t gpa)
 
         gpa_offset = gpa - slot->guest_phys_addr;
         if (slot->guest_phys_addr <= gpa && gpa_offset < slot->memory_size) {
-            trace_mshv_found_slot(slot->userspace_addr, slot->guest_phys_addr,
-                                  slot->memory_size);
+            trace_mshv_found_slot(slot->idx,
+                                  slot->userspace_addr,
+                                  slot->guest_phys_addr,
+                                  slot->memory_size,
+                                  slot->mapped);
+            return slot;
+        }
+    }
+
+    return NULL;
+}
+
+int mshv_remap_overlapping_slots(int vm_fd, MshvMemorySlot* unmapped_slot)
+{
+    MshvMemorySlot *overlap_slot;
+    int ret;
+
+    assert(unmapped_slot);
+
+    overlap_slot = find_overlap_mem_slot(unmapped_slot);
+    if (overlap_slot == NULL) {
+        error_report("no overlapping memory slot found for gpa=0x%lx",
+                     unmapped_slot->guest_phys_addr);
+    }
+
+    /* unmap overlapping slot */
+    trace_mshv_map_out_slot(overlap_slot->idx,
+                            overlap_slot->userspace_addr,
+                            overlap_slot->guest_phys_addr,
+                            overlap_slot->memory_size);
+
+    ret = map_or_unmap(vm_fd, overlap_slot, false);
+    if (ret < 0) {
+        error_report("failed to unmap overlap region");
+        abort();
+    }
+    overlap_slot->mapped = false;
+    warn_report("mapped out userspace_addr=0x%016lx gpa=0x%010lx size=0x%lx",
+                overlap_slot->userspace_addr,
+                overlap_slot->guest_phys_addr,
+                overlap_slot->memory_size);
+
+    /* map region for gpa */
+    trace_mshv_map_in_slot(unmapped_slot->idx,
+                           unmapped_slot->userspace_addr,
+                           unmapped_slot->guest_phys_addr,
+                           unmapped_slot->memory_size);
+    ret = map_or_unmap(vm_fd, unmapped_slot, true);
+    if (ret < 0) {
+        error_report("failed to map new region");
+        abort();
+    }
+    unmapped_slot->mapped = true;
+    warn_report("mapped in  userspace_addr=0x%016lx gpa=0x%010lx size=0x%lx",
+                unmapped_slot->userspace_addr, unmapped_slot->guest_phys_addr,
+                unmapped_slot->memory_size);
+
+    return 0;
+}
+
+MshvMemorySlot* mshv_find_unmapped_slot(uint64_t gpa)
+{
+    MshvMemorySlot *slot;
+    uint64_t slot_gpa_end;
+
+    trace_mshv_find_gpa_slot(gpa);
+
+    for (int i = 0; i < MSHV_MAX_MEM_SLOTS; i++) {
+        slot = &mem_slots[i];
+
+        if (slot->memory_size == 0) {
+            continue;
+        }
+
+        slot_gpa_end = slot->guest_phys_addr + slot->memory_size;
+        if (slot->guest_phys_addr <= gpa &&
+            gpa < slot_gpa_end &&
+            slot->mapped == false) {
+            trace_mshv_found_slot(slot->idx,
+                                  slot->userspace_addr,
+                                  slot->guest_phys_addr,
+                                  slot->memory_size,
+                                  slot->mapped);
             return slot;
         }
     }
@@ -156,6 +245,11 @@ MshvRemapResult mshv_remap_overlap_region(int vm_fd, uint64_t gpa)
     }
 
     /* unmap overlapping slot */
+    trace_mshv_map_out_slot(overlap_slot->idx,
+                            overlap_slot->userspace_addr,
+                            overlap_slot->guest_phys_addr,
+                            overlap_slot->memory_size);
+
     ret = map_or_unmap(vm_fd, overlap_slot, false);
     if (ret < 0) {
         error_report("failed to unmap overlap region");
@@ -168,6 +262,10 @@ MshvRemapResult mshv_remap_overlap_region(int vm_fd, uint64_t gpa)
                 overlap_slot->memory_size);
 
     /* map region for gpa */
+    trace_mshv_map_in_slot(gpa_slot->idx,
+                           gpa_slot->userspace_addr,
+                           gpa_slot->guest_phys_addr,
+                           gpa_slot->memory_size);
     ret = map_or_unmap(vm_fd, gpa_slot, true);
     if (ret < 0) {
         error_report("failed to map new region");
@@ -177,7 +275,6 @@ MshvRemapResult mshv_remap_overlap_region(int vm_fd, uint64_t gpa)
     warn_report("mapped in  userspace_addr=0x%016lx gpa=0x%010lx size=0x%lx",
                 gpa_slot->userspace_addr, gpa_slot->guest_phys_addr,
                 gpa_slot->memory_size);
-
     return MshvRemapOk;
 }
 
@@ -247,7 +344,7 @@ int mshv_guest_mem_write(uint64_t gpa, const uint8_t *data, uintptr_t size,
 }
 
 static int tracked_unmap(int vm_fd, uint64_t gpa, uint64_t size,
-                        uint64_t userspace_addr)
+                         uint64_t userspace_addr)
 {
     int ret;
     MshvMemorySlot *slot;
@@ -304,9 +401,11 @@ static int tracked_map(int vm_fd, uint64_t gpa, uint64_t size, bool readonly,
 
     overlap_slot = find_overlap_mem_slot(slot);
     if (overlap_slot) {
-        trace_mshv_remap_attempt(slot->userspace_addr,
-                                 slot->guest_phys_addr,
-                                 slot->memory_size);
+        trace_mshv_overlap_slot(overlap_slot->idx,
+                                overlap_slot->userspace_addr,
+                                overlap_slot->guest_phys_addr,
+                                overlap_slot->memory_size,
+                                overlap_slot->mapped);
         warn_report("attempt to map region [0x%lx-0x%lx], while "
                     "[0x%lx-0x%lx] is already mapped in the guest",
                     userspace_addr, userspace_addr + size - 1,
@@ -316,6 +415,11 @@ static int tracked_map(int vm_fd, uint64_t gpa, uint64_t size, bool readonly,
 
         /* do not register mem slot in hv, but record for later swap-in */
         slot->mapped = false;
+        trace_mshv_stash_slot(slot->idx,
+                              slot->userspace_addr,
+                              slot->guest_phys_addr,
+                              slot->memory_size,
+                              slot->mapped);
 
         return 0;
     }

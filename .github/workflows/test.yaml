@@ -67,6 +67,9 @@ jobs:
         machine:
         - q35
         - pc
+        iothreads:
+        - true
+        - false
         exclude:
         - firmware: seabios
           distribution: fedora
@@ -135,12 +138,13 @@ jobs:
           FIRMWARE: ${{ matrix.firmware }}
           DISK_IMG: images/${{ matrix.distribution }}.qcow2
           MACHINE: ${{ matrix.machine }}
+          IOTHREADS_FLAG: ${{ matrix.iothreads && ',iothread=iothread0' || '' }}
         run: |
           chmod +x "$QEMU_BIN"
           cmd=("$QEMU_BIN"
                -machine   "$MACHINE"
                -drive     "file=$DISK_IMG,format=qcow2,if=none,id=osdisk,snapshot=on"
-               -device    "virtio-blk-pci,drive=osdisk"
+               -device    "virtio-blk-pci,drive=osdisk${IOTHREADS_FLAG}"
                -drive     "file=$CI_IMG,format=raw,if=none,id=cidata"
                -device    "virtio-blk-pci,drive=cidata"
                -m         "$MEMORY"
@@ -152,6 +156,9 @@ jobs:
                -rtc       "clock=vm"
                -daemonize
                -pidfile   "$PID_FILE")
+          if [[ -n "$IOTHREADS_FLAG" ]]; then
+            cmd+=(-object "iothread,id=iothread0")
+          fi
           if [[ "$FIRMWARE" == "ovmf" ]]; then
             cp /usr/share/OVMF/OVMF_VARS.fd .
             cmd+=(-drive  "if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE.fd"

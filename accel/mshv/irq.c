@@ -33,163 +33,36 @@ void mshv_init_msicontrol(void)
     msi_control->updated = false;
 }
 
-static int set_msi_routing(uint32_t gsi, uint64_t addr, uint32_t data)
+static int compare_irq_entry_ptr(const void *pa, const void *pb)
 {
-    struct mshv_user_irq_entry *entry;
-    uint32_t high_addr = addr >> 32;
-    uint32_t low_addr = addr & 0xFFFFFFFF;
-    GHashTable *gsi_routes;
+    const mshv_user_irq_entry *ea = (const mshv_user_irq_entry*)pa;
+    const mshv_user_irq_entry *eb = (const mshv_user_irq_entry*)pb;
 
-    trace_mshv_set_msi_routing(gsi, addr, data);
-
-    if (gsi >= MSHV_MAX_MSI_ROUTES) {
-        error_report("gsi >= MSHV_MAX_MSI_ROUTES");
-        return -1;
-    }
-
-    assert(msi_control);
-
-    WITH_QEMU_LOCK_GUARD(&msi_control_mutex) {
-        gsi_routes = msi_control->gsi_routes;
-        entry = g_hash_table_lookup(gsi_routes, GINT_TO_POINTER(gsi));
-
-        if (entry
-            && entry->address_hi == high_addr
-            && entry->address_lo == low_addr
-            && entry->data == data)
-        {
-            /* nothing to update */
-            return 0;
-        }
-
-        /* free old entry */
-        g_free(entry);
-
-        /* create new entry */
-        entry = g_new0(mshv_user_irq_entry, 1);
-        entry->gsi = gsi;
-        entry->address_hi = high_addr;
-        entry->address_lo = low_addr;
-        entry->data = data;
-
-        g_hash_table_insert(gsi_routes, GINT_TO_POINTER(gsi), entry);
-        msi_control->updated = true;
-    }
-
+    if (ea->gsi < eb->gsi) return -1;
+    if (ea->gsi > eb->gsi) return  1;
     return 0;
 }
 
-static int add_msi_routing(uint64_t addr, uint32_t data)
+static int dump_msi_routing_table(void)
 {
-    struct mshv_user_irq_entry *route_entry;
-    uint32_t high_addr = addr >> 32;
-    uint32_t low_addr = addr & 0xFFFFFFFF;
-    int gsi;
-    GHashTable *gsi_routes;
-
-    trace_mshv_add_msi_routing(addr, data);
-
-    assert(msi_control);
-
-    WITH_QEMU_LOCK_GUARD(&msi_control_mutex) {
-        /* find an empty slot */
-        gsi = 0;
-        gsi_routes = msi_control->gsi_routes;
-        while (gsi < MSHV_MAX_MSI_ROUTES) {
-            route_entry = g_hash_table_lookup(gsi_routes, GINT_TO_POINTER(gsi));
-            if (!route_entry) {
-                break;
-            }
-            gsi++;
-        }
-        if (gsi >= MSHV_MAX_MSI_ROUTES) {
-            error_report("No empty gsi slot available");
-            return -1;
-        }
-
-        /* create new entry */
-        route_entry = g_new0(struct mshv_user_irq_entry, 1);
-        route_entry->gsi = gsi;
-        route_entry->address_hi = high_addr;
-        route_entry->address_lo = low_addr;
-        route_entry->data = data;
-
-        g_hash_table_insert(gsi_routes, GINT_TO_POINTER(gsi), route_entry);
-        msi_control->updated = true;
-    }
-
-    return gsi;
-}
-
-static int commit_msi_routing_table(void)
-{
-    guint len;
-    int i, ret;
-    size_t table_size;
-    struct mshv_user_irq_table *table;
     GHashTableIter iter;
-    gpointer key, value;
-    int vm_fd = mshv_state->vm;
+    gpointer        value;
+    GPtrArray      *arr = g_ptr_array_new();
 
-    assert(msi_control);
-
-    WITH_QEMU_LOCK_GUARD(&msi_control_mutex) {
-        if (!msi_control->updated) {
-            /* nothing to update */
-            return 0;
-        }
-
-        /* Calculate the size of the table */
-        len = g_hash_table_size(msi_control->gsi_routes);
-        table_size = sizeof(struct mshv_user_irq_table)
-                     + len * sizeof(struct mshv_user_irq_entry);
-        table = g_malloc0(table_size);
-
-        g_hash_table_iter_init(&iter, msi_control->gsi_routes);
-        i = 0;
-        while (g_hash_table_iter_next(&iter, &key, &value)) {
-            struct mshv_user_irq_entry *entry = value;
-            table->entries[i] = *entry;
-            i++;
-        }
-        table->nr = i;
-
-        trace_mshv_commit_msi_routing_table(vm_fd, len);
-
-        ret = ioctl(vm_fd, MSHV_SET_MSI_ROUTING, table);
-        g_free(table);
-        if (ret < 0) {
-            error_report("Failed to commit msi routing table");
-            return -1;
-        }
-        msi_control->updated = false;
-    }
-    return 0;
-}
-
-static int remove_msi_routing(uint32_t gsi)
-{
-    struct mshv_user_irq_entry *route_entry;
-    GHashTable *gsi_routes;
-
-    trace_mshv_remove_msi_routing(gsi);
-
-    if (gsi >= MSHV_MAX_MSI_ROUTES) {
-        error_report("Invalid GSI: %u", gsi);
-        return -1;
+    g_hash_table_iter_init(&iter, msi_control->gsi_routes);
+    while (g_hash_table_iter_next(&iter, NULL, &value))
+    {
+        g_ptr_array_add(arr, value);
     }
 
-    assert(msi_control);
+    qsort(arr->pdata, arr->len, sizeof(arr->pdata[0]), compare_irq_entry_ptr);
 
-    WITH_QEMU_LOCK_GUARD(&msi_control_mutex) {
-        gsi_routes = msi_control->gsi_routes;
-        route_entry = g_hash_table_lookup(gsi_routes, GINT_TO_POINTER(gsi));
-        if (route_entry) {
-            g_hash_table_remove(gsi_routes, GINT_TO_POINTER(gsi));
-            g_free(route_entry);
-            msi_control->updated = true;
-        }
+    for (guint i = 0; i < arr->len; i++) {
+        struct mshv_user_irq_entry *e = arr->pdata[i];
+        trace_mshv_msi_route(e->gsi, e->address_hi, e->address_lo, e->data);
     }
+
+    g_ptr_array_free(arr, true);
 
     return 0;
 }
@@ -214,17 +87,196 @@ static int irqfd(int vm_fd, int fd, int resample_fd, uint32_t gsi,
     return ret;
 }
 
+static int unregister_irqfd(int vm_fd, int event_fd, uint32_t gsi)
+{
+    int ret;
+    uint32_t flags = MSHV_IRQFD_BIT_DEASSIGN_FLAG;
+
+    ret = irqfd(vm_fd, event_fd, 0, gsi, flags);
+    if (ret < 0) {
+        error_report("Failed to unregister irqfd: gsi=%u", gsi);
+        return -errno;
+    }
+    return 0;
+}
+
+static int set_msi_routing(uint32_t gsi, uint64_t addr, uint32_t data)
+{
+    struct mshv_user_irq_entry *route;
+    uint32_t high_addr = addr >> 32;
+    uint32_t low_addr = addr & 0xFFFFFFFF;
+    GHashTable *gsi_routes;
+
+    trace_mshv_set_msi_routing(gsi, addr, data);
+
+    if (gsi >= MSHV_MAX_MSI_ROUTES) {
+        error_report("gsi >= MSHV_MAX_MSI_ROUTES");
+        return -1;
+    }
+
+    assert(msi_control);
+
+    WITH_QEMU_LOCK_GUARD(&msi_control_mutex) {
+        gsi_routes = msi_control->gsi_routes;
+        route = g_hash_table_lookup(gsi_routes, GINT_TO_POINTER(gsi));
+        if (route) {
+            if (route->address_hi == high_addr &&
+                route->address_lo == low_addr  &&
+                route->data       == data)
+            {
+                /* nothing to update */
+                return 0;
+            }
+
+            /* free old route */
+            g_free(route);
+        }
+
+        /* create new entry */
+        route = g_new0(mshv_user_irq_entry, 1);
+        route->gsi = gsi;
+        route->address_hi = high_addr;
+        route->address_lo = low_addr;
+        route->data = data;
+
+        g_hash_table_insert(gsi_routes, GINT_TO_POINTER(gsi), route);
+        msi_control->updated = true;
+    }
+
+    return 0;
+}
+
+static int add_msi_routing(uint64_t addr, uint32_t data)
+{
+    struct mshv_user_irq_entry *route;
+    uint32_t high_addr = addr >> 32;
+    uint32_t low_addr = addr & 0xFFFFFFFF;
+    int gsi;
+    GHashTable *gsi_routes;
+
+    trace_mshv_add_msi_routing(addr, data);
+
+    assert(msi_control);
+
+    WITH_QEMU_LOCK_GUARD(&msi_control_mutex) {
+        /* find an empty slot */
+        gsi = 0;
+        gsi_routes = msi_control->gsi_routes;
+        while (gsi < MSHV_MAX_MSI_ROUTES) {
+            route = g_hash_table_lookup(gsi_routes, GINT_TO_POINTER(gsi));
+            if (!route) {
+                break;
+            }
+            gsi++;
+        }
+        if (gsi >= MSHV_MAX_MSI_ROUTES) {
+            error_report("No empty gsi slot available");
+            return -1;
+        }
+
+        /* create new entry */
+        route = g_new0(struct mshv_user_irq_entry, 1);
+        route->gsi = gsi;
+        route->address_hi = high_addr;
+        route->address_lo = low_addr;
+        route->data = data;
+
+        g_hash_table_insert(gsi_routes, GINT_TO_POINTER(gsi), route);
+        msi_control->updated = true;
+    }
+
+    return gsi;
+}
+
 static int register_irqfd(int vm_fd, int event_fd, uint32_t gsi)
 {
     int ret;
 
     trace_mshv_register_irqfd(vm_fd, event_fd, gsi);
 
+    assert(msi_control);
+
     ret = irqfd(vm_fd, event_fd, 0, gsi, 0);
     if (ret < 0) {
         error_report("Failed to register irqfd: gsi=%u", gsi);
         return -1;
     }
+
+    return 0;
+}
+
+static int commit_msi_routing_table(void)
+{
+    guint len;
+    int i, ret, vm_fd = mshv_state->vm;
+    size_t table_size;
+    struct mshv_user_irq_table *table;
+    GHashTableIter iter;
+    gpointer key, value;
+    mshv_user_irq_entry *route;
+
+    assert(msi_control);
+
+    WITH_QEMU_LOCK_GUARD(&msi_control_mutex) {
+        if (!msi_control->updated) {
+            /* nothing to update */
+            return 0;
+        }
+
+        /* Calculate the size of the table */
+        len = g_hash_table_size(msi_control->gsi_routes);
+        table_size = sizeof(struct mshv_user_irq_table)
+                     + len * sizeof(struct mshv_user_irq_entry);
+        table = g_malloc0(table_size);
+
+        g_hash_table_iter_init(&iter, msi_control->gsi_routes);
+        i = 0;
+        while (g_hash_table_iter_next(&iter, &key, &value)) {
+            route = value;
+            table->entries[i] = *route;
+            i++;
+        }
+        table->nr = i;
+
+        trace_mshv_commit_msi_routing_table(vm_fd, len);
+        dump_msi_routing_table();
+
+        ret = ioctl(vm_fd, MSHV_SET_MSI_ROUTING, table);
+        if (ret < 0) {
+            error_report("Failed to commit msi routing table");
+            g_free(table);
+            return -1;
+        }
+
+        msi_control->updated = false;
+    }
+    return 0;
+}
+
+static int remove_msi_routing(uint32_t gsi)
+{
+    struct mshv_user_irq_entry *route;
+    GHashTable *gsi_routes;
+
+    trace_mshv_remove_msi_routing(gsi);
+
+    if (gsi >= MSHV_MAX_MSI_ROUTES) {
+        error_report("Invalid GSI: %u", gsi);
+        return -1;
+    }
+
+    assert(msi_control);
+
+    WITH_QEMU_LOCK_GUARD(&msi_control_mutex) {
+        gsi_routes = msi_control->gsi_routes;
+        route = g_hash_table_lookup(gsi_routes, GINT_TO_POINTER(gsi));
+        if (route) {
+            g_hash_table_remove(gsi_routes, GINT_TO_POINTER(gsi));
+            g_free(route);
+            msi_control->updated = true;
+        }
+    }
+
     return 0;
 }
 
@@ -237,19 +289,6 @@ static int register_irqfd_with_resample(int vm_fd, int event_fd,
     ret = irqfd(vm_fd, event_fd, resample_fd, gsi, flags);
     if (ret < 0) {
         error_report("Failed to register irqfd with resample: gsi=%u", gsi);
-        return -errno;
-    }
-    return 0;
-}
-
-static int unregister_irqfd(int vm_fd, int event_fd, uint32_t gsi)
-{
-    int ret;
-    uint32_t flags = MSHV_IRQFD_BIT_DEASSIGN_FLAG;
-
-    ret = irqfd(vm_fd, event_fd, 0, gsi, flags);
-    if (ret < 0) {
-        error_report("Failed to unregister irqfd: gsi=%u", gsi);
         return -errno;
     }
     return 0;

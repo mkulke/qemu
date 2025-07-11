@@ -8,11 +8,11 @@ mshv_mem_ioeventfd_del(uint64_t addr, uint32_t size, uint32_t data) "addr %lx si
 
 mshv_hvcall_args(const char* hvcall, uint16_t code, uint16_t in_sz) "built args for '%s' code: %d in_sz: %d"
 
-mshv_set_msi_routing(uint32_t gsi, uint64_t addr, uint32_t data) "gsi=%d addr=%lx data=%x"
-mshv_remove_msi_routing(uint32_t gsi) "gsi=%d"
-mshv_add_msi_routing(uint64_t addr, uint32_t data) "addr=%lx data=%x"
+mshv_set_msi_routing(uint32_t gsi, uint64_t addr, uint32_t data) "gsi=%02d addr=%lx data=%04x"
+mshv_remove_msi_routing(uint32_t gsi) "gsi=%02d"
+mshv_add_msi_routing(uint64_t addr, uint32_t data) "addr=%lx data=%04x"
 mshv_commit_msi_routing_table(int vm_fd, int len) "vm_fd=%d table_size=%d"
-mshv_register_irqfd(int vm_fd, int event_fd, uint32_t gsi) "vm_fd=%d event_fd=%d gsi=%d"
+mshv_register_irqfd(int vm_fd, int event_fd, uint32_t gsi) "vm_fd=%d event_fd=%d gsi=%02d"
 mshv_irqchip_update_irqfd_notifier_gsi(int event_fd, int resample_fd, int virq, bool add) "event_fd=%d resample_fd=%d virq=%d add=%d"
 
 mshv_insn_fetch(uint64_t addr, size_t size) "gpa=%lx size=%lu"
@@ -27,3 +27,5 @@ mshv_skip_unset_mem(uint64_t userspace_addr, uint64_t gpa, uint64_t size) "\tu_a
 mshv_remap_attempt(uint64_t userspace_addr, uint64_t gpa, uint64_t size) "\tu_a=%lx gpa=%010lx size=%08lx"
 mshv_find_slot_by_gpa(uint64_t gpa) "\tgpa=%010lx"
 mshv_handle_mmio(uint64_t gva, uint64_t gpa, uint64_t size, uint8_t access_type) "\tgva=%lx gpa=%010lx size=%lx access_type=%d"
+
+mshv_msi_route(int gsi, uint32_t addr_hi, uint32_t addr_lo, uint32_t data) "gsi=%02d addr_hi=%x addr_lo=%x data=%04x"

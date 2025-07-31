@@ -13,9 +13,11 @@
 #include "linux/mshv.h"
 #include "hw/hyperv/hvhdk_mini.h"
 #include "qemu/osdep.h"
+#include "qemu/error-report.h"
 #include "hw/intc/ioapic.h"
 #include "hw/pci/msi.h"
 #include "system/mshv.h"
+#include "system/mshv_int.h"
 #include "trace.h"
 #include <stdint.h>
 #include <sys/ioctl.h>
@@ -308,11 +310,12 @@ int mshv_irqchip_update_msi_route(int virq, MSIMessage msg, PCIDevice *dev)
     return 0;
 }
 
-int mshv_request_interrupt(int vm_fd, uint32_t interrupt_type, uint32_t vector,
+int mshv_request_interrupt(uint32_t interrupt_type, uint32_t vector,
                            uint32_t vp_index, bool logical_dest_mode,
                            bool level_triggered)
 {
     int ret;
+    int vm_fd = mshv_state->vm;
 
     if (vector == 0) {
         warn_report("Ignoring request for interrupt vector 0");

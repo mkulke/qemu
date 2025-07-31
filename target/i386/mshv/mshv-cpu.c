@@ -16,7 +16,7 @@
 #include "qemu/typedefs.h"
 #include "qemu/main-loop.h"
 
-#include "system/mshv.h"
+#include "system/mshv_int.h"
 #include "system/address-spaces.h"
 #include "linux/mshv.h"
 #include "hw/hyperv/hvhdk_mini.h"

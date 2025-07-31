@@ -9,8 +9,8 @@
  */
 
 #include "qemu/osdep.h"
-#include "system/mshv.h"
 #include "linux/mshv.h"
+#include "system/mshv_int.h"
 #include "qemu/error-report.h"
 
 static uint32_t supported_msrs[64] = {

@@ -17,7 +17,7 @@
 #include "qemu/rcu.h"
 #include "linux/mshv.h"
 #include "system/address-spaces.h"
-#include "system/mshv.h"
+#include "system/mshv_int.h"
 #include "exec/memattrs.h"
 #include <sys/ioctl.h>
 #include "trace.h"

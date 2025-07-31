@@ -29,21 +29,19 @@
 
 #include "qemu/accel.h"
 #include "qemu/guest-random.h"
-#include "system/accel-ops.h"
+#include "accel/accel-ops.h"
+#include "accel/accel-cpu-ops.h"
 #include "system/cpus.h"
 #include "system/runstate.h"
 #include "system/accel-blocker.h"
 #include "system/address-spaces.h"
 #include "system/mshv.h"
+#include "system/mshv_int.h"
 #include "system/reset.h"
 #include "trace.h"
 #include <err.h>
 #include <stdint.h>
 #include <sys/ioctl.h>
-
-#define TYPE_MSHV_ACCEL ACCEL_CLASS_NAME("mshv")
-
-DECLARE_INSTANCE_CHECKER(MshvState, MSHV_STATE, TYPE_MSHV_ACCEL)
 
 bool mshv_allowed;
 
@@ -410,7 +408,7 @@ static int mshv_init_vcpu(CPUState *cpu)
     return 0;
 }
 
-static int mshv_init(MachineState *ms)
+static int mshv_accel_init(AccelState *as, MachineState *ms)
 {
     MshvState *s;
     int mshv_fd, vm_fd, ret;
@@ -420,7 +418,7 @@ static int mshv_init(MachineState *ms)
         return 0;
     }
 
-    s = MSHV_STATE(ms->accelerator);
+    s = MSHV_STATE(as);
 
     accel_blocker_init();
 
@@ -681,7 +679,7 @@ static void mshv_accel_class_init(ObjectClass *oc, const void *data)
     AccelClass *ac = ACCEL_CLASS(oc);
 
     ac->name = "MSHV";
-    ac->init_machine = mshv_init;
+    ac->init_machine = mshv_accel_init;
     ac->allowed = &mshv_allowed;
 }
 

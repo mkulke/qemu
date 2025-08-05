@@ -691,6 +691,18 @@ typedef struct mshv_get_set_vp_state {
 	__u64 buf_ptr;	/* 4k page-aligned data buffer. */
 } mshv_get_set_vp_state;
 
+enum {
+	MSHV_VP_FLAG_BIT_IMMEDIATE_EXIT,
+	MSHV_VP_FLAG_BIT_COUNT,
+};
+
+#define MSHV_VP_FLAGS_MASK ((1 << MSHV_VP_FLAG_BIT_COUNT) - 1)
+
+struct mshv_vp_flags {
+	__u8 bits;
+	__u8 rsvd[7];
+};
+
 struct hv_local_interrupt_controller_state {
 	/* HV_X64_INTERRUPT_CONTROLLER_STATE */
 	__u32 apic_id;
@@ -727,6 +739,7 @@ struct mshv_run_vp {
 #define MSHV_RUN_VP			    _IOR(MSHV_IOCTL, 0x00, struct mshv_run_vp)
 #define MSHV_GET_VP_STATE		_IOWR(MSHV_IOCTL, 0x01, struct mshv_get_set_vp_state)
 #define MSHV_SET_VP_STATE		_IOWR(MSHV_IOCTL, 0x02, struct mshv_get_set_vp_state)
+#define MSHV_VP_SET_FLAGS		_IOW(MSHV_IOCTL, 0x03, struct mshv_vp_flags)
 
 /**
  * struct mshv_root_hvcall - arguments for MSHV_ROOT_HVCALL

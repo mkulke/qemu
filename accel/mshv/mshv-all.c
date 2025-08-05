@@ -538,9 +538,22 @@ static int mshv_cpu_exec(CPUState *cpu)
  */
 static void sa_ipi_handler(int sig)
 {
-    /* TODO: call IOCTL to set_immediate_exit, once implemented. */
+    int res, cpu_fd;
+    struct mshv_vp_flags args = {0};
 
-    qemu_cpu_kick_self();
+    if (!current_cpu) {
+        return;
+    }
+
+    cpu_fd = mshv_vcpufd(current_cpu);
+
+    args.bits |= BIT( MSHV_VP_FLAG_BIT_IMMEDIATE_EXIT);
+
+    res = ioctl(cpu_fd, MSHV_VP_SET_FLAGS, &args);
+    if (res < 0) {
+        error_report("Failed to set immediate exit flag: %s", strerror(errno));
+        return;
+    }
 }
 
 static void init_signal(CPUState *cpu)

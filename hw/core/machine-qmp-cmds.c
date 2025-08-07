@@ -30,6 +30,19 @@
 #include "hw/s390x/storage-keys.h"
 
 /*
+ * QMP query for MSHV
+ */
+MshvInfo *qmp_query_mshv(Error **errp)
+{
+    MshvInfo *info = g_malloc0(sizeof(*info));
+
+    info->enabled = mshv_enabled();
+    info->present = accel_find("mshv");
+
+    return info;
+}
+
+/*
  * fast means: we NEVER interrupt vCPU threads to retrieve
  * information from KVM.
  */

@@ -508,11 +508,14 @@ static void collect_cpuid_entries(const CPUState *cpu, GList *cpuid_entries)
     }
 }
 
-static int register_intercept_result_cpuid_entry(int cpu_fd,
+static int register_intercept_result_cpuid_entry(const CPUState *cpu,
                                                  uint8_t subleaf_specific,
                                                  uint8_t always_override,
                                                  struct hv_cpuid_entry *entry)
 {
+    int ret;
+    int vp_index = cpu->cpu_index;
+    int cpu_fd = mshv_vcpufd(cpu);
     struct hv_register_x64_cpuid_result_parameters cpuid_params = {
         .input.eax = entry->function,
         .input.ecx = entry->index,
@@ -540,23 +543,28 @@ static int register_intercept_result_cpuid_entry(int cpu_fd,
     union hv_register_intercept_result_parameters parameters = {
         .cpuid = cpuid_params,
     };
-    struct mshv_register_intercept_result args = {
-        .intercept_type = HV_INTERCEPT_TYPE_X64_CPUID,
-        .parameters = parameters,
-    };
-    int ret;
 
-    ret = ioctl(cpu_fd, MSHV_VP_REGISTER_INTERCEPT_RESULT, &args);
+    hv_input_register_intercept_result in = {0};
+    in.vp_index = vp_index;
+    in.intercept_type = HV_INTERCEPT_TYPE_X64_CPUID;
+    in.parameters = parameters;
+
+    struct mshv_root_hvcall args = {0};
+    args.code   = HVCALL_REGISTER_INTERCEPT_RESULT;
+    args.in_sz  = sizeof(in);
+    args.in_ptr = (uint64_t)&in;
+
+    ret = mshv_hvcall(cpu_fd, &args);
     if (ret < 0) {
-        error_report("failed to register intercept result for cpuid: %s",
-                     strerror(errno));
+        error_report("failed to register intercept result for cpuid");
         return -1;
     }
 
     return 0;
 }
 
-static int register_intercept_result_cpuid(int cpu_fd, struct hv_cpuid *cpuid)
+static int register_intercept_result_cpuid(const CPUState *cpu,
+                                           struct hv_cpuid *cpuid)
 {
     int ret = 0, entry_ret;
     struct hv_cpuid_entry *entry;
@@ -589,8 +597,7 @@ static int register_intercept_result_cpuid(int cpu_fd, struct hv_cpuid *cpuid)
             always_override = 1;
         }
 
-        entry_ret = register_intercept_result_cpuid_entry(cpu_fd,
-                                                          subleaf_specific,
+        entry_ret = register_intercept_result_cpuid_entry(cpu, subleaf_specific,
                                                           always_override,
                                                           entry);
         if ((entry_ret < 0) && (ret == 0)) {
@@ -608,7 +615,6 @@ static int set_cpuid2(const CPUState *cpu)
     struct hv_cpuid *cpuid;
     struct hv_cpuid_entry *entry;
     GList *entries = NULL;
-    int cpu_fd = mshv_vcpufd(cpu);
 
     collect_cpuid_entries(cpu, entries);
     n_entries = g_list_length(entries);
@@ -627,7 +633,7 @@ static int set_cpuid2(const CPUState *cpu)
     }
     g_list_free(entries);
 
-    ret = register_intercept_result_cpuid(cpu_fd, cpuid);
+    ret = register_intercept_result_cpuid(cpu, cpuid);
     g_free(cpuid);
     if (ret < 0) {
         return ret;

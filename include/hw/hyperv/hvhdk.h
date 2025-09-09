@@ -184,4 +184,41 @@ typedef struct hv_output_translate_virtual_address {
 	uint64_t gpa_page;
 } hv_output_translate_virtual_address;
 
+struct hv_register_x64_cpuid_result_parameters {
+    struct {
+        uint32_t eax;
+        uint32_t ecx;
+        uint8_t subleaf_specific;
+        uint8_t always_override;
+        uint16_t padding;
+    } input;
+    struct {
+        uint32_t eax;
+        uint32_t eax_mask;
+        uint32_t ebx;
+        uint32_t ebx_mask;
+        uint32_t ecx;
+        uint32_t ecx_mask;
+        uint32_t edx;
+        uint32_t edx_mask;
+    } result;
+};
+
+struct hv_register_x64_msr_result_parameters {
+    uint32_t msr_index;
+    uint32_t access_type;
+    uint32_t action; /* enum hv_unimplemented_msr_action */
+};
+union hv_register_intercept_result_parameters {
+    struct hv_register_x64_cpuid_result_parameters cpuid;
+    struct hv_register_x64_msr_result_parameters msr;
+};
+
+typedef struct hv_input_register_intercept_result {
+	uint64_t partition_id;
+	uint32_t vp_index;
+	uint32_t intercept_type; /* enum hv_intercept_type */
+	union hv_register_intercept_result_parameters parameters;
+} hv_input_register_intercept_result;
+
 #endif

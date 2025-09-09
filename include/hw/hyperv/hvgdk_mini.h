@@ -477,42 +477,6 @@ struct hv_input_assert_virtual_interrupt {
     uint16_t rsvd_z1;
 };
 
-struct hv_register_x64_cpuid_result_parameters {
-    struct {
-        uint32_t eax;
-        uint32_t ecx;
-        uint8_t subleaf_specific;
-        uint8_t always_override;
-        uint16_t padding;
-    } input;
-    struct {
-        uint32_t eax;
-        uint32_t eax_mask;
-        uint32_t ebx;
-        uint32_t ebx_mask;
-        uint32_t ecx;
-        uint32_t ecx_mask;
-        uint32_t edx;
-        uint32_t edx_mask;
-    } result;
-};
-
-struct hv_register_x64_msr_result_parameters {
-    uint32_t msr_index;
-    uint32_t access_type;
-    uint32_t action; /* enum hv_unimplemented_msr_action */
-};
-
-union hv_register_intercept_result_parameters {
-    struct hv_register_x64_cpuid_result_parameters cpuid;
-    struct hv_register_x64_msr_result_parameters msr;
-};
-
-struct mshv_register_intercept_result {
-    uint32_t intercept_type; /* enum hv_intercept_type */
-    union hv_register_intercept_result_parameters parameters;
-};
-
 enum hv_translate_gva_result_code {
     HV_TRANSLATE_GVA_SUCCESS                    = 0,
 
@@ -547,10 +511,6 @@ enum hv_translate_gva_result_code {
 #define MSHV_IRQFD                  _IOW(MSHV_IOCTL, 0x03, struct mshv_user_irqfd)
 #define MSHV_IOEVENTFD              _IOW(MSHV_IOCTL, 0x04, struct mshv_user_ioeventfd)
 #define MSHV_SET_MSI_ROUTING        _IOW(MSHV_IOCTL, 0x05, struct mshv_user_irq_table)
-
-/* TODO: replace with ROOT_HVCALL */
-#define MSHV_VP_REGISTER_INTERCEPT_RESULT \
-        _IOW(MSHV_IOCTL, 0xF3, struct mshv_register_intercept_result)
 
 /*
  ********************************
@@ -876,6 +836,7 @@ struct hv_cpuid {
 #define HVCALL_GET_VP_REGISTERS          0x0050
 #define HVCALL_SET_VP_REGISTERS          0x0051
 #define HVCALL_TRANSLATE_VIRTUAL_ADDRESS 0x0052
+#define HVCALL_REGISTER_INTERCEPT_RESULT 0x0091
 #define HVCALL_ASSERT_VIRTUAL_INTERRUPT  0x0094
 
 #endif

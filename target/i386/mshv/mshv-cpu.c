@@ -131,14 +131,47 @@ static int translate_gva(int cpu_fd, uint64_t gva, uint64_t *gpa,
     return 0;
 }
 
-int mshv_set_generic_regs(int cpu_fd, hv_register_assoc *assocs, size_t n_regs)
+int mshv_set_generic_regs(const CPUState *cpu, const hv_register_assoc *assocs,
+                          size_t n_regs)
 {
-    struct mshv_vp_registers input = {
-        .count = n_regs,
-        .regs = assocs,
-    };
+    int cpu_fd = mshv_vcpufd(cpu);
+    int vp_index = cpu->cpu_index;
+    size_t in_sz, assocs_sz;
+    hv_input_set_vp_registers *in;
+    struct mshv_root_hvcall args = {0};
+    int ret;
 
-    return ioctl(cpu_fd, MSHV_SET_VP_REGISTERS, &input);
+    /* find out the size of the struct w/ a flexible array at the tail */
+    assocs_sz = n_regs * sizeof(hv_register_assoc);
+    in_sz = sizeof(hv_input_set_vp_registers) + assocs_sz;
+
+    /* fill the input struct */
+    in = g_malloc0(in_sz);
+    in->vp_index = vp_index;
+    memcpy(in->elements, assocs, assocs_sz);
+
+    /* create the hvcall envelope */
+    args.code = HVCALL_SET_VP_REGISTERS;
+    args.in_sz = in_sz;
+    args.in_ptr = (uint64_t) in;
+    args.reps = (uint16_t) n_regs;
+
+    /* perform the call */
+    ret = mshv_hvcall(cpu_fd, &args);
+    g_free(in);
+    if (ret < 0) {
+        error_report("Failed to set registers");
+        return -1;
+    }
+
+    /* assert we set all registers */
+    if (args.reps != n_regs) {
+        error_report("Failed to set registers: expected %zu elements"
+                     ", got %u", n_regs, args.reps);
+        return -1;
+    }
+
+    return 0;
 }
 
 static int get_generic_regs(CPUState *cpu, hv_register_assoc *assocs,
@@ -207,7 +240,6 @@ static int set_standard_regs(const CPUState *cpu)
     CPUX86State *env = &x86cpu->env;
     hv_register_assoc assocs[ARRAY_SIZE(STANDARD_REGISTER_NAMES)];
     int ret;
-    int cpu_fd = mshv_vcpufd(cpu);
     size_t n_regs = ARRAY_SIZE(STANDARD_REGISTER_NAMES);
 
     /* set names */
@@ -234,9 +266,9 @@ static int set_standard_regs(const CPUState *cpu)
     lflags_to_rflags(env);
     assocs[17].value.reg64 = env->eflags;
 
-    ret = mshv_set_generic_regs(cpu_fd, assocs, n_regs);
+    ret = mshv_set_generic_regs(cpu, assocs, n_regs);
     if (ret < 0) {
-        error_report("failed to set standard registers");
+        error_report("Failed to set standard registers");
         return -errno;
     }
     return 0;
@@ -624,7 +656,6 @@ static int set_special_regs(const CPUState *cpu)
 {
     X86CPU *x86cpu = X86_CPU(cpu);
     CPUX86State *env = &x86cpu->env;
-    int cpu_fd = mshv_vcpufd(cpu);
     struct hv_register_assoc assocs[ARRAY_SIZE(SPECIAL_REGISTER_NAMES)];
     size_t n_regs = ARRAY_SIZE(SPECIAL_REGISTER_NAMES);
     int ret;
@@ -653,16 +684,16 @@ static int set_special_regs(const CPUState *cpu)
     assocs[15].value.reg64 = env->efer;
     assocs[16].value.reg64 = cpu_get_apic_base(x86cpu->apic_state);
 
-    ret = mshv_set_generic_regs(cpu_fd, assocs, n_regs);
+    ret = mshv_set_generic_regs(cpu, assocs, n_regs);
     if (ret < 0) {
-        error_report("failed to set special registers");
+        error_report("Failed to set special registers");
         return -1;
     }
 
     return 0;
 }
 
-static int set_fpu(int cpu_fd, const struct MshvFPU *regs)
+static int set_fpu(const CPUState *cpu, const struct MshvFPU *regs)
 {
     struct hv_register_assoc assocs[ARRAY_SIZE(FPU_REGISTER_NAMES)];
     union hv_register_value *value;
@@ -705,26 +736,27 @@ static int set_fpu(int cpu_fd, const struct MshvFPU *regs)
     xmm_ctrl_status->xmm_status_control_mask = 0;
     xmm_ctrl_status->last_fp_rdp = regs->last_dp;
 
-    ret = mshv_set_generic_regs(cpu_fd, assocs, n_regs);
+    ret = mshv_set_generic_regs(cpu, assocs, n_regs);
     if (ret < 0) {
-        error_report("failed to set fpu registers");
+        error_report("Failed to set fpu registers");
         return -1;
     }
 
     return 0;
 }
 
-static int set_xc_reg(int cpu_fd, uint64_t xcr0)
+static int set_xc_reg(const CPUState *cpu, uint64_t xcr0)
 {
     int ret;
+
     struct hv_register_assoc assoc = {
         .name = HV_X64_REGISTER_XFEM,
         .value.reg64 = xcr0,
     };
 
-    ret = mshv_set_generic_regs(cpu_fd, &assoc, 1);
+    ret = mshv_set_generic_regs(cpu, &assoc, 1);
     if (ret < 0) {
-        error_report("failed to set xcr0");
+        error_report("Failed to set xcr0");
         return -errno;
     }
     return 0;
@@ -734,7 +766,6 @@ static int set_cpu_state(const CPUState *cpu, const MshvFPU *fpu_regs,
                          uint64_t xcr0)
 {
     int ret;
-    int cpu_fd = mshv_vcpufd(cpu);
 
     ret = set_standard_regs(cpu);
     if (ret < 0) {
@@ -744,11 +775,11 @@ static int set_cpu_state(const CPUState *cpu, const MshvFPU *fpu_regs,
     if (ret < 0) {
         return ret;
     }
-    ret = set_fpu(cpu_fd, fpu_regs);
+    ret = set_fpu(cpu, fpu_regs);
     if (ret < 0) {
         return ret;
     }
-    ret = set_xc_reg(cpu_fd, xcr0);
+    ret = set_xc_reg(cpu, xcr0);
     if (ret < 0) {
         return ret;
     }
@@ -863,7 +894,7 @@ static int set_lint(int cpu_fd)
     return set_lapic(cpu_fd, &lapic_state);
 }
 
-static int setup_msrs(int cpu_fd)
+static int setup_msrs(const CPUState *cpu)
 {
     int ret;
     uint64_t default_type = MSR_MTRR_ENABLE | MSR_MTRR_MEM_TYPE_WB;
@@ -881,9 +912,9 @@ static int setup_msrs(int cpu_fd)
         { .index = IA32_MSR_MTRR_DEF_TYPE, .data = default_type, },
     };
 
-    ret = mshv_configure_msr(cpu_fd, msrs, 9);
+    ret = mshv_configure_msr(cpu, msrs, 9);
     if (ret < 0) {
-        error_report("failed to setup msrs");
+        error_report("Failed to setup msrs");
         return -1;
     }
 
@@ -909,7 +940,7 @@ int mshv_configure_vcpu(const CPUState *cpu, const struct MshvFPU *fpu,
         return -1;
     }
 
-    ret = setup_msrs(cpu_fd);
+    ret = setup_msrs(cpu);
     if (ret < 0) {
         error_report("failed to setup msrs");
         return -1;
@@ -1001,7 +1032,7 @@ static int put_msrs(const CPUState *cpu)
         msrs->nmsrs++;
     }
 
-    ret = mshv_configure_msr(mshv_vcpufd(cpu), &msrs->entries[0], msrs->nmsrs);
+    ret = mshv_configure_msr(cpu, &msrs->entries[0], msrs->nmsrs);
     g_free(msrs);
     return ret;
 }
@@ -1175,7 +1206,7 @@ typedef struct X64Registers {
     uintptr_t count;
 } X64Registers;
 
-static int set_x64_registers(int cpu_fd, const X64Registers *regs)
+static int set_x64_registers(const CPUState *cpu, const X64Registers *regs)
 {
     size_t n_regs = regs->count;
     struct hv_register_assoc *assocs;
@@ -1187,10 +1218,10 @@ static int set_x64_registers(int cpu_fd, const X64Registers *regs)
     }
     int ret;
 
-    ret = mshv_set_generic_regs(cpu_fd, assocs, n_regs);
+    ret = mshv_set_generic_regs(cpu, assocs, n_regs);
     g_free(assocs);
     if (ret < 0) {
-        error_report("failed to set x64 registers");
+        error_report("Failed to set x64 registers");
         return -1;
     }
 
@@ -1240,7 +1271,6 @@ static int handle_pio_non_str(const CPUState *cpu,
     uint64_t reg_values[2];
     struct X64Registers x64_regs = { 0 };
     uint16_t port = info->port_number;
-    int cpu_fd = mshv_vcpufd(cpu);
 
     if (access_type == HV_X64_INTERCEPT_ACCESS_TYPE_WRITE) {
         union {
@@ -1282,7 +1312,7 @@ static int handle_pio_non_str(const CPUState *cpu,
     x64_regs.values = reg_values;
     x64_regs.count = 2;
 
-    ret = set_x64_registers(cpu_fd, &x64_regs);
+    ret = set_x64_registers(cpu, &x64_regs);
     if (ret < 0) {
         error_report("Failed to set x64 registers");
         return -1;
@@ -1436,7 +1466,6 @@ static int handle_pio_str(CPUState *cpu,
     struct X64Registers x64_regs = { 0 };
     X86CPU *x86_cpu = X86_CPU(cpu);
     CPUX86State *env = &x86_cpu->env;
-    int cpu_fd = mshv_vcpufd(cpu);
 
     ret = fetch_guest_state(cpu);
     if (ret < 0) {
@@ -1469,9 +1498,9 @@ static int handle_pio_str(CPUState *cpu,
     x64_regs.values = reg_values;
     x64_regs.count = 2;
 
-    ret = set_x64_registers(cpu_fd, &x64_regs);
+    ret = set_x64_registers(cpu, &x64_regs);
     if (ret < 0) {
-        error_report("Failed to set x64 registers");
+        error_report("failed to set x64 registers");
         return -1;
     }
 

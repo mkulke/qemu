@@ -315,7 +315,7 @@ static int mshv_msr_to_hv_reg_name(uint32_t msr, uint32_t *hv_reg)
     }
 }
 
-static int set_msrs(int cpu_fd, GList *msrs)
+static int set_msrs(const CPUState *cpu, GList *msrs)
 {
     size_t n_msrs;
     GList *entries;
@@ -342,7 +342,7 @@ static int set_msrs(int cpu_fd, GList *msrs)
         assoc->value.reg64 = entry->data;
         i++;
     }
-    ret = mshv_set_generic_regs(cpu_fd, assocs, n_msrs);
+    ret = mshv_set_generic_regs(cpu, assocs, n_msrs);
     g_free(assocs);
     if (ret < 0) {
         error_report("failed to set msrs");
@@ -352,7 +352,8 @@ static int set_msrs(int cpu_fd, GList *msrs)
 }
 
 
-int mshv_configure_msr(int cpu_fd, const MshvMsrEntry *msrs, size_t n_msrs)
+int mshv_configure_msr(const CPUState *cpu, const MshvMsrEntry *msrs,
+                       size_t n_msrs)
 {
     GList *valid_msrs = NULL;
     uint32_t msr_index;
@@ -366,7 +367,7 @@ int mshv_configure_msr(int cpu_fd, const MshvMsrEntry *msrs, size_t n_msrs)
         }
     }
 
-    ret = set_msrs(cpu_fd, valid_msrs);
+    ret = set_msrs(cpu, valid_msrs);
     g_list_free(valid_msrs);
 
     return ret;

@@ -441,6 +441,15 @@ typedef struct hv_input_get_vp_registers {
     __u32 names[];
 } hv_input_get_vp_registers;
 
+typedef struct hv_input_set_vp_registers {
+	__u64 partition_id;
+	__u32 vp_index;
+	union hv_input_vtl input_vtl;
+	__u8  rsvd_z8;
+	__u16 rsvd_z16;
+	struct hv_register_assoc elements[];
+} hv_input_set_vp_registers;
+
 #define MSHV_VP_MAX_REGISTERS   128
 
 struct mshv_vp_registers {
@@ -557,9 +566,7 @@ typedef struct mshv_translate_gva {
 #define MSHV_SET_MSI_ROUTING        _IOW(MSHV_IOCTL, 0x05, struct mshv_user_irq_table)
 
 /* TODO: replace with ROOT_HVCALL */
-#define MSHV_SET_VP_REGISTERS       _IOW(MSHV_IOCTL, 0xF1, struct mshv_vp_registers)
 #define MSHV_TRANSLATE_GVA          _IOWR(MSHV_IOCTL, 0xF2, struct mshv_translate_gva)
-
 #define MSHV_VP_REGISTER_INTERCEPT_RESULT \
         _IOW(MSHV_IOCTL, 0xF3, struct mshv_register_intercept_result)
 

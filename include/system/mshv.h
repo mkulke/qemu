@@ -143,7 +143,7 @@ void mshv_pio_read(uint64_t port, uint8_t *data, uintptr_t size,
                    bool is_secure_mode);
 
 /* generic */
-int mshv_hvcall(int mshv_fd, const struct mshv_root_hvcall *args);
+int mshv_hvcall(int fd, const struct mshv_root_hvcall *args);
 
 /* msr */
 typedef struct MshvMsrEntry {

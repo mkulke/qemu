@@ -379,11 +379,12 @@ static void register_mshv_memory_listener(MshvState *s, MshvMemoryListener *mml,
     }
 }
 
-int mshv_hvcall(int vm_fd, const struct mshv_root_hvcall *args)
+/* fd can be vm_fd or cpu_fd */
+int mshv_hvcall(int fd, const struct mshv_root_hvcall *args)
 {
     int ret = 0;
 
-    ret = ioctl(vm_fd, MSHV_ROOT_HVCALL, args);
+    ret = ioctl(fd, MSHV_ROOT_HVCALL, args);
     if (ret < 0) {
         error_report("Failed to perform hvcall: %s", strerror(errno));
         return -1;

@@ -393,7 +393,7 @@ union hv_intercept_suspend_register {
     };
 };
 
-union hv_register_value {
+typedef union hv_register_value {
     struct hv_u128 reg128;
     uint64_t reg64;
     uint32_t reg32;
@@ -414,7 +414,7 @@ union hv_register_value {
     union hv_x64_pending_virtualization_fault_event
         pending_virtualization_fault_event;
     union hv_x64_register_sev_control sev_control;
-};
+} hv_register_value;
 
 typedef struct hv_register_assoc {
     uint32_t name;         /* enum hv_register_name */
@@ -422,6 +422,24 @@ typedef struct hv_register_assoc {
     uint64_t reserved2;
     union hv_register_value value;
 } hv_register_assoc;
+
+union hv_input_vtl {
+    __u8 as_uint8;
+    struct {
+        __u8 target_vtl : 4;
+        __u8 use_target_vtl : 1;
+        __u8 reserved_z : 3;
+    };
+};
+
+typedef struct hv_input_get_vp_registers {
+    __u64 partition_id;
+    __u32 vp_index;
+    union hv_input_vtl input_vtl;
+    __u8  rsvd_z8;
+    __u16 rsvd_z16;
+    __u32 names[];
+} hv_input_get_vp_registers;
 
 #define MSHV_VP_MAX_REGISTERS   128
 
@@ -539,7 +557,6 @@ typedef struct mshv_translate_gva {
 #define MSHV_SET_MSI_ROUTING        _IOW(MSHV_IOCTL, 0x05, struct mshv_user_irq_table)
 
 /* TODO: replace with ROOT_HVCALL */
-#define MSHV_GET_VP_REGISTERS       _IOWR(MSHV_IOCTL, 0xF0, struct mshv_vp_registers)
 #define MSHV_SET_VP_REGISTERS       _IOW(MSHV_IOCTL, 0xF1, struct mshv_vp_registers)
 #define MSHV_TRANSLATE_GVA          _IOWR(MSHV_IOCTL, 0xF2, struct mshv_translate_gva)
 

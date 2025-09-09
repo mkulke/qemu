@@ -141,17 +141,65 @@ int mshv_set_generic_regs(int cpu_fd, hv_register_assoc *assocs, size_t n_regs)
     return ioctl(cpu_fd, MSHV_SET_VP_REGISTERS, &input);
 }
 
-static int get_generic_regs(int cpu_fd, struct hv_register_assoc *assocs,
+static int get_generic_regs(CPUState *cpu, hv_register_assoc *assocs,
                             size_t n_regs)
 {
-    struct mshv_vp_registers input = {
-        .count = n_regs,
-        .regs = assocs,
-    };
+    int cpu_fd = mshv_vcpufd(cpu);
+    int vp_index = cpu->cpu_index;
+    hv_input_get_vp_registers *in;
+    hv_register_value *values;
+    size_t in_sz, names_sz, values_sz;
+    int i, ret;
+    struct mshv_root_hvcall args = {0};
 
-    return ioctl(cpu_fd, MSHV_GET_VP_REGISTERS, &input);
+    /* find out the size of the struct w/ a flexible array at the tail */
+    names_sz = n_regs * sizeof(hv_register_name);
+    in_sz = sizeof(hv_input_get_vp_registers) + names_sz;
+
+    /* fill the input struct */
+    in = g_malloc0(in_sz);
+    in->vp_index = vp_index;
+    for (i = 0; i < n_regs; i++) {
+        in->names[i] = assocs[i].name;
+    }
+
+    /* allocate value output buffer */
+    values_sz = n_regs * sizeof(union hv_register_value);
+    values = g_malloc0(values_sz);
+
+    /* create the hvcall envelope */
+    args.code = HVCALL_GET_VP_REGISTERS;
+    args.in_sz = in_sz;
+    args.in_ptr = (uint64_t) in;
+    args.out_sz = values_sz;
+    args.out_ptr = (uint64_t) values;
+    args.reps = (uint16_t) n_regs;
+
+    /* perform the call */
+    ret = mshv_hvcall(cpu_fd, &args);
+    g_free(in);
+    if (ret < 0) {
+        g_free(values);
+        error_report("Failed to retrieve registers");
+        return -1;
+    }
+
+    /* assert we got all registers */
+    if (args.reps != n_regs) {
+        g_free(values);
+        error_report("Failed to retrieve registers: expected %zu elements"
+                     ", got %u", n_regs, args.reps);
+        return -1;
+    }
+
+    /* copy values into assoc */
+    for (i = 0; i < n_regs; i++) {
+        assocs[i].value = values[i];
+    }
+    g_free(values);
+
+    return 0;
 }
-
 
 static int set_standard_regs(const CPUState *cpu)
 {
@@ -238,13 +286,12 @@ int mshv_get_standard_regs(CPUState *cpu)
     int ret;
     X86CPU *x86cpu = X86_CPU(cpu);
     CPUX86State *env = &x86cpu->env;
-    int cpu_fd = mshv_vcpufd(cpu);
     size_t n_regs = ARRAY_SIZE(STANDARD_REGISTER_NAMES);
 
     for (size_t i = 0; i < n_regs; i++) {
         assocs[i].name = STANDARD_REGISTER_NAMES[i];
     }
-    ret = get_generic_regs(cpu_fd, assocs, n_regs);
+    ret = get_generic_regs(cpu, assocs, n_regs);
     if (ret < 0) {
         error_report("failed to get standard registers");
         return -1;
@@ -317,13 +364,13 @@ int mshv_get_special_regs(CPUState *cpu)
     struct hv_register_assoc assocs[ARRAY_SIZE(SPECIAL_REGISTER_NAMES)];
     int ret;
     X86CPU *x86cpu = X86_CPU(cpu);
-    int cpu_fd = mshv_vcpufd(cpu);
     size_t n_regs = ARRAY_SIZE(SPECIAL_REGISTER_NAMES);
 
     for (size_t i = 0; i < n_regs; i++) {
         assocs[i].name = SPECIAL_REGISTER_NAMES[i];
     }
-    ret = get_generic_regs(cpu_fd, assocs, n_regs);
+    ret = get_generic_regs(cpu, assocs, n_regs);
+
     if (ret < 0) {
         error_report("failed to get special registers");
         return -errno;

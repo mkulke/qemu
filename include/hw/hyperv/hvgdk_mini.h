@@ -442,12 +442,12 @@ typedef struct hv_input_get_vp_registers {
 } hv_input_get_vp_registers;
 
 typedef struct hv_input_set_vp_registers {
-	__u64 partition_id;
-	__u32 vp_index;
-	union hv_input_vtl input_vtl;
-	__u8  rsvd_z8;
-	__u16 rsvd_z16;
-	struct hv_register_assoc elements[];
+    __u64 partition_id;
+    __u32 vp_index;
+    union hv_input_vtl input_vtl;
+    __u8  rsvd_z8;
+    __u16 rsvd_z16;
+    struct hv_register_assoc elements[];
 } hv_input_set_vp_registers;
 
 #define MSHV_VP_MAX_REGISTERS   128
@@ -537,23 +537,6 @@ enum hv_translate_gva_result_code {
     HV_TRANSLATE_GVA_GPA_UNACCEPTED             = 9,
 };
 
-union hv_translate_gva_result {
-    uint64_t as_uint64;
-    struct {
-        uint32_t result_code; /* enum hv_translate_hva_result_code */
-        uint32_t cache_type:8;
-        uint32_t overlay_page:1;
-        uint32_t reserved:23;
-    };
-};
-
-typedef struct mshv_translate_gva {
-    uint64_t gva;
-    uint64_t flags;
-    union hv_translate_gva_result *result;
-    uint64_t *gpa;
-} mshv_translate_gva;
-
 /* /dev/mshv */
 #define MSHV_CREATE_PARTITION   _IOW(MSHV_IOCTL, 0x00, struct mshv_create_partition)
 #define MSHV_CREATE_VP          _IOW(MSHV_IOCTL, 0x01, struct mshv_create_vp)
@@ -566,7 +549,6 @@ typedef struct mshv_translate_gva {
 #define MSHV_SET_MSI_ROUTING        _IOW(MSHV_IOCTL, 0x05, struct mshv_user_irq_table)
 
 /* TODO: replace with ROOT_HVCALL */
-#define MSHV_TRANSLATE_GVA          _IOWR(MSHV_IOCTL, 0xF2, struct mshv_translate_gva)
 #define MSHV_VP_REGISTER_INTERCEPT_RESULT \
         _IOW(MSHV_IOCTL, 0xF3, struct mshv_register_intercept_result)
 
@@ -884,5 +866,16 @@ struct hv_cpuid {
 #define HV_TRANSLATE_GVA_VALIDATE_READ       (0x0001)
 #define HV_TRANSLATE_GVA_VALIDATE_WRITE      (0x0002)
 #define HV_TRANSLATE_GVA_VALIDATE_EXECUTE    (0x0004)
+
+#define HV_HYP_PAGE_SHIFT       12
+#define HV_HYP_PAGE_SIZE        BIT(HV_HYP_PAGE_SHIFT)
+#define HV_HYP_PAGE_MASK        (~(HV_HYP_PAGE_SIZE - 1))
+
+#define HVCALL_GET_PARTITION_PROPERTY    0x0044
+#define HVCALL_SET_PARTITION_PROPERTY    0x0045
+#define HVCALL_GET_VP_REGISTERS          0x0050
+#define HVCALL_SET_VP_REGISTERS          0x0051
+#define HVCALL_TRANSLATE_VIRTUAL_ADDRESS 0x0052
+#define HVCALL_ASSERT_VIRTUAL_INTERRUPT  0x0094
 
 #endif

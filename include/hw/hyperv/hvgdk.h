@@ -8,7 +8,7 @@
 #ifndef _HVGDK_H
 #define _HVGDK_H
 
-#define HVGDK_H_VERSION         (25125)
+#define HVGDK_H_VERSION         (25212)
 
 enum hv_unimplemented_msr_action {
     HV_UNIMPLEMENTED_MSR_ACTION_FAULT = 0,

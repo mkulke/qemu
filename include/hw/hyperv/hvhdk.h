@@ -161,4 +161,27 @@ union hv_partition_synthetic_processor_features {
     };
 };
 
+union hv_translate_gva_result {
+    uint64_t as_uint64;
+    struct {
+        uint32_t result_code; /* enum hv_translate_hva_result_code */
+        uint32_t cache_type:8;
+        uint32_t overlay_page:1;
+        uint32_t reserved:23;
+    };
+};
+
+typedef struct hv_input_translate_virtual_address {
+	uint64_t partition_id;
+	uint32_t vp_index;
+	uint32_t padding;
+	uint64_t control_flags;
+	uint64_t gva_page;
+} hv_input_translate_virtual_address;
+
+typedef struct hv_output_translate_virtual_address {
+	union hv_translate_gva_result translation_result;
+	uint64_t gpa_page;
+} hv_output_translate_virtual_address;
+
 #endif

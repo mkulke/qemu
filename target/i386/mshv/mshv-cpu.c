@@ -103,30 +103,42 @@ static enum hv_register_name FPU_REGISTER_NAMES[26] = {
     HV_X64_REGISTER_XMM_CONTROL_STATUS,
 };
 
-static int translate_gva(int cpu_fd, uint64_t gva, uint64_t *gpa,
+static int translate_gva(const CPUState *cpu, uint64_t gva, uint64_t *gpa,
                          uint64_t flags)
 {
+    int cpu_fd = mshv_vcpufd(cpu);
+    int vp_index = cpu->cpu_index;
     int ret;
-    union hv_translate_gva_result result = { 0 };
+    hv_input_translate_virtual_address in = { 0 };
+    hv_output_translate_virtual_address out = { 0 };
+    struct mshv_root_hvcall args = {0};
+    uint64_t gva_page = gva >> HV_HYP_PAGE_SHIFT;
 
-    *gpa = 0;
-    mshv_translate_gva args = {
-        .gva = gva,
-        .flags = flags,
-        .gpa = gpa,
-        .result = &result,
-    };
+    in.vp_index = vp_index;
+    in.control_flags = flags;
+    in.gva_page = gva_page;
 
-    ret = ioctl(cpu_fd, MSHV_TRANSLATE_GVA, &args);
+    /* create the hvcall envelope */
+    args.code = HVCALL_TRANSLATE_VIRTUAL_ADDRESS;
+    args.in_sz = sizeof(in);
+    args.in_ptr = (uint64_t) &in;
+    args.out_sz = sizeof(out);
+    args.out_ptr = (uint64_t) &out;
+
+    /* perform the call */
+    ret = mshv_hvcall(cpu_fd, &args);
     if (ret < 0) {
-        error_report("failed to invoke gpa->gva translation");
-        return -errno;
-    }
-    if (result.result_code != HV_TRANSLATE_GVA_SUCCESS) {
-        error_report("failed to translate gva (" TARGET_FMT_lx ") to gpa", gva);
+        error_report("Failed to invoke gva->gpa translation");
         return -1;
-
     }
+
+    if (out.translation_result.result_code != HV_TRANSLATE_GVA_SUCCESS) {
+        error_report("Failed to translate gva (" TARGET_FMT_lx ") to gpa", gva);
+        return -1;
+    }
+
+    *gpa = ((out.gpa_page << HV_HYP_PAGE_SHIFT)
+         | (gva & ~(uint64_t)HV_HYP_PAGE_MASK));
 
     return 0;
 }
@@ -1342,8 +1354,9 @@ static int fetch_guest_state(CPUState *cpu)
     return 0;
 }
 
-static int read_memory(int cpu_fd, uint64_t initial_gva, uint64_t initial_gpa,
-                       uint64_t gva, uint8_t *data, size_t len)
+static int read_memory(const CPUState *cpu, uint64_t initial_gva,
+                       uint64_t initial_gpa, uint64_t gva, uint8_t *data,
+                       size_t len)
 {
     int ret;
     uint64_t gpa, flags;
@@ -1352,7 +1365,7 @@ static int read_memory(int cpu_fd, uint64_t initial_gva, uint64_t initial_gpa,
         gpa = initial_gpa;
     } else {
         flags = HV_TRANSLATE_GVA_VALIDATE_READ;
-        ret = translate_gva(cpu_fd, gva, &gpa, flags);
+        ret = translate_gva(cpu, gva, &gpa, flags);
         if (ret < 0) {
             return -1;
         }
@@ -1367,8 +1380,9 @@ static int read_memory(int cpu_fd, uint64_t initial_gva, uint64_t initial_gpa,
     return 0;
 }
 
-static int write_memory(int cpu_fd, uint64_t initial_gva, uint64_t initial_gpa,
-                        uint64_t gva, const uint8_t *data, size_t len)
+static int write_memory(const CPUState *cpu, uint64_t initial_gva,
+                        uint64_t initial_gpa, uint64_t gva, const uint8_t *data,
+                        size_t len)
 {
     int ret;
     uint64_t gpa, flags;
@@ -1377,7 +1391,7 @@ static int write_memory(int cpu_fd, uint64_t initial_gva, uint64_t initial_gpa,
         gpa = initial_gpa;
     } else {
         flags = HV_TRANSLATE_GVA_VALIDATE_WRITE;
-        ret = translate_gva(cpu_fd, gva, &gpa, flags);
+        ret = translate_gva(cpu, gva, &gpa, flags);
         if (ret < 0) {
             error_report("failed to translate gva to gpa");
             return -1;
@@ -1401,12 +1415,11 @@ static int handle_pio_str_write(CPUState *cpu,
     uint64_t src;
     uint8_t data[4] = { 0 };
     size_t len = info->access_info.access_size;
-    int cpu_fd = mshv_vcpufd(cpu);
 
     src = linear_addr(cpu, info->rsi, R_DS);
 
     for (size_t i = 0; i < repeat; i++) {
-        ret = read_memory(cpu_fd, 0, 0, src, data, len);
+        ret = read_memory(cpu, 0, 0, src, data, len);
         if (ret < 0) {
             error_report("Failed to read memory");
             return -1;
@@ -1424,22 +1437,21 @@ static int handle_pio_str_write(CPUState *cpu,
 }
 
 static int handle_pio_str_read(CPUState *cpu,
-                                hv_x64_io_port_intercept_message *info,
-                                size_t repeat, uint16_t port,
-                                bool direction_flag)
+                               hv_x64_io_port_intercept_message *info,
+                               size_t repeat, uint16_t port,
+                               bool direction_flag)
 {
     int ret;
     uint64_t dst;
     size_t len = info->access_info.access_size;
     uint8_t data[4] = { 0 };
-    int cpu_fd = mshv_vcpufd(cpu);
 
     dst = linear_addr(cpu, info->rdi, R_ES);
 
     for (size_t i = 0; i < repeat; i++) {
         pio_read(port, data, len, false);
 
-        ret = write_memory(cpu_fd, 0, 0, dst, data, len);
+        ret = write_memory(cpu, 0, 0, dst, data, len);
         if (ret < 0) {
             error_report("Failed to write memory");
             return -1;
@@ -1598,10 +1610,9 @@ static int guest_mem_read_with_gva(const CPUState *cpu, uint64_t gva,
 {
     int ret;
     uint64_t gpa, flags;
-    int cpu_fd = mshv_vcpufd(cpu);
 
     flags = HV_TRANSLATE_GVA_VALIDATE_READ;
-    ret = translate_gva(cpu_fd, gva, &gpa, flags);
+    ret = translate_gva(cpu, gva, &gpa, flags);
     if (ret < 0) {
         error_report("failed to translate gva to gpa");
         return -1;
@@ -1621,10 +1632,9 @@ static int guest_mem_write_with_gva(const CPUState *cpu, uint64_t gva,
 {
     int ret;
     uint64_t gpa, flags;
-    int cpu_fd = mshv_vcpufd(cpu);
 
     flags = HV_TRANSLATE_GVA_VALIDATE_WRITE;
-    ret = translate_gva(cpu_fd, gva, &gpa, flags);
+    ret = translate_gva(cpu, gva, &gpa, flags);
     if (ret < 0) {
         error_report("failed to translate gva to gpa");
         return -1;

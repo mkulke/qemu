@@ -4,6 +4,7 @@ on:
   push:
     branches:
     - mkulke/patches/v3/20250806
+    - mkulke/replace-ioctls-with-hvrootcalls
   pull_request:
     branches:
     - mkulke/patches/v3/20250806

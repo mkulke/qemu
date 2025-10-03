@@ -1121,13 +1121,15 @@ static int emulate_instruction(CPUState *cpu,
     return 0;
 }
 
-static int handle_mmio(CPUState *cpu, const struct hyperv_message *msg,
+static int handle_mmio(int vm_fd, CPUState *cpu, const struct hyperv_message *msg,
                        MshvVmExit *exit_reason)
 {
     struct hv_x64_memory_intercept_message info = { 0 };
     size_t insn_len;
     uint8_t access_type;
     uint8_t *instruction_bytes;
+    enum MshvRemapResult remap_result;
+    uint64_t gpa;
     int ret;
 
     ret = set_memory_info(msg, &info);
@@ -1139,8 +1141,23 @@ static int handle_mmio(CPUState *cpu, const struct hyperv_message *msg,
     access_type = info.header.intercept_access_type;
 
     if (access_type == HV_X64_INTERCEPT_ACCESS_TYPE_EXECUTE) {
-        error_report("invalid intercept access type: execute");
-        return -1;
+        warn_report("invalid intercept access type: execute");
+        gpa = info.guest_physical_address;
+
+        /* attempt to remap the region, in case of overlapping userspace mappings */
+        remap_result = mshv_remap_overlap_region(vm_fd, gpa);
+        *exit_reason = MshvVmExitIgnore;
+
+        switch (remap_result) {
+        case MshvRemapOk:
+            return 0;
+        case MshvRemapNoMapping:
+        case MshvRemapNoOverlap:
+            /* This should not happen */
+            error_report("found no overlap for unmapped region");
+            *exit_reason = MshvVmExitSpecial;
+            return -1;
+        }
     }
 
     if (insn_len > 16) {
@@ -1191,7 +1208,7 @@ static int handle_unmapped_mem(int vm_fd, CPUState *cpu,
     switch (remap_result) {
     case MshvRemapNoMapping:
         /* if we didn't find a mapping, it is probably mmio */
-        return handle_mmio(cpu, msg, exit_reason);
+        return handle_mmio(vm_fd, cpu, msg, exit_reason);
     case MshvRemapOk:
         break;
     case MshvRemapNoOverlap:
@@ -1548,7 +1565,7 @@ int mshv_run_vcpu(int vm_fd, CPUState *cpu, hv_message *msg, MshvVmExit *exit)
         }
         return exit_reason;
     case HVMSG_GPA_INTERCEPT:
-        ret = handle_mmio(cpu, msg, &exit_reason);
+        ret = handle_mmio(vm_fd, cpu, msg, &exit_reason);
         if (ret < 0) {
             error_report("failed to handle mmio");
             return -1;

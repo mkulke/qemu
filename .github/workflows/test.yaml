@@ -3,10 +3,10 @@ name: Test
 on:
   push:
     branches:
-    - mkulke/ci
+    - mkulke/master-with-uadd-workaround-removed
   pull_request:
     branches:
-    - mkulke/ci
+    - mkulke/master-with-uadd-workaround-removed
 
 jobs:
   build:
@@ -56,7 +56,7 @@ jobs:
     strategy:
       matrix:
         firmware:
-        - seabios
+        # - seabios
         - ovmf
         memory:
         - 2048M

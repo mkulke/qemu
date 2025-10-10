@@ -186,8 +186,8 @@ void mshv_set_phys_mem(MshvMemoryListener *mml, MemoryRegionSection *section,
     if (!memory_region_is_ram(area)) {
         if (writable) {
             return;
-        } else if (!area->romd_mode) {
-            add = false;
+        /* } else if (!area->romd_mode) { */
+        /*     add = false; */
         }
     }
 

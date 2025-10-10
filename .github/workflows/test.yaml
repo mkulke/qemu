@@ -1,0 +1,200 @@
+name: Test
+
+on:
+  push:
+    branches:
+      - mkulke/cpu_host
+
+jobs:
+  build:
+    runs-on:
+    - "mshv"
+    - "6.6.116"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: |
+          mkdir -p install
+          ./configure \
+            --target-list=x86_64-softmmu \
+            --disable-xen \
+            --disable-vnc-jpeg \
+            --enable-mshv \
+            --disable-gtk \
+            --prefix="${PWD}/install"
+
+      - name: Cache build directory
+        uses: actions/cache@v4
+        with:
+          path: build
+          key: qemu-build-${{ github.sha }}
+          restore-keys: qemu-build-
+
+      - name: Build and install
+        run: |
+          cd build
+          make -j
+          make install
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-build
+          path: |
+            non-existing-file-to-keep-directory-structure.😑
+            install
+
+  test:
+    needs: build
+    runs-on:
+    - "self-hosted"
+    - "mshv"
+    - "6.6.116"
+    env:
+      UBUNTU_URL: https://cloud-images.ubuntu.com/minimal/releases/noble/release/ubuntu-24.04-minimal-cloudimg-amd64.img
+      FEDORA_URL: https://download.fedoraproject.org/pub/fedora/linux/releases/42/Cloud/x86_64/images/Fedora-Cloud-Base-UEFI-UKI-42-1.1.x86_64.qcow2
+      IMAGE_DIR: /tmp/images
+    strategy:
+      matrix:
+        cpu:
+        - host
+        - qemu64
+        firmware:
+        - seabios
+        # - ovmf
+        memory:
+        - 2048M
+        - 4096M
+        cpus:
+        - 1
+        - 2
+        distribution:
+        - ubuntu
+        - fedora
+        machine:
+        - q35
+        - pc
+        iothreads:
+        - enabled
+        - disabled
+        exclude:
+        - cpus: 1
+          iothreads: enabled
+        - firmware: seabios
+          distribution: fedora
+        - firmware: ovmf
+          machine: pc
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: qemu-build
+          path: .
+
+      - name: Download OS image
+        env:
+          OS_URL: ${{ matrix.distribution == 'ubuntu' && env.UBUNTU_URL || env.FEDORA_URL }}
+          DISTRIBUTION: ${{ matrix.distribution }}
+        run: |
+          mkdir -p "$IMAGE_DIR"
+          cd "$IMAGE_DIR"
+          wget -N "$OS_URL"
+          ln -sf "$PWD/$(basename "$OS_URL")" "${IMAGE_DIR}/${DISTRIBUTION}.qcow2"
+
+      - name: Create SSH keypair
+        run: ssh-keygen -t rsa -b 4096 -f qemu_ssh -N ""
+
+      - name: Create cloud-init ISO
+        run: |
+          mkdir -p cidata
+          cd cidata
+          cat <<EOF> user-data
+          #cloud-config
+          users:
+          - name: cloud
+            sudo: ALL=(ALL) NOPASSWD:ALL
+            lock_passwd: false
+            ssh-authorized-keys:
+            - $(ssh-keygen -y -f ../qemu_ssh)
+          EOF
+          cat <<EOF> network-config
+          version: 2
+          ethernets:
+            eth0:
+              match:
+                macaddress: 00:10:20:30:40:50
+              dhcp4: true
+          EOF
+          cat <<EOF> meta-data
+          instance-id: qemu-ci
+          local-hostname: qemu-ci
+          EOF
+          genisoimage -output "${IMAGE_DIR}/cidata.raw" -volid cidata -joliet -rock \
+            user-data \
+            meta-data \
+            network-config
+          cd ..
+          echo "CI_IMG=${IMAGE_DIR}/cidata.raw" >> "$GITHUB_ENV"
+
+      - name: Launch QEMU
+        env:
+          PID_FILE: qemu-${{matrix.firmware}}.pid
+          QEMU_BIN: install/bin/qemu-system-x86_64
+          CPUS: ${{ matrix.cpus }}
+          MEMORY: ${{ matrix.memory }}
+          FIRMWARE: ${{ matrix.firmware }}
+          DISK_IMG: ${{ env.IMAGE_DIR }}/${{ matrix.distribution }}.qcow2
+          MACHINE: ${{ matrix.machine }}
+          IOTHREADS: ${{ matrix.iothreads == 'enabled' && 'io0' || '' }}
+          OS_URL: ${{ matrix.distribution == 'ubuntu' && env.UBUNTU_URL || env.FEDORA_URL }}
+          CPU: ${{ matrix.cpu }}
+        run: |
+          chmod +x "$QEMU_BIN"
+          cmd=("$QEMU_BIN"
+               -machine   "$MACHINE"
+               -drive     "file=$DISK_IMG,format=qcow2,if=none,id=osdisk,snapshot=on"
+               -device    "virtio-blk-pci,drive=osdisk${IOTHREADS:+,iothread=$IOTHREADS}"
+               -drive     "file=$CI_IMG,format=raw,if=none,id=cidata"
+               -device    "virtio-blk-pci,drive=cidata"
+               -m         "$MEMORY"
+               -netdev    "type=user,id=user-net,hostfwd=tcp::2222-:22"
+               -device    "virtio-net,mac=00:10:20:30:40:50,netdev=user-net"
+               -accel      mshv
+               -smp       "cpus=$CPUS"
+               -serial    "file:serial.log"
+               -rtc       "clock=vm"
+               -cpu       "$CPU"
+               -daemonize
+               -pidfile   "$PID_FILE")
+          if [[ -n "$IOTHREADS" ]]; then
+            cmd+=(-object   "iothread,id=${IOTHREADS}")
+          fi
+          if [[ "$FIRMWARE" == "ovmf" ]]; then
+            cp /usr/share/OVMF/OVMF_VARS.fd .
+            cmd+=(-drive  "if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE.fd"
+                  -drive  "if=pflash,format=raw,file=OVMF_VARS.fd")
+          fi
+          exec "${cmd[@]}"
+
+      - name: Sleep
+        run: sleep 30
+
+      - name: SSH into VM
+        run: |
+          ssh -p 2222 -i ./qemu_ssh \
+            -o PasswordAuthentication=no \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            cloud@localhost whoami
+
+      - name: Terminate QEMU
+        if: always()
+        env:
+          PID_FILE: qemu-${{matrix.firmware}}.pid
+        run: |
+          kill -9 "$(cat "$PID_FILE")"
+          timeout 5 tail --pid="$(cat "$PID_FILE")" -f /dev/null

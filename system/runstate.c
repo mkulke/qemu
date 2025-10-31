@@ -33,6 +33,7 @@
 #include "gdbstub/syscalls.h"
 #include "hw/boards.h"
 #include "hw/resettable.h"
+#include "hw/vfio/vfio-device.h"
 #include "migration/misc.h"
 #include "migration/postcopy-ram.h"
 #include "monitor/monitor.h"
@@ -955,6 +956,13 @@ void qemu_init_subsystems(void)
     socket_init();
 }
 
+static void vfio_cleanup(void)
+{
+    VFIODevice *vdev;
+    QLIST_FOREACH(vdev, &vfio_device_list, global_next) {
+        vfio_device_detach(vdev);
+    }
+}
 
 void qemu_cleanup(int status)
 {
@@ -991,6 +999,8 @@ void qemu_cleanup(int status)
     bdrv_drain_all_begin();
     job_cancel_sync_all();
     bdrv_close_all();
+
+    vfio_cleanup();
 
     /* vhost-user must be cleaned up before chardevs.  */
     tpm_cleanup();

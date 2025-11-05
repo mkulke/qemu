@@ -20,13 +20,41 @@
  */
 
 #include "qemu/osdep.h"
+#include "qemu/error-report.h"
 #include <sys/ioctl.h>
 
 #include "system/kvm.h"
+#include "system/mshv.h"
+#include "system/mshv_int.h"
 #include "hw/vfio/vfio-device.h"
 #include "hw/hw.h"
 #include "qapi/error.h"
 #include "vfio-helpers.h"
+
+#define MSHV_DEV_VFIO_FILE            1
+#define MSHV_DEV_VFIO_FILE_ADD        1
+#define MSHV_DEV_VFIO_FILE_DEL        2
+
+#define MSHV_CREATE_DEVICE   _IOWR(MSHV_IOCTL, 0x08, struct mshv_create_device)
+#define MSHV_SET_DEVICE_ATTR	_IOW(MSHV_IOCTL, 0x00, struct mshv_device_attr)
+
+enum {
+	MSHV_DEV_TYPE_VFIO,
+	MSHV_DEV_TYPE_MAX,
+};
+
+typedef struct mshv_create_device {
+    uint32_t type;
+    uint32_t fd;
+    uint32_t flags;
+} mshv_create_device;
+
+typedef struct mshv_device_attr {
+    uint32_t flags;
+    uint32_t group;
+    uint64_t attr;
+    uint64_t addr;
+} mshv_device_attr;
 
 int vfio_bitmap_alloc(VFIOBitmap *vbmap, hwaddr size)
 {
@@ -130,6 +158,36 @@ void vfio_kvm_device_close(void)
 
 int vfio_kvm_device_add_fd(int fd, Error **errp)
 {
+#ifdef CONFIG_MSHV_IS_POSSIBLE
+    int vm_fd = mshv_state->vm;
+    int ret, device_fd;
+
+    struct mshv_create_device create = {
+        .type  = MSHV_DEV_TYPE_VFIO,
+        .flags = 0,
+    };
+
+    ret = ioctl(vm_fd, MSHV_CREATE_DEVICE, &create);
+    if (ret < 0) {
+        error_report("Failed to create MSHV VFIO device: %s", strerror(errno));
+        return -errno;
+    }
+
+    device_fd = create.fd;
+
+    struct mshv_device_attr set_attr = {
+        .flags = 0,
+        .group = MSHV_DEV_VFIO_FILE,
+        .attr  = MSHV_DEV_VFIO_FILE_ADD,
+        .addr  = (uint64_t)(unsigned long)&fd,
+    };
+
+    ret = ioctl(device_fd, MSHV_SET_DEVICE_ATTR, &set_attr);
+    if (ret < 0) {
+        error_report("Failed to set MSHV VFIO attr: %s", strerror(errno));
+        return -errno;
+    }
+#endif
 #ifdef CONFIG_KVM
     struct kvm_device_attr attr = {
         .group = KVM_DEV_VFIO_FILE,

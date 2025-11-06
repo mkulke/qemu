@@ -38,6 +38,7 @@
 #include "qemu/module.h"
 #include "qemu/range.h"
 #include "qemu/units.h"
+#include "system/accel-irq.h"
 #include "system/kvm.h"
 #include "system/runstate.h"
 #include "pci.h"
@@ -572,8 +573,8 @@ void vfio_pci_add_kvm_msi_virq(VFIOPCIDevice *vdev, VFIOMSIVector *vector,
         return;
     }
 
-    vector->virq = kvm_irqchip_add_msi_route(&vfio_route_change,
-                                             vector_n, pdev);
+    vector->virq = accel_irqchip_add_msi_route(&vfio_route_change,
+                                               vector_n, pdev);
 }
 
 static void vfio_connect_kvm_msi_virq(VFIOMSIVector *vector, int nr)
@@ -589,8 +590,8 @@ static void vfio_connect_kvm_msi_virq(VFIOMSIVector *vector, int nr)
         goto fail_notifier;
     }
 
-    if (kvm_irqchip_add_irqfd_notifier_gsi(kvm_state, &vector->kvm_interrupt,
-                                           NULL, vector->virq) < 0) {
+    if (accel_irqchip_add_irqfd_notifier_gsi(&vector->kvm_interrupt, NULL,
+                                             vector->virq) < 0) {
         goto fail_kvm;
     }
 
@@ -599,16 +600,16 @@ static void vfio_connect_kvm_msi_virq(VFIOMSIVector *vector, int nr)
 fail_kvm:
     vfio_notifier_cleanup(vector->vdev, &vector->kvm_interrupt, name, nr);
 fail_notifier:
-    kvm_irqchip_release_virq(kvm_state, vector->virq);
+    accel_irqchip_release_virq(vector->virq);
     vector->virq = -1;
 }
 
 static void vfio_remove_kvm_msi_virq(VFIOPCIDevice *vdev, VFIOMSIVector *vector,
                                      int nr)
 {
-    kvm_irqchip_remove_irqfd_notifier_gsi(kvm_state, &vector->kvm_interrupt,
-                                          vector->virq);
-    kvm_irqchip_release_virq(kvm_state, vector->virq);
+    accel_irqchip_remove_irqfd_notifier_gsi(&vector->kvm_interrupt,
+                                            vector->virq);
+    accel_irqchip_release_virq(vector->virq);
     vector->virq = -1;
     vfio_notifier_cleanup(vdev, &vector->kvm_interrupt, "kvm_interrupt", nr);
 }
@@ -616,8 +617,8 @@ static void vfio_remove_kvm_msi_virq(VFIOPCIDevice *vdev, VFIOMSIVector *vector,
 static void vfio_update_kvm_msi_virq(VFIOMSIVector *vector, MSIMessage msg,
                                      PCIDevice *pdev)
 {
-    kvm_irqchip_update_msi_route(kvm_state, vector->virq, msg, pdev);
-    kvm_irqchip_commit_routes(kvm_state);
+    accel_irqchip_update_msi_route(vector->virq, msg, pdev);
+    accel_irqchip_commit_routes();
 }
 
 static void set_irq_signalling(VFIODevice *vbasedev, VFIOMSIVector *vector,
@@ -693,7 +694,7 @@ static int vfio_msix_vector_do_use(PCIDevice *pdev, unsigned int nr,
             } else {
                 vfio_route_change = kvm_irqchip_begin_route_changes(kvm_state);
                 vfio_pci_add_kvm_msi_virq(vdev, vector, nr, true);
-                kvm_irqchip_commit_route_changes(&vfio_route_change);
+                accel_irqchip_commit_route_changes(&vfio_route_change);
                 vfio_connect_kvm_msi_virq(vector, nr);
             }
         }
@@ -802,7 +803,7 @@ void vfio_pci_commit_kvm_msi_virq_batch(VFIOPCIDevice *vdev)
     assert(vdev->defer_kvm_irq_routing);
     vdev->defer_kvm_irq_routing = false;
 
-    kvm_irqchip_commit_route_changes(&vfio_route_change);
+    accel_irqchip_commit_route_changes(&vfio_route_change);
 
     for (i = 0; i < vdev->nr_vectors; i++) {
         vfio_connect_kvm_msi_virq(&vdev->msi_vectors[i], i);

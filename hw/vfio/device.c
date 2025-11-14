@@ -557,6 +557,8 @@ static int vfio_device_io_set_irqs(VFIODevice *vbasedev,
 {
     int ret;
 
+    trace_vfio_device_io_set_irqs(irqs->count, irqs->flags);
+
     ret = ioctl(vbasedev->fd, VFIO_DEVICE_SET_IRQS, irqs);
 
     return ret < 0 ? -errno : ret;

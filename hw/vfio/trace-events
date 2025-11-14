@@ -194,3 +194,4 @@ vfio_device_get_region_info_type(const char *name, int index, uint32_t type, uin
 vfio_device_reset_handler(void) ""
 vfio_device_attach(const char *name, int group_id) " (%s) group %d"
 vfio_device_detach(const char *name, int group_id) " (%s) group %d"
+vfio_device_io_set_irqs(uint32_t count, uint32_t flags) "count %u, flags %u"

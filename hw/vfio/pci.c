@@ -546,8 +546,11 @@ static int vfio_enable_vectors(VFIOPCIDevice *vdev, bool msix)
          * KVM signaling path only when configured and unmasked.
          */
         if (vdev->msi_vectors[i].use) {
-            if (vdev->msi_vectors[i].virq < 0 ||
-                (msix && msix_is_masked(pdev, i))) {
+            /* mgns: the virq_condition was removed, because we don't have it
+             * yet */
+            if (msix && msix_is_masked(pdev, i)) {
+            /* if (vdev->msi_vectors[i].virq < 0 || */
+            /*     (msix && msix_is_masked(pdev, i))) { */
                 fd = event_notifier_get_fd(&vdev->msi_vectors[i].interrupt);
             } else {
                 fd = event_notifier_get_fd(&vdev->msi_vectors[i].kvm_interrupt);
@@ -587,10 +590,11 @@ static void vfio_connect_kvm_msi_virq(VFIOMSIVector *vector, int nr)
         return;
     }
 
-    if (!vfio_notifier_init(vector->vdev, &vector->kvm_interrupt, name, nr,
-                            NULL)) {
-        goto fail_notifier;
-    }
+    /* mgns: move that up in the call stack */
+    /* if (!vfio_notifier_init(vector->vdev, &vector->kvm_interrupt, name, nr, */
+    /*                         NULL)) { */
+    /*     goto fail_notifier; */
+    /* } */
 
     if (accel_irqchip_add_irqfd_notifier_gsi(&vector->kvm_interrupt, NULL,
                                              vector->virq) < 0) {
@@ -603,10 +607,11 @@ static void vfio_connect_kvm_msi_virq(VFIOMSIVector *vector, int nr)
 
 fail_kvm:
     vfio_notifier_cleanup(vector->vdev, &vector->kvm_interrupt, name, nr);
-fail_notifier:
-    /* kvm_irqchip_release_virq(kvm_state, vector->virq); */
-    accel_irqchip_release_virq(vector->virq);
-    vector->virq = -1;
+    /* mgns: move that up in the call stack */
+/* fail_notifier: */
+/*     /1* kvm_irqchip_release_virq(kvm_state, vector->virq); *1/ */
+/*     accel_irqchip_release_virq(vector->virq); */
+/*     vector->virq = -1; */
 }
 
 static void vfio_remove_kvm_msi_virq(VFIOPCIDevice *vdev, VFIOMSIVector *vector,
@@ -687,6 +692,27 @@ static int vfio_msix_vector_do_use(PCIDevice *pdev, unsigned int nr,
     qemu_set_fd_handler(event_notifier_get_fd(&vector->interrupt),
                         handler, NULL, vector);
 
+    /* mgns: moved that from vfio_connect_kvm_msi_virq */
+    if (!vfio_notifier_init(vector->vdev, &vector->kvm_interrupt,
+                            "kvm_interrupt", nr,
+                            NULL)) {
+        abort();
+    }
+
+    /* mgns: moved that from below */
+    if (resizing) {
+        vdev->nr_vectors = nr + 1;
+    }
+
+    /* mgns: moved that from below */
+    /* this will set the eventfd to vfio */
+    vfio_device_irq_disable(&vdev->vbasedev, VFIO_PCI_MSIX_IRQ_INDEX);
+    ret = vfio_enable_vectors(vdev, true);
+    if (ret) {
+        error_report("vfio: failed to enable vectors, %s",
+                     strerror(-ret));
+    }
+
     /*
      * Attempt to enable route through KVM irqchip,
      * default to userspace handling if unavailable.
@@ -722,18 +748,18 @@ static int vfio_msix_vector_do_use(PCIDevice *pdev, unsigned int nr,
      * the upper bound of vectors being enabled (but not all of the ranges
      * is allocated or enabled).
      */
-    if (resizing) {
-        vdev->nr_vectors = nr + 1;
-    }
+    /* if (resizing) { */
+    /*     vdev->nr_vectors = nr + 1; */
+    /* } */
 
     if (!vdev->defer_kvm_irq_routing) {
         if (vdev->msix->noresize && resizing) {
-            vfio_device_irq_disable(&vdev->vbasedev, VFIO_PCI_MSIX_IRQ_INDEX);
-            ret = vfio_enable_vectors(vdev, true);
-            if (ret) {
-                error_report("vfio: failed to enable vectors, %s",
-                             strerror(-ret));
-            }
+            /* vfio_device_irq_disable(&vdev->vbasedev, VFIO_PCI_MSIX_IRQ_INDEX); */
+            /* ret = vfio_enable_vectors(vdev, true); */
+            /* if (ret) { */
+            /*     error_report("vfio: failed to enable vectors, %s", */
+            /*                  strerror(-ret)); */
+            /* } */
         } else {
             set_irq_signalling(&vdev->vbasedev, vector, nr);
         }

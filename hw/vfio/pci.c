@@ -546,8 +546,7 @@ static int vfio_enable_vectors(VFIOPCIDevice *vdev, bool msix)
          * KVM signaling path only when configured and unmasked.
          */
         if (vdev->msi_vectors[i].use) {
-            if (vdev->msi_vectors[i].virq < 0 ||
-                (msix && msix_is_masked(pdev, i))) {
+            if (msix && msix_is_masked(pdev, i)) {
                 fd = event_notifier_get_fd(&vdev->msi_vectors[i].interrupt);
             } else {
                 fd = event_notifier_get_fd(&vdev->msi_vectors[i].kvm_interrupt);
@@ -577,31 +576,29 @@ void vfio_pci_add_kvm_msi_virq(VFIOPCIDevice *vdev, VFIOMSIVector *vector,
                                                vector_n, pdev);
 }
 
+static void vfio_init_accel_irqfd(VFIOMSIVector *vector, int nr)
+{
+    const char *name = "kvm_interrupt";
+    bool ret;
+
+    ret = vfio_notifier_init(vector->vdev, &vector->kvm_interrupt, name, nr,
+                             NULL);
+    if (!ret) {
+        vector->virq = -1;
+    }
+}
+
 static void vfio_connect_kvm_msi_virq(VFIOMSIVector *vector, int nr)
 {
     const char *name = "kvm_interrupt";
+    int ret;
 
-    if (vector->virq < 0) {
-        return;
+    ret = accel_irqchip_add_irqfd_notifier_gsi(&vector->kvm_interrupt, NULL,
+                                               vector->virq);
+    if (ret < 0) {
+        vfio_notifier_cleanup(vector->vdev, &vector->kvm_interrupt, name, nr);
+        accel_irqchip_release_virq(vector->virq);
     }
-
-    if (!vfio_notifier_init(vector->vdev, &vector->kvm_interrupt, name, nr,
-                            NULL)) {
-        goto fail_notifier;
-    }
-
-    if (accel_irqchip_add_irqfd_notifier_gsi(&vector->kvm_interrupt, NULL,
-                                             vector->virq) < 0) {
-        goto fail_kvm;
-    }
-
-    return;
-
-fail_kvm:
-    vfio_notifier_cleanup(vector->vdev, &vector->kvm_interrupt, name, nr);
-fail_notifier:
-    accel_irqchip_release_virq(vector->virq);
-    vector->virq = -1;
 }
 
 static void vfio_remove_kvm_msi_virq(VFIOPCIDevice *vdev, VFIOMSIVector *vector,
@@ -678,6 +675,36 @@ static int vfio_msix_vector_do_use(PCIDevice *pdev, unsigned int nr,
                         handler, NULL, vector);
 
     /*
+     * When dynamic allocation is not supported, we don't want to have the
+     * host allocate all possible MSI vectors for a device if they're not
+     * in use, so we shutdown and incrementally increase them as needed.
+     * nr_vectors represents the total number of vectors allocated.
+     *
+     * When dynamic allocation is supported, let the host only allocate
+     * and enable a vector when it is in use in guest. nr_vectors represents
+     * the upper bound of vectors being enabled (but not all of the ranges
+     * is allocated or enabled).
+     */
+    if (resizing) {
+        vdev->nr_vectors = nr + 1;
+    }
+
+    if (!vdev->defer_kvm_irq_routing) {
+        if (vdev->msix->noresize && resizing) {
+            vfio_device_irq_disable(&vdev->vbasedev, VFIO_PCI_MSIX_IRQ_INDEX);
+
+            vfio_init_accel_irqfd(vector, nr);
+            ret = vfio_enable_vectors(vdev, true);
+            if (ret) {
+                error_report("vfio: failed to enable vectors, %s",
+                             strerror(-ret));
+            }
+        } else {
+            set_irq_signalling(&vdev->vbasedev, vector, nr);
+        }
+    }
+
+    /*
      * Attempt to enable route through KVM irqchip,
      * default to userspace handling if unavailable.
      */
@@ -697,34 +724,6 @@ static int vfio_msix_vector_do_use(PCIDevice *pdev, unsigned int nr,
                 accel_irqchip_commit_route_changes(&vfio_route_change);
                 vfio_connect_kvm_msi_virq(vector, nr);
             }
-        }
-    }
-
-    /*
-     * When dynamic allocation is not supported, we don't want to have the
-     * host allocate all possible MSI vectors for a device if they're not
-     * in use, so we shutdown and incrementally increase them as needed.
-     * nr_vectors represents the total number of vectors allocated.
-     *
-     * When dynamic allocation is supported, let the host only allocate
-     * and enable a vector when it is in use in guest. nr_vectors represents
-     * the upper bound of vectors being enabled (but not all of the ranges
-     * is allocated or enabled).
-     */
-    if (resizing) {
-        vdev->nr_vectors = nr + 1;
-    }
-
-    if (!vdev->defer_kvm_irq_routing) {
-        if (vdev->msix->noresize && resizing) {
-            vfio_device_irq_disable(&vdev->vbasedev, VFIO_PCI_MSIX_IRQ_INDEX);
-            ret = vfio_enable_vectors(vdev, true);
-            if (ret) {
-                error_report("vfio: failed to enable vectors, %s",
-                             strerror(-ret));
-            }
-        } else {
-            set_irq_signalling(&vdev->vbasedev, vector, nr);
         }
     }
 
@@ -806,6 +805,7 @@ void vfio_pci_commit_kvm_msi_virq_batch(VFIOPCIDevice *vdev)
     accel_irqchip_commit_route_changes(&vfio_route_change);
 
     for (i = 0; i < vdev->nr_vectors; i++) {
+        vfio_init_accel_irqfd(&vdev->msi_vectors[i], i);
         vfio_connect_kvm_msi_virq(&vdev->msi_vectors[i], i);
     }
 }

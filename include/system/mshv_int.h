@@ -154,7 +154,6 @@ int mshv_configure_msr(const CPUState *cpu, const MshvMsrEntry *msrs,
                        size_t n_msrs);
 
 /* interrupt */
-void mshv_init_msicontrol(void);
 void mshv_add_routing_entry(MshvState *s, struct mshv_user_irq_entry *entry);
 
 #endif

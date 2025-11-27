@@ -57,6 +57,11 @@ struct MshvState {
     MshvAddressSpace *as;
     int fd;
     MshvMemorySlotManager msm;
+    /* irqchip routing */
+    struct mshv_user_irq_table *irq_routes;
+    int nr_allocated_irq_routes;
+    unsigned long *used_gsi_bitmap;
+    unsigned int gsi_count;
 };
 
 typedef struct MshvMsiControl {

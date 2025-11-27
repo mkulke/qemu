@@ -156,5 +156,6 @@ int mshv_configure_msr(const CPUState *cpu, const MshvMsrEntry *msrs,
 /* interrupt */
 void mshv_init_msicontrol(void);
 int mshv_reserve_ioapic_msi_routes(int vm_fd);
+void mshv_add_routing_entry(MshvState *s, struct mshv_user_irq_entry *entry);
 
 #endif

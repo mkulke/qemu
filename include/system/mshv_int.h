@@ -101,7 +101,6 @@ typedef enum MshvRemapResult {
 void mshv_init_mmio_emu(void);
 int mshv_create_vcpu(int vm_fd, uint8_t vp_index, int *cpu_fd);
 void mshv_remove_vcpu(int vm_fd, int cpu_fd);
-int mshv_configure_vcpu(const CPUState *cpu, const MshvFPU *fpu, uint64_t xcr0);
 int mshv_run_vcpu(int vm_fd, CPUState *cpu, hv_message *msg, MshvVmExit *exit);
 int mshv_arch_load_regs(CPUState *cpu);
 int mshv_arch_store_regs(CPUState *cpu);
@@ -143,16 +142,10 @@ void mshv_init_memory_slot_manager(MshvState *mshv_state);
 /* msr */
 typedef struct MshvMsrEntry {
   uint32_t index;
-  uint32_t reserved;
   uint64_t data;
 } MshvMsrEntry;
 
-typedef struct MshvMsrEntries {
-    MshvMsrEntry entries[MSHV_MSR_ENTRIES_COUNT];
-    uint32_t nmsrs;
-} MshvMsrEntries;
-
-int mshv_configure_msr(const CPUState *cpu, const MshvMsrEntry *msrs,
+int mshv_configure_msr(const CPUState *cpu, const MshvMsrEntry *entries,
                        size_t n_msrs);
 
 /* interrupt */

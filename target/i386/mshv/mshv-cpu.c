@@ -643,6 +643,7 @@ static int set_cpuid2(const CPUState *cpu)
     ret = register_intercept_result_cpuid(cpu, cpuid);
     g_free(cpuid);
     if (ret < 0) {
+        error_report("failed to set cpuid");
         return ret;
     }
 
@@ -786,39 +787,16 @@ static int set_xc_reg(const CPUState *cpu, uint64_t xcr0)
     return 0;
 }
 
-static int set_cpu_state(const CPUState *cpu, const MshvFPU *fpu_regs,
-                         uint64_t xcr0)
-{
-    int ret;
-
-    ret = set_standard_regs(cpu);
-    if (ret < 0) {
-        return ret;
-    }
-    ret = set_special_regs(cpu);
-    if (ret < 0) {
-        return ret;
-    }
-    ret = set_fpu(cpu, fpu_regs);
-    if (ret < 0) {
-        return ret;
-    }
-    ret = set_xc_reg(cpu, xcr0);
-    if (ret < 0) {
-        return ret;
-    }
-    return 0;
-}
-
 static uint32_t set_apic_delivery_mode(uint32_t reg, uint32_t mode)
 {
     return ((reg) & ~0x700) | ((mode) << 8);
 }
 
-static int set_lint(int cpu_fd)
+static int set_lint(const CPUState *cpu)
 {
     int ret;
     uint32_t *lvt_lint0, *lvt_lint1;
+    int cpu_fd = mshv_vcpufd(cpu);
 
     struct hv_local_interrupt_controller_state lapic_state = { 0 };
     ret = mshv_get_lapic(cpu_fd, &lapic_state);
@@ -836,31 +814,46 @@ static int set_lint(int cpu_fd)
     return mshv_set_lapic(cpu_fd, &lapic_state);
 }
 
-static int setup_msrs(const CPUState *cpu)
+static int set_msrs(const CPUState *cpu)
 {
-    int ret;
-    uint64_t default_type = MSR_MTRR_ENABLE | MSR_MTRR_MEM_TYPE_WB;
+    int ret = 0;
+    X86CPU *x86cpu = X86_CPU(cpu);
+    CPUX86State *env = &x86cpu->env;
 
-    /* boot msr entries */
-    MshvMsrEntry msrs[9] = {
-        { .index = IA32_MSR_SYSENTER_CS, .data = 0x0, },
-        { .index = IA32_MSR_SYSENTER_ESP, .data = 0x0, },
-        { .index = IA32_MSR_SYSENTER_EIP, .data = 0x0, },
-        { .index = IA32_MSR_STAR, .data = 0x0, },
-        { .index = IA32_MSR_CSTAR, .data = 0x0, },
-        { .index = IA32_MSR_LSTAR, .data = 0x0, },
-        { .index = IA32_MSR_KERNEL_GS_BASE, .data = 0x0, },
-        { .index = IA32_MSR_SFMASK, .data = 0x0, },
-        { .index = IA32_MSR_MTRR_DEF_TYPE, .data = default_type, },
+    const struct MshvMsrEntry entries[] = {
+        { .index = MSR_IA32_SYSENTER_CS,    .data = env->sysenter_cs },
+        { .index = MSR_IA32_SYSENTER_ESP,   .data = env->sysenter_esp },
+        { .index = MSR_IA32_SYSENTER_EIP,   .data = env->sysenter_eip },
+        { .index = MSR_EFER,                .data = env->efer },
+        { .index = MSR_PAT,                 .data = env->pat },
+        { .index = MSR_STAR,                .data = env->star },
+        { .index = MSR_CSTAR,               .data = env->cstar },
+        { .index = MSR_LSTAR,               .data = env->lstar },
+        { .index = MSR_KERNELGSBASE,        .data = env->kernelgsbase },
+        { .index = MSR_FMASK,               .data = env->fmask },
+        { .index = MSR_MTRRdefType,         .data = env->mtrr_deftype },
+        { .index = MSR_VM_HSAVE_PA,         .data = env->vm_hsave },
+        { .index = MSR_SMI_COUNT,           .data = env->msr_smi_count },
+        { .index = MSR_IA32_PKRS,           .data = env->pkrs },
+        { .index = MSR_IA32_BNDCFGS,        .data = env->msr_bndcfgs },
+        { .index = MSR_IA32_XSS,            .data = env->xss },
+        { .index = MSR_IA32_UMWAIT_CONTROL, .data = env->umwait },
+        { .index = MSR_IA32_TSX_CTRL,       .data = env->tsx_ctrl },
+        { .index = MSR_AMD64_TSC_RATIO,     .data = env->amd_tsc_scale_msr },
+        { .index = MSR_TSC_AUX,             .data = env->tsc_aux },
+        { .index = MSR_TSC_ADJUST,          .data = env->tsc_adjust },
+        { .index = MSR_IA32_SMBASE,         .data = env->smbase },
+        { .index = MSR_IA32_SPEC_CTRL,      .data = env->spec_ctrl },
+        { .index = MSR_VIRT_SSBD,           .data = env->virt_ssbd },
     };
+    QEMU_BUILD_BUG_ON(ARRAY_SIZE(entries) > MSHV_MSR_ENTRIES_COUNT);
 
-    ret = mshv_configure_msr(cpu, msrs, 9);
+    ret = mshv_configure_msr(cpu, &entries[0], ARRAY_SIZE(entries));
     if (ret < 0) {
-        error_report("failed to setup msrs");
-        return -1;
+        error_report("failed to put msrs");
+        return -errno;
     }
-
-    return 0;
+    return ret;
 }
 
 /*
@@ -870,130 +863,46 @@ static int setup_msrs(const CPUState *cpu)
  * CPUX86State *env = &x86cpu->env;
  * X86CPUTopoInfo *topo_info = &env->topo_info;
  */
-int mshv_configure_vcpu(const CPUState *cpu, const struct MshvFPU *fpu,
-                        uint64_t xcr0)
-{
-    int ret;
-    int cpu_fd = mshv_vcpufd(cpu);
-
-    ret = set_cpuid2(cpu);
-    if (ret < 0) {
-        error_report("failed to set cpuid");
-        return -1;
-    }
-
-    ret = setup_msrs(cpu);
-    if (ret < 0) {
-        error_report("failed to setup msrs");
-        return -1;
-    }
-
-    ret = set_cpu_state(cpu, fpu, xcr0);
-    if (ret < 0) {
-        error_report("failed to set cpu state");
-        return -1;
-    }
-
-    ret = set_lint(cpu_fd);
-    if (ret < 0) {
-        error_report("failed to set lpic int");
-        return -1;
-    }
-
-    return 0;
-}
-
-static int put_regs(const CPUState *cpu)
+int mshv_arch_put_registers(const CPUState *cpu)
 {
     X86CPU *x86cpu = X86_CPU(cpu);
     CPUX86State *env = &x86cpu->env;
     MshvFPU fpu = {0};
     int ret;
 
-    memset(&fpu, 0, sizeof(fpu));
-
-    ret = mshv_configure_vcpu(cpu, &fpu, env->xcr0);
+    ret = set_cpuid2(cpu);
     if (ret < 0) {
-        error_report("failed to configure vcpu");
         return ret;
     }
 
-    return 0;
-}
-
-struct MsrPair {
-    uint32_t index;
-    uint64_t value;
-};
-
-static int put_msrs(const CPUState *cpu)
-{
-    int ret = 0;
-    X86CPU *x86cpu = X86_CPU(cpu);
-    CPUX86State *env = &x86cpu->env;
-    MshvMsrEntries *msrs = g_malloc0(sizeof(MshvMsrEntries));
-
-    struct MsrPair pairs[] = {
-        { MSR_IA32_SYSENTER_CS,    env->sysenter_cs },
-        { MSR_IA32_SYSENTER_ESP,   env->sysenter_esp },
-        { MSR_IA32_SYSENTER_EIP,   env->sysenter_eip },
-        { MSR_EFER,                env->efer },
-        { MSR_PAT,                 env->pat },
-        { MSR_STAR,                env->star },
-        { MSR_CSTAR,               env->cstar },
-        { MSR_LSTAR,               env->lstar },
-        { MSR_KERNELGSBASE,        env->kernelgsbase },
-        { MSR_FMASK,               env->fmask },
-        { MSR_MTRRdefType,         env->mtrr_deftype },
-        { MSR_VM_HSAVE_PA,         env->vm_hsave },
-        { MSR_SMI_COUNT,           env->msr_smi_count },
-        { MSR_IA32_PKRS,           env->pkrs },
-        { MSR_IA32_BNDCFGS,        env->msr_bndcfgs },
-        { MSR_IA32_XSS,            env->xss },
-        { MSR_IA32_UMWAIT_CONTROL, env->umwait },
-        { MSR_IA32_TSX_CTRL,       env->tsx_ctrl },
-        { MSR_AMD64_TSC_RATIO,     env->amd_tsc_scale_msr },
-        { MSR_TSC_AUX,             env->tsc_aux },
-        { MSR_TSC_ADJUST,          env->tsc_adjust },
-        { MSR_IA32_SMBASE,         env->smbase },
-        { MSR_IA32_SPEC_CTRL,      env->spec_ctrl },
-        { MSR_VIRT_SSBD,           env->virt_ssbd },
-    };
-
-    if (ARRAY_SIZE(pairs) > MSHV_MSR_ENTRIES_COUNT) {
-        error_report("MSR entries exceed maximum size");
-        g_free(msrs);
-        return -1;
-    }
-
-    for (size_t i = 0; i < ARRAY_SIZE(pairs); i++) {
-        MshvMsrEntry *entry = &msrs->entries[i];
-        entry->index = pairs[i].index;
-        entry->reserved = 0;
-        entry->data = pairs[i].value;
-        msrs->nmsrs++;
-    }
-
-    ret = mshv_configure_msr(cpu, &msrs->entries[0], msrs->nmsrs);
-    g_free(msrs);
-    return ret;
-}
-
-
-int mshv_arch_put_registers(const CPUState *cpu)
-{
-    int ret;
-
-    ret = put_regs(cpu);
+    ret = set_standard_regs(cpu);
     if (ret < 0) {
-        error_report("Failed to put registers");
-        return -1;
+        return ret;
     }
 
-    ret = put_msrs(cpu);
+    ret = set_special_regs(cpu);
     if (ret < 0) {
-        error_report("Failed to put msrs");
-        return -1;
+        return ret;
+    }
+
+    ret = set_fpu(cpu, &fpu);
+    if (ret < 0) {
+        return ret;
+    }
+
+    ret = set_xc_reg(cpu, env->xcr0);
+    if (ret < 0) {
+        return ret;
+    }
+
+    ret = set_lint(cpu);
+    if (ret < 0) {
+        return ret;
+    }
+
+    ret = set_msrs(cpu);
+    if (ret < 0) {
+        return ret;
     }
 
     return 0;

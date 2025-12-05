@@ -316,60 +316,40 @@ static int mshv_msr_to_hv_reg_name(uint32_t msr, uint32_t *hv_reg)
     }
 }
 
-static int set_msrs(const CPUState *cpu, GList *msrs)
+int mshv_configure_msr(const CPUState *cpu, const MshvMsrEntry *entries,
+                       size_t n_msrs)
 {
-    size_t n_msrs;
-    GList *entries;
-    MshvMsrEntry *entry;
-    enum hv_register_name name;
-    struct hv_register_assoc *assoc;
+    const MshvMsrEntry *entry;
     int ret;
-    size_t i = 0;
+    size_t n_valid_msrs = 0;
+    enum hv_register_name name;
+    struct hv_register_assoc *assocs, *assoc;
 
-    n_msrs = g_list_length(msrs);
-    hv_register_assoc *assocs = g_new0(hv_register_assoc, n_msrs);
-
-    entries = msrs;
-    for (const GList *elem = entries; elem != NULL; elem = elem->next) {
-        entry = elem->data;
+    assocs = g_new0(hv_register_assoc, n_msrs);
+    for (size_t i = 0; i < n_msrs; i++) {
+        entry = &entries[i];
+        /* check whether index of msrs is in SUPPORTED_MSRS */
+        if (!mshv_is_supported_msr(entry->index)) {
+            continue;
+        }
         ret = mshv_msr_to_hv_reg_name(entry->index, &name);
         if (ret < 0) {
             g_free(assocs);
-            return ret;
+            return -1;
         }
-        assoc = &assocs[i];
+        assoc = &assocs[n_valid_msrs];
         assoc->name = name;
         /* the union has been initialized to 0 */
         assoc->value.reg64 = entry->data;
-        i++;
+        n_valid_msrs++;
     }
-    ret = mshv_set_generic_regs(cpu, assocs, n_msrs);
+
+    ret = mshv_set_generic_regs(cpu, assocs, n_valid_msrs);
     g_free(assocs);
     if (ret < 0) {
         error_report("failed to set msrs");
         return -1;
     }
+
     return 0;
-}
-
-
-int mshv_configure_msr(const CPUState *cpu, const MshvMsrEntry *msrs,
-                       size_t n_msrs)
-{
-    GList *valid_msrs = NULL;
-    uint32_t msr_index;
-    int ret;
-
-    for (size_t i = 0; i < n_msrs; i++) {
-        msr_index = msrs[i].index;
-        /* check whether index of msrs is in SUPPORTED_MSRS */
-        if (mshv_is_supported_msr(msr_index)) {
-            valid_msrs = g_list_append(valid_msrs, (void *) &msrs[i]);
-        }
-    }
-
-    ret = set_msrs(cpu, valid_msrs);
-    g_list_free(valid_msrs);
-
-    return ret;
 }

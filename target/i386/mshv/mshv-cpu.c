@@ -116,6 +116,25 @@ static int get_generic_regs(CPUState *cpu,
                             struct hv_register_assoc *assocs,
                             size_t n_regs);
 
+static int get_lapic(CPUState *cpu)
+{
+    X86CPU *x86cpu = X86_CPU(cpu);
+    APICCommonState *apic = APIC_COMMON(x86cpu->apic_state);
+    int cpu_fd = mshv_vcpufd(cpu);
+    int ret;
+    struct hv_local_interrupt_controller_state lapic_state = { 0 };
+
+    ret = mshv_get_lapic(cpu_fd, &lapic_state);
+    if (ret < 0) {
+        error_report("failed to get lapic state");
+        return -1;
+    }
+
+    memcpy(&apic->hv_lapic_state, &lapic_state, sizeof(lapic_state));
+
+    return 0;
+}
+
 static void populate_fpu(const hv_register_assoc *assocs, X86CPU *x86cpu)
 {
     union hv_register_value value;
@@ -558,6 +577,11 @@ int mshv_arch_load_vcpu_state(CPUState *cpu) {
         return ret;
     }
 
+    ret = get_lapic(cpu);
+    if (ret < 0) {
+        return ret;
+    }
+
     return 0;
 }
 
@@ -954,9 +978,11 @@ static uint32_t set_apic_delivery_mode(uint32_t reg, uint32_t mode)
 
 static int init_lint(const CPUState *cpu)
 {
-    int ret;
+    X86CPU *x86cpu = X86_CPU(cpu);
+    APICCommonState *apic = APIC_COMMON(x86cpu->apic_state);
     uint32_t *lvt_lint0, *lvt_lint1;
     int cpu_fd = mshv_vcpufd(cpu);
+    int ret;
 
     struct hv_local_interrupt_controller_state lapic_state = { 0 };
     ret = mshv_get_lapic(cpu_fd, &lapic_state);
@@ -970,8 +996,14 @@ static int init_lint(const CPUState *cpu)
     lvt_lint1 = &lapic_state.apic_lvt_lint1;
     *lvt_lint1 = set_apic_delivery_mode(*lvt_lint1, APIC_DM_NMI);
 
-    /* TODO: should we skip setting lapic if the values are the same? */
-    return mshv_set_lapic(cpu_fd, &lapic_state);
+    ret = mshv_set_lapic(cpu_fd, &lapic_state);
+    if (ret < 0) {
+        return -1;
+    }
+
+    memcpy(apic->hv_lapic_state, &lapic_state, sizeof(lapic_state));
+
+    return 0;
 }
 
 static int set_msrs(const CPUState *cpu)
@@ -1016,21 +1048,19 @@ static int set_msrs(const CPUState *cpu)
     return ret;
 }
 
-/*
- * TODO: populate topology info:
- *
- * X86CPU *x86cpu = X86_CPU(cpu);
- * CPUX86State *env = &x86cpu->env;
- * X86CPUTopoInfo *topo_info = &env->topo_info;
- */
-int mshv_arch_put_registers(const CPUState *cpu)
+static int set_lapic(const CPUState *cpu)
 {
     X86CPU *x86cpu = X86_CPU(cpu);
+    APICCommonState *apic = APIC_COMMON(x86cpu->apic_state);
+    int cpu_fd = mshv_vcpufd(cpu);
     int ret;
 
-    ret = set_cpuid2(cpu);
+    struct hv_local_interrupt_controller_state lapic_state = { 0 };
+    memcpy(&lapic_state, &apic->hv_lapic_state, sizeof(lapic_state));
+    ret = mshv_set_lapic(cpu_fd, &lapic_state);
     if (ret < 0) {
-        return ret;
+        error_report("failed to set lapic");
+        return -1;
     }
 
     return 0;
@@ -1065,7 +1095,7 @@ int mshv_arch_store_vcpu_state(const CPUState *cpu)
         return ret;
     }
 
-    ret = set_msrs(cpu);
+    ret = set_lapic(cpu);
     if (ret < 0) {
         return ret;
     }

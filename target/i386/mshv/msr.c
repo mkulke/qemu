@@ -70,6 +70,8 @@ static const MshvMsrEnvMap msr_env_map[] = {
     /*   offsetof(CPUX86State, tsc_adjust), MSHV_MSR_WIDTH_64 }, */
 
     /* Hyper-V per-partition MSRs */
+    { HV_X64_MSR_HYPERCALL,  HV_X64_REGISTER_HYPERCALL,
+      offsetof(CPUX86State, msr_hv_hypercall),   MSHV_MSR_WIDTH_64 },
     { HV_X64_MSR_GUEST_OS_ID, HV_REGISTER_GUEST_OS_ID,
       offsetof(CPUX86State, msr_hv_guest_os_id), MSHV_MSR_WIDTH_64 },
     { HV_X64_MSR_REFERENCE_TSC, HV_REGISTER_REFERENCE_TSC,

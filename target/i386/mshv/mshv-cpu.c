@@ -731,7 +731,7 @@ static int register_intercept_result_cpuid(const CPUState *cpu,
     return ret;
 }
 
-static int set_cpuid2(const CPUState *cpu)
+static int init_cpuid2(const CPUState *cpu)
 {
     int ret;
     size_t n_entries, cpuid_size;
@@ -928,7 +928,7 @@ static uint32_t set_apic_delivery_mode(uint32_t reg, uint32_t mode)
     return ((reg) & ~0x700) | ((mode) << 8);
 }
 
-static int set_lint(const CPUState *cpu)
+static int init_lint(const CPUState *cpu)
 {
     int ret;
     uint32_t *lvt_lint0, *lvt_lint1;
@@ -1029,7 +1029,7 @@ int mshv_arch_put_registers(const CPUState *cpu)
         return ret;
     }
 
-    ret = set_lint(cpu);
+    ret = set_msrs(cpu);
     if (ret < 0) {
         return ret;
     }
@@ -1600,6 +1600,33 @@ void mshv_init_mmio_emu(void)
     init_emu(&mshv_x86_emul_ops);
 }
 
+static int init_msrs(const CPUState *cpu)
+{
+    int ret;
+    uint64_t d_t = MSR_MTRR_ENABLE | MSR_MTRR_MEM_TYPE_WB;
+
+    const struct hv_register_assoc assocs[] = {
+        { .name = HV_X64_REGISTER_SYSENTER_CS,       .value.reg64 = 0x0 },
+        { .name = HV_X64_REGISTER_SYSENTER_ESP,      .value.reg64 = 0x0 },
+        { .name = HV_X64_REGISTER_SYSENTER_EIP,      .value.reg64 = 0x0 },
+        { .name = HV_X64_REGISTER_STAR,              .value.reg64 = 0x0 },
+        { .name = HV_X64_REGISTER_CSTAR,             .value.reg64 = 0x0 },
+        { .name = HV_X64_REGISTER_LSTAR,             .value.reg64 = 0x0 },
+        { .name = HV_X64_REGISTER_KERNEL_GS_BASE,    .value.reg64 = 0x0 },
+        { .name = HV_X64_REGISTER_SFMASK,            .value.reg64 = 0x0 },
+        { .name = HV_X64_REGISTER_MSR_MTRR_DEF_TYPE, .value.reg64 = d_t },
+    };
+    QEMU_BUILD_BUG_ON(ARRAY_SIZE(assocs) > MSHV_MSR_ENTRIES_COUNT);
+
+    ret = set_generic_regs(cpu, assocs, ARRAY_SIZE(assocs));
+    if (ret < 0) {
+        error_report("failed to put msrs");
+        return -1;
+    }
+
+    return 0;
+}
+
 void mshv_arch_init_vcpu(CPUState *cpu)
 {
     X86CPU *x86_cpu = X86_CPU(cpu);
@@ -1607,6 +1634,7 @@ void mshv_arch_init_vcpu(CPUState *cpu)
     AccelCPUState *state = cpu->accel;
     size_t page = HV_HYP_PAGE_SIZE;
     void *mem = qemu_memalign(page, 2 * page);
+    int ret;
 
     /* sanity check, to make sure we don't overflow the page */
     QEMU_BUILD_BUG_ON((MAX_REGISTER_COUNT
@@ -1622,6 +1650,20 @@ void mshv_arch_init_vcpu(CPUState *cpu)
 
     /* enable x2apic feature statically */
     env->features[FEAT_1_ECX] |= CPUID_EXT_X2APIC;
+
+    /*
+     * TODO: populate topology info:
+     * X86CPUTopoInfo *topo_info = &env->topo_info;
+     */
+
+    ret = init_cpuid2(cpu);
+    assert(ret == 0);
+
+    ret = init_msrs(cpu);
+    assert(ret == 0);
+
+    ret = init_lint(cpu);
+    assert(ret == 0);
 }
 
 void mshv_arch_destroy_vcpu(CPUState *cpu)

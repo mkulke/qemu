@@ -144,7 +144,7 @@ static int get_msrs(CPUState *cpu)
     ret = get_generic_regs(cpu, assocs, n_assocs);
     if (ret < 0) {
         g_free(assocs);
-        error_report("failed to put msrs");
+        error_report("failed to get msrs");
         return -1;
     }
 

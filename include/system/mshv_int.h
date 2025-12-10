@@ -63,19 +63,6 @@ typedef struct MshvMsiControl {
 #define mshv_vcpufd(cpu) (cpu->accel->cpufd)
 
 /* cpu */
-typedef struct MshvFPU {
-    uint8_t fpr[8][16];
-    uint16_t fcw;
-    uint16_t fsw;
-    uint8_t ftwx;
-    uint8_t pad1;
-    uint16_t last_opcode;
-    uint64_t last_ip;
-    uint64_t last_dp;
-    uint8_t xmm[16][16];
-    uint32_t mxcsr;
-    uint32_t pad2;
-} MshvFPU;
 
 typedef enum MshvVmExit {
     MshvVmExitIgnore   = 0,

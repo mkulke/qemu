@@ -112,6 +112,91 @@ static enum hv_register_name FPU_REGISTER_NAMES[26] = {
 };
 
 static int set_special_regs(const CPUState *cpu);
+static int get_generic_regs(CPUState *cpu,
+                            struct hv_register_assoc *assocs,
+                            size_t n_regs);
+
+static void populate_fpu(const hv_register_assoc *assocs, X86CPU *x86cpu)
+{
+    union hv_register_value value;
+    const union hv_x64_fp_control_status_register *ctrl_status;
+    const union hv_x64_xmm_control_status_register *xmm_ctrl;
+    CPUX86State *env = &x86cpu->env;
+    size_t i;
+    bool valid;
+
+    /* first 16 registers are xmm0-xmm15 */
+    for (i = 0; i < 16; i++) {
+        value = assocs[i].value;
+        memcpy(&env->xmm_regs[i], &value.reg128, 16);
+    }
+
+    /* next 8 registers are fp_mmx0-fp_mmx7 */
+    for (i = 16; i < 24; i++) {
+        value = assocs[i].value;
+        memcpy(&env->fpregs[i], &value.reg128, 16);
+    }
+
+    /* last two registers are fp_control_status and xmm_control_status */
+    ctrl_status = &assocs[24].value.fp_control_status;
+    env->fpuc = ctrl_status->fp_control;
+    env->fpus = ctrl_status->fp_status;
+
+    /* bits 11,12,13 are the top of stack pointer */
+    env->fpstt = (ctrl_status->fp_status >> 11) & 0x7;
+
+    for (i = 0; i < 8; i++) {
+        valid = ctrl_status->fp_tag & (1 << i);
+        env->fptags[i] = valid ? 0 : 1;
+    }
+
+    env->fpop = ctrl_status->last_fp_op;
+    env->fpip = ctrl_status->last_fp_rip;
+
+    xmm_ctrl = &assocs[25].value.xmm_control_status;
+    env->mxcsr = xmm_ctrl->xmm_status_control;
+    env->fpdp = xmm_ctrl->last_fp_rdp;
+}
+
+static int get_fpu(CPUState *cpu)
+{
+    struct hv_register_assoc assocs[ARRAY_SIZE(FPU_REGISTER_NAMES)];
+    int ret;
+    X86CPU *x86cpu = X86_CPU(cpu);
+    size_t n_regs = ARRAY_SIZE(FPU_REGISTER_NAMES);
+
+    for (size_t i = 0; i < n_regs; i++) {
+        assocs[i].name = FPU_REGISTER_NAMES[i];
+    }
+    ret = get_generic_regs(cpu, assocs, n_regs);
+    if (ret < 0) {
+        error_report("failed to get special registers");
+        return -errno;
+    }
+
+    populate_fpu(assocs, x86cpu);
+
+    return 0;
+}
+
+static int get_xc_reg(CPUState *cpu)
+{
+    int ret;
+    X86CPU *x86cpu = X86_CPU(cpu);
+    CPUX86State *env = &x86cpu->env;
+    struct hv_register_assoc assocs[1];
+
+    assocs[0].name = HV_X64_REGISTER_XFEM;
+
+    ret = get_generic_regs(cpu, assocs, 1);
+    if (ret < 0) {
+        error_report("failed to get xcr0");
+        return -1;
+    }
+    env->xcr0 = assocs[0].value.reg64;
+
+    return 0;
+}
 
 static int translate_gva(const CPUState *cpu, uint64_t gva, uint64_t *gpa,
                          uint64_t flags)
@@ -750,7 +835,7 @@ static int set_special_regs(const CPUState *cpu)
     return 0;
 }
 
-static int set_fpu(const CPUState *cpu, const struct MshvFPU *regs)
+static int set_fpu(const CPUState *cpu)
 {
     struct hv_register_assoc assocs[ARRAY_SIZE(FPU_REGISTER_NAMES)];
     union hv_register_value *value;
@@ -759,39 +844,56 @@ static int set_fpu(const CPUState *cpu, const struct MshvFPU *regs)
     union hv_x64_xmm_control_status_register *xmm_ctrl_status;
     int ret;
     size_t n_regs = ARRAY_SIZE(FPU_REGISTER_NAMES);
+    X86CPU *x86cpu = X86_CPU(cpu);
+    CPUX86State *env = &x86cpu->env;
+    size_t i;
+    bool valid;
 
     /* first 16 registers are xmm0-xmm15 */
-    for (size_t i = 0; i < 16; i++) {
+    for (i = 0; i < 16; i++) {
         assocs[i].name = FPU_REGISTER_NAMES[i];
         value = &assocs[i].value;
-        memcpy(&value->reg128, &regs->xmm[i], 16);
+        memcpy(&value->reg128, &env->xmm_regs[i], 16);
     }
 
     /* next 8 registers are fp_mmx0-fp_mmx7 */
-    for (size_t i = 16; i < 24; i++) {
+    for (i = 16; i < 24; i++) {
         assocs[i].name = FPU_REGISTER_NAMES[i];
         fp_i = (i - 16);
         value = &assocs[i].value;
-        memcpy(&value->reg128, &regs->fpr[fp_i], 16);
+        memcpy(&value->reg128, &env->fpregs[fp_i], 16);
     }
 
     /* last two registers are fp_control_status and xmm_control_status */
     assocs[24].name = FPU_REGISTER_NAMES[24];
     value = &assocs[24].value;
     ctrl_status = &value->fp_control_status;
-    ctrl_status->fp_control = regs->fcw;
-    ctrl_status->fp_status = regs->fsw;
-    ctrl_status->fp_tag = regs->ftwx;
+    ctrl_status->fp_control = env->fpuc;
+    ctrl_status->fp_status = env->fpus;
+
+    /* bits 11,12,13 are the top of stack pointer */
+    ctrl_status->fp_status =
+        (env->fpus & ~(0x7u << 11)) |
+        ((env->fpstt & 0x7u) << 11);
+
+    ctrl_status->fp_tag = 0;
+    for (i = 0; i < 8; i++) {
+        valid = (env->fptags[i] == 0);
+        if (valid) {
+            ctrl_status->fp_tag |= (1u << i);
+        }
+    }
+
     ctrl_status->reserved = 0;
-    ctrl_status->last_fp_op = regs->last_opcode;
-    ctrl_status->last_fp_rip = regs->last_ip;
+    ctrl_status->last_fp_op = env->fpop;
+    ctrl_status->last_fp_rip = env->fpip;
 
     assocs[25].name = FPU_REGISTER_NAMES[25];
     value = &assocs[25].value;
     xmm_ctrl_status = &value->xmm_control_status;
-    xmm_ctrl_status->xmm_status_control = regs->mxcsr;
+    xmm_ctrl_status->xmm_status_control = env->mxcsr;
     xmm_ctrl_status->xmm_status_control_mask = 0;
-    xmm_ctrl_status->last_fp_rdp = regs->last_dp;
+    xmm_ctrl_status->last_fp_rdp = env->fpdp;
 
     ret = mshv_set_generic_regs(cpu, assocs, n_regs);
     if (ret < 0) {
@@ -802,12 +904,15 @@ static int set_fpu(const CPUState *cpu, const struct MshvFPU *regs)
     return 0;
 }
 
-static int set_xc_reg(const CPUState *cpu, uint64_t xcr0)
+static int set_xc_reg(const CPUState *cpu)
 {
     int ret;
+    X86CPU *x86cpu = X86_CPU(cpu);
+    CPUX86State *env = &x86cpu->env;
+
     struct hv_register_assoc assoc = {
         .name = HV_X64_REGISTER_XFEM,
-        .value.reg64 = xcr0,
+        .value.reg64 = env->xcr0,
     };
 
     ret = mshv_set_generic_regs(cpu, &assoc, 1);
@@ -897,8 +1002,6 @@ static int set_msrs(const CPUState *cpu)
 int mshv_arch_put_registers(const CPUState *cpu)
 {
     X86CPU *x86cpu = X86_CPU(cpu);
-    CPUX86State *env = &x86cpu->env;
-    MshvFPU fpu = {0};
     int ret;
 
     ret = set_cpuid2(cpu);
@@ -916,12 +1019,12 @@ int mshv_arch_put_registers(const CPUState *cpu)
         return ret;
     }
 
-    ret = set_fpu(cpu, &fpu);
+    ret = set_fpu(cpu);
     if (ret < 0) {
         return ret;
     }
 
-    ret = set_xc_reg(cpu, env->xcr0);
+    ret = set_xc_reg(cpu);
     if (ret < 0) {
         return ret;
     }

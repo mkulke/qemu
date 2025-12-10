@@ -383,6 +383,7 @@ static const VMStateDescription vmstate_apic_common = {
         VMSTATE_INT64(next_time, APICCommonState),
         VMSTATE_INT64(timer_expiry,
                       APICCommonState), /* open-coded timer state */
+        VMSTATE_BUFFER(hv_lapic_state, APICCommonState),
         VMSTATE_END_OF_LIST()
     },
     .subsections = (const VMStateDescription * const []) {

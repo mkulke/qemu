@@ -376,7 +376,7 @@ static int set_standard_regs(const CPUState *cpu)
     return 0;
 }
 
-int mshv_arch_store_regs(CPUState *cpu)
+static int store_regs(CPUState *cpu)
 {
     int ret;
 
@@ -518,20 +518,44 @@ static int get_special_regs(CPUState *cpu)
     return 0;
 }
 
-int mshv_arch_load_regs(CPUState *cpu)
+static int load_regs(CPUState *cpu)
 {
     int ret;
 
     ret = get_standard_regs(cpu);
     if (ret < 0) {
-        error_report("Failed to load standard registers");
-        return -1;
+        return ret;
     }
 
     ret = get_special_regs(cpu);
     if (ret < 0) {
-        error_report("Failed to load special registers");
-        return -1;
+        return ret;
+    }
+
+    return 0;
+}
+
+int mshv_arch_load_vcpu_state(CPUState *cpu) {
+    int ret;
+
+    ret = get_standard_regs(cpu);
+    if (ret < 0) {
+        return ret;
+    }
+
+    ret = get_special_regs(cpu);
+    if (ret < 0) {
+        return ret;
+    }
+
+    ret = get_fpu(cpu);
+    if (ret < 0) {
+        return ret;
+    }
+
+    ret = get_xc_reg(cpu);
+    if (ret < 0) {
+        return ret;
     }
 
     return 0;
@@ -1009,6 +1033,13 @@ int mshv_arch_put_registers(const CPUState *cpu)
         return ret;
     }
 
+    return 0;
+}
+
+int mshv_arch_store_vcpu_state(const CPUState *cpu)
+{
+    int ret;
+
     ret = set_standard_regs(cpu);
     if (ret < 0) {
         return ret;
@@ -1072,7 +1103,7 @@ static int emulate_instruction(CPUState *cpu,
     int ret;
     x86_insn_stream stream = { .bytes = insn_bytes, .len = insn_len };
 
-    ret = mshv_arch_load_regs(cpu);
+    ret = load_regs(cpu);
     if (ret < 0) {
         error_report("Failed to load registers");
         return -1;
@@ -1081,7 +1112,7 @@ static int emulate_instruction(CPUState *cpu,
     decode_instruction_stream(env, &decode, &stream);
     exec_instruction(env, &decode);
 
-    ret = mshv_arch_store_regs(cpu);
+    ret = store_regs(cpu);
     if (ret < 0) {
         error_report("failed to store registers");
         return -1;
@@ -1383,7 +1414,7 @@ static int handle_pio_str(CPUState *cpu, hv_x64_io_port_intercept_message *info)
     X86CPU *x86_cpu = X86_CPU(cpu);
     CPUX86State *env = &x86_cpu->env;
 
-    ret = mshv_arch_load_regs(cpu);
+    ret = load_regs(cpu);
     if (ret < 0) {
         error_report("Failed to load registers");
         return -1;

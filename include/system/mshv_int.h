@@ -74,8 +74,6 @@ void mshv_init_mmio_emu(void);
 int mshv_create_vcpu(int vm_fd, uint8_t vp_index, int *cpu_fd);
 void mshv_remove_vcpu(int vm_fd, int cpu_fd);
 int mshv_run_vcpu(int vm_fd, CPUState *cpu, hv_message *msg, MshvVmExit *exit);
-int mshv_set_generic_regs(const CPUState *cpu, const hv_register_assoc *assocs,
-                          size_t n_regs);
 int mshv_arch_store_vcpu_state(const CPUState *cpu);
 int mshv_arch_load_vcpu_state(CPUState *cpu);
 void mshv_arch_init_vcpu(CPUState *cpu);
@@ -108,13 +106,14 @@ void mshv_set_phys_mem(MshvMemoryListener *mml, MemoryRegionSection *section,
                        bool add);
 
 /* msr */
-typedef struct MshvMsrEntry {
-  uint32_t index;
-  uint64_t data;
-} MshvMsrEntry;
-
-int mshv_configure_msr(const CPUState *cpu, const MshvMsrEntry *entries,
-                       size_t n_msrs);
+void mshv_msr_store_in_env(CPUState *cpu,
+                           const struct hv_register_assoc *assocs,
+                           size_t n_assocs);
+void mshv_msr_load_from_env(const CPUState *cpu,
+                            struct hv_register_assoc *assocs, size_t n_assocs);
+size_t mshv_msr_mappable_reg_count(void);
+void mshv_msr_set_hv_name_in_assocs(struct hv_register_assoc *assocs,
+                                    size_t n_assocs);
 
 /* interrupt */
 void mshv_add_routing_entry(MshvState *s, struct mshv_user_irq_entry *entry);

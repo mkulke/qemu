@@ -135,6 +135,28 @@ static int get_lapic(CPUState *cpu)
     return 0;
 }
 
+static int get_msrs(CPUState *cpu)
+{
+    int ret = 0;
+    size_t n_assocs = mshv_msr_mappable_reg_count();
+    struct hv_register_assoc *assocs;
+
+    assocs = g_new0(struct hv_register_assoc, n_assocs);
+    mshv_msr_set_hv_name_in_assocs(assocs, n_assocs);
+
+    ret = get_generic_regs(cpu, assocs, n_assocs);
+    if (ret < 0) {
+        g_free(assocs);
+        error_report("failed to get msrs");
+        return -1;
+    }
+
+    mshv_msr_store_in_env(cpu, assocs, n_assocs);
+    g_free(assocs);
+
+    return 0;
+}
+
 static void populate_fpu(const hv_register_assoc *assocs, X86CPU *x86cpu)
 {
     union hv_register_value value;
@@ -258,8 +280,8 @@ static int translate_gva(const CPUState *cpu, uint64_t gva, uint64_t *gpa,
     return 0;
 }
 
-int mshv_set_generic_regs(const CPUState *cpu, const hv_register_assoc *assocs,
-                          size_t n_regs)
+static int set_generic_regs(const CPUState *cpu,
+                            const hv_register_assoc *assocs, size_t n_regs)
 {
     int cpu_fd = mshv_vcpufd(cpu);
     int vp_index = cpu->cpu_index;
@@ -387,7 +409,7 @@ static int set_standard_regs(const CPUState *cpu)
     lflags_to_rflags(env);
     assocs[17].value.reg64 = env->eflags;
 
-    ret = mshv_set_generic_regs(cpu, assocs, n_regs);
+    ret = set_generic_regs(cpu, assocs, n_regs);
     if (ret < 0) {
         error_report("failed to set standard registers");
         return -errno;
@@ -573,6 +595,11 @@ int mshv_arch_load_vcpu_state(CPUState *cpu) {
     }
 
     ret = get_xc_reg(cpu);
+    if (ret < 0) {
+        return ret;
+    }
+
+    ret = get_msrs(cpu);
     if (ret < 0) {
         return ret;
     }
@@ -874,7 +901,7 @@ static int set_special_regs(const CPUState *cpu)
     assocs[15].value.reg64 = env->efer;
     assocs[16].value.reg64 = cpu_get_apic_base(x86cpu->apic_state);
 
-    ret = mshv_set_generic_regs(cpu, assocs, n_regs);
+    ret = set_generic_regs(cpu, assocs, n_regs);
     if (ret < 0) {
         error_report("failed to set special registers");
         return -1;
@@ -943,7 +970,7 @@ static int set_fpu(const CPUState *cpu)
     xmm_ctrl_status->xmm_status_control_mask = 0;
     xmm_ctrl_status->last_fp_rdp = env->fpdp;
 
-    ret = mshv_set_generic_regs(cpu, assocs, n_regs);
+    ret = set_generic_regs(cpu, assocs, n_regs);
     if (ret < 0) {
         error_report("failed to set fpu registers");
         return -1;
@@ -963,7 +990,7 @@ static int set_xc_reg(const CPUState *cpu)
         .value.reg64 = env->xcr0,
     };
 
-    ret = mshv_set_generic_regs(cpu, &assoc, 1);
+    ret = set_generic_regs(cpu, &assoc, 1);
     if (ret < 0) {
         error_report("failed to set xcr0");
         return -errno;
@@ -1009,43 +1036,20 @@ static int init_lint(const CPUState *cpu)
 static int set_msrs(const CPUState *cpu)
 {
     int ret = 0;
-    X86CPU *x86cpu = X86_CPU(cpu);
-    CPUX86State *env = &x86cpu->env;
+    size_t n_assocs = mshv_msr_mappable_reg_count();
+    struct hv_register_assoc *assocs;
 
-    const struct MshvMsrEntry entries[] = {
-        { .index = MSR_IA32_SYSENTER_CS,    .data = env->sysenter_cs },
-        { .index = MSR_IA32_SYSENTER_ESP,   .data = env->sysenter_esp },
-        { .index = MSR_IA32_SYSENTER_EIP,   .data = env->sysenter_eip },
-        { .index = MSR_EFER,                .data = env->efer },
-        { .index = MSR_PAT,                 .data = env->pat },
-        { .index = MSR_STAR,                .data = env->star },
-        { .index = MSR_CSTAR,               .data = env->cstar },
-        { .index = MSR_LSTAR,               .data = env->lstar },
-        { .index = MSR_KERNELGSBASE,        .data = env->kernelgsbase },
-        { .index = MSR_FMASK,               .data = env->fmask },
-        { .index = MSR_MTRRdefType,         .data = env->mtrr_deftype },
-        { .index = MSR_VM_HSAVE_PA,         .data = env->vm_hsave },
-        { .index = MSR_SMI_COUNT,           .data = env->msr_smi_count },
-        { .index = MSR_IA32_PKRS,           .data = env->pkrs },
-        { .index = MSR_IA32_BNDCFGS,        .data = env->msr_bndcfgs },
-        { .index = MSR_IA32_XSS,            .data = env->xss },
-        { .index = MSR_IA32_UMWAIT_CONTROL, .data = env->umwait },
-        { .index = MSR_IA32_TSX_CTRL,       .data = env->tsx_ctrl },
-        { .index = MSR_AMD64_TSC_RATIO,     .data = env->amd_tsc_scale_msr },
-        { .index = MSR_TSC_AUX,             .data = env->tsc_aux },
-        { .index = MSR_TSC_ADJUST,          .data = env->tsc_adjust },
-        { .index = MSR_IA32_SMBASE,         .data = env->smbase },
-        { .index = MSR_IA32_SPEC_CTRL,      .data = env->spec_ctrl },
-        { .index = MSR_VIRT_SSBD,           .data = env->virt_ssbd },
-    };
-    QEMU_BUILD_BUG_ON(ARRAY_SIZE(entries) > MSHV_MSR_ENTRIES_COUNT);
+    assocs = g_new0(struct hv_register_assoc, n_assocs);
+    mshv_msr_load_from_env(cpu, assocs, n_assocs);
 
-    ret = mshv_configure_msr(cpu, &entries[0], ARRAY_SIZE(entries));
+    ret = set_generic_regs(cpu, assocs, n_assocs);
+    g_free(assocs);
     if (ret < 0) {
         error_report("failed to put msrs");
-        return -errno;
+        return -1;
     }
-    return ret;
+
+    return 0;
 }
 
 static int set_lapic(const CPUState *cpu)
@@ -1221,7 +1225,7 @@ static int set_x64_registers(const CPUState *cpu, const uint32_t *names,
         assocs[i].value.reg64 = values[i];
     }
 
-    ret = mshv_set_generic_regs(cpu, assocs, ARRAY_SIZE(assocs));
+    ret = set_generic_regs(cpu, assocs, ARRAY_SIZE(assocs));
     if (ret < 0) {
         error_report("failed to set x64 registers");
         return -1;

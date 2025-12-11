@@ -192,7 +192,7 @@ static int set_synthetic_proc_features(int vm_fd)
     return 0;
 }
 
-static int initialize_vm(int vm_fd)
+static int initialize_partition(int vm_fd)
 {
     int ret = ioctl(vm_fd, MSHV_INITIALIZE_PARTITION);
     if (ret < 0) {
@@ -214,7 +214,7 @@ static int create_vm(int mshv_fd, int *vm_fd)
         return -1;
     }
 
-    ret = initialize_vm(*vm_fd);
+    ret = initialize_partition(*vm_fd);
     if (ret < 0) {
         return -1;
     }

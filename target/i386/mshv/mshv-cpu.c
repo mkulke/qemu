@@ -116,6 +116,50 @@ static int get_generic_regs(CPUState *cpu,
                             struct hv_register_assoc *assocs,
                             size_t n_regs);
 
+static int get_xsave_state(CPUState *cpu)
+{
+    X86CPU *x86cpu = X86_CPU(cpu);
+    CPUX86State *env = &x86cpu->env;
+    int cpu_fd = mshv_vcpufd(cpu);
+    int ret;
+
+    struct mshv_get_set_vp_state args = {
+        .type = MSHV_VP_STATE_XSAVE,
+        .buf_sz = env->xsave_buf_len,
+        .buf_ptr = (uintptr_t)env->xsave_buf,
+    };
+
+    ret = ioctl(cpu_fd, MSHV_GET_VP_STATE, &args);
+    if (ret < 0) {
+        error_report("failed to get xsave state: %s", strerror(errno));
+        return -errno;
+    }
+
+    return 0;
+}
+
+static int set_xsave_state(const CPUState *cpu)
+{
+    X86CPU *x86cpu = X86_CPU(cpu);
+    CPUX86State *env = &x86cpu->env;
+    int cpu_fd = mshv_vcpufd(cpu);
+    int ret;
+
+    struct mshv_get_set_vp_state args = {
+        .type = MSHV_VP_STATE_XSAVE,
+        .buf_sz = env->xsave_buf_len,
+        .buf_ptr = (uintptr_t)env->xsave_buf,
+    };
+
+    ret = ioctl(cpu_fd, MSHV_SET_VP_STATE, &args);
+    if (ret < 0) {
+        error_report("failed to set xsave state: %s", strerror(errno));
+        return -errno;
+    }
+
+    return 0;
+}
+
 static int get_lapic(CPUState *cpu)
 {
     X86CPU *x86cpu = X86_CPU(cpu);
@@ -595,6 +639,11 @@ int mshv_arch_load_vcpu_state(CPUState *cpu) {
     }
 
     ret = get_xc_reg(cpu);
+    if (ret < 0) {
+        return ret;
+    }
+
+    ret = get_xsave_state(cpu);
     if (ret < 0) {
         return ret;
     }
@@ -1090,6 +1139,11 @@ int mshv_arch_store_vcpu_state(const CPUState *cpu)
     }
 
     ret = set_xc_reg(cpu);
+    if (ret < 0) {
+        return ret;
+    }
+
+    ret = set_xsave_state(cpu);
     if (ret < 0) {
         return ret;
     }
@@ -1700,6 +1754,7 @@ void mshv_arch_init_vcpu(CPUState *cpu)
     size_t page = HV_HYP_PAGE_SIZE;
     void *mem = qemu_memalign(page, 2 * page);
     int ret;
+    X86XSaveHeader *header;
 
     /* sanity check, to make sure we don't overflow the page */
     QEMU_BUILD_BUG_ON((MAX_REGISTER_COUNT
@@ -1711,10 +1766,19 @@ void mshv_arch_init_vcpu(CPUState *cpu)
     state->hvcall_args.input_page = mem;
     state->hvcall_args.output_page = (uint8_t *)mem + page;
 
+    /* buffer for mmio instructions */
     env->emu_mmio_buf = g_new(char, 4096);
-
     /* enable x2apic feature statically */
     env->features[FEAT_1_ECX] |= CPUID_EXT_X2APIC;
+
+    /* Initialize XSAVE buffer page-aligned */
+    env->xsave_buf = qemu_memalign(HV_HYP_PAGE_SIZE, HV_HYP_PAGE_SIZE * 1);
+    env->xsave_buf_len = HV_HYP_PAGE_SIZE;
+    memset(env->xsave_buf, 0, env->xsave_buf_len);
+
+    /* we need to set the compacted format bit in xsave header for mshv */
+    header = (X86XSaveHeader *)(env->xsave_buf + sizeof(X86LegacyXSaveArea));
+    header->xcomp_bv = header->xstate_bv | (1ULL << 63);
 
     /*
      * TODO: populate topology info:
@@ -1740,6 +1804,10 @@ void mshv_arch_destroy_vcpu(CPUState *cpu)
     g_free(state->hvcall_args.base);
     state->hvcall_args = (MshvHvCallArgs){0};
     g_clear_pointer(&env->emu_mmio_buf, g_free);
+
+    qemu_vfree(env->xsave_buf);
+    env->xsave_buf = NULL;
+    env->xsave_buf_len = 0;
 }
 
 uint32_t mshv_get_supported_cpuid(uint32_t func, uint32_t idx, int reg)

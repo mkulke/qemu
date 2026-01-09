@@ -70,4 +70,7 @@ int mshv_irqchip_add_irqfd_notifier_gsi(const EventNotifier *n,
 int mshv_irqchip_remove_irqfd_notifier_gsi(const EventNotifier *n, int virq);
 void mshv_init_irq_routing(MshvState *s);
 
+/* cpuid */
+uint32_t mshv_get_supported_cpuid(uint32_t func, uint32_t idx, int reg);
+
 #endif

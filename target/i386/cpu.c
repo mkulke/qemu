@@ -26,6 +26,7 @@
 #include "tcg/helper-tcg.h"
 #include "exec/translation-block.h"
 #include "system/hvf.h"
+#include "system/mshv.h"
 #include "hvf/hvf-i386.h"
 #include "kvm/kvm_i386.h"
 #include "kvm/tdx.h"
@@ -7513,6 +7514,13 @@ uint64_t x86_cpu_get_supported_feature_word(X86CPU *cpu, FeatureWord w)
         r = hvf_get_supported_cpuid(wi->cpuid.eax,
                                     wi->cpuid.ecx,
                                     wi->cpuid.reg);
+     } else if (mshv_enabled()) {
+        if (wi->type != CPUID_FEATURE_WORD) {
+            return 0;
+        }
+        r = mshv_get_supported_cpuid(wi->cpuid.eax,
+                                     wi->cpuid.ecx,
+                                     wi->cpuid.reg);
     } else if (tcg_enabled()) {
         r = wi->tcg_features;
     } else {
@@ -9677,6 +9685,7 @@ static void x86_cpu_init_xsave(void)
     static bool first = true;
     uint64_t supported_xcr0;
     int i;
+    uint32_t eax, ebx, ecx, edx;
 
     if (first) {
         first = false;
@@ -9690,6 +9699,11 @@ static void x86_cpu_init_xsave(void)
 
             if (!(supported_xcr0 & (1 << i))) {
                 esa->size = 0;
+            } else if (mshv_enabled()) {
+                /* MSHV requires XSAVE area offsets to be populated */
+                host_cpuid(0xD, i, &eax, &ebx, &ecx, &edx);
+                esa->offset = ebx;
+                esa->size = eax;
             }
         }
     }

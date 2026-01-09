@@ -25,6 +25,7 @@
 #include "hw/i386/apic_internal.h"
 
 #include "cpu.h"
+#include "host-cpu.h"
 #include "emulate/x86_decode.h"
 #include "emulate/x86_emu.h"
 #include "emulate/x86_flags.h"
@@ -1527,6 +1528,33 @@ void mshv_arch_destroy_vcpu(CPUState *cpu)
     g_free(state->hvcall_args.base);
     state->hvcall_args = (MshvHvCallArgs){0};
     g_clear_pointer(&env->emu_mmio_buf, g_free);
+}
+
+uint32_t mshv_get_supported_cpuid(uint32_t func, uint32_t idx, int reg)
+{
+    uint32_t eax, ebx, ecx, edx;
+    uint32_t ret = 0;
+
+    host_cpuid(func, idx, &eax, &ebx, &ecx, &edx);
+    switch (reg) {
+    case R_EAX:
+        ret = eax; break;
+    case R_EBX:
+        ret = ebx; break;
+    case R_ECX:
+        ret = ecx; break;
+    case R_EDX:
+        ret = edx; break;
+    }
+
+    /* Disable nested virtualization features not yet supported by MSHV */
+    if (func == 0x80000001 && reg == R_ECX) {
+        ret &= ~CPUID_EXT3_SVM;
+    }
+    if (func == 0x01       && reg == R_ECX) {
+        ret &= ~CPUID_EXT_VMX;
+    }
+    return ret;
 }
 
 /*

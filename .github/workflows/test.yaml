@@ -4,6 +4,9 @@ on:
   workflow_run:
     workflows: ["Sync master"]
     types: [completed]
+  push:
+    branches:
+    - ci
 
 jobs:
   build:

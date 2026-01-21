@@ -116,24 +116,78 @@ static int get_generic_regs(CPUState *cpu,
                             struct hv_register_assoc *assocs,
                             size_t n_regs);
 
+#define XSTATE_BV_IN_HDR  offsetof(X86XSaveHeader, xstate_bv)
+#define XCOMP_BV_IN_HDR   offsetof(X86XSaveHeader, xcomp_bvo)
+
+typedef struct X86XSaveAreaView {
+    X86LegacyXSaveArea legacy;  /* 512 */
+    X86XSaveHeader     header;  /* 64 */
+    /* followed by extended state areas */
+} X86XSaveAreaView;
+
+#define XSAVE_XSTATE_BV_OFFSET  offsetof(X86XSaveAreaView, header.xstate_bv)
+#define XSAVE_XCOMP_BV_OFFSET   offsetof(X86XSaveAreaView, header.xcomp_bv)
+#define XSAVE_EXT_OFFSET        (sizeof(X86LegacyXSaveArea) + \
+                                 sizeof(X86XSaveHeader)) /* 576 */
+
 static int get_xsave_state(CPUState *cpu)
 {
     X86CPU *x86cpu = X86_CPU(cpu);
     CPUX86State *env = &x86cpu->env;
     int cpu_fd = mshv_vcpufd(cpu);
     int ret;
+    void *xsavec_buf;
+    const size_t page = HV_HYP_PAGE_SIZE;
+    size_t xsavec_buf_len = page;
+
+    /* TODO: should properly determine xsavec size based on CPUID */
+    xsavec_buf = qemu_memalign(page, xsavec_buf_len);
+    memset(xsavec_buf, 0, xsavec_buf_len);
 
     struct mshv_get_set_vp_state args = {
         .type = MSHV_VP_STATE_XSAVE,
-        .buf_sz = env->xsave_buf_len,
-        .buf_ptr = (uintptr_t)env->xsave_buf,
+        .buf_sz = xsavec_buf_len,
+        .buf_ptr = (uintptr_t)xsavec_buf,
     };
 
     ret = ioctl(cpu_fd, MSHV_GET_VP_STATE, &args);
+
+    /* debug debug debug start */
+    if (false) {
+        uint64_t *xcomp_bv = xsavec_buf + XSAVE_XCOMP_BV_OFFSET;
+        uint64_t *xstate_bv = xsavec_buf + XSAVE_XSTATE_BV_OFFSET;
+        uint64_t hv_xcr0 = (*xcomp_bv) & ~(1ULL << 63);  // strip compacted bit
+
+        error_report("mgns: HV xcomp_bv=0x%lx (xcr0=0x%lx) xstate_bv=0x%lx",
+                     *xcomp_bv, hv_xcr0, *xstate_bv);
+
+        uint32_t eax, ebx, ecx, edx;
+        host_cpuid(0xD, 0, &eax, &ebx, &ecx, &edx);
+        uint64_t cpuid_xcr0 = ((uint64_t)edx << 32) | eax;
+
+        host_cpuid(0xD, 1, &eax, &ebx, &ecx, &edx);
+        uint64_t cpuid_xss = ((uint64_t)edx << 32) | ecx;  /* IA32_XSS from ECX/EDX */
+
+        uint64_t cpuid_combined = cpuid_xcr0 | cpuid_xss;
+        error_report("mgns: host_cpuid xcr0=0x%lx xss=0x%lx combined=0x%lx "
+                     "(mismatch=0x%lx)",
+                     cpuid_xcr0, cpuid_xss, cpuid_combined,
+                     (hv_xcr0 & ~cpuid_combined));
+    }
+    /* debug debug debug end */
+
     if (ret < 0) {
         error_report("failed to get xsave state: %s", strerror(errno));
         return -errno;
     }
+
+    ret = decompact_xsave_area(xsavec_buf, xsavec_buf_len, env);
+    g_free(xsavec_buf);
+    if (ret < 0) {
+        error_report("failed to decompact xsave area");
+        return ret;
+    }
+    x86_cpu_xrstor_all_areas(x86cpu, env->xsave_buf, env->xsave_buf_len);
 
     return 0;
 }
@@ -144,14 +198,43 @@ static int set_xsave_state(const CPUState *cpu)
     CPUX86State *env = &x86cpu->env;
     int cpu_fd = mshv_vcpufd(cpu);
     int ret;
+    void *xsavec_buf;
+    size_t page = HV_HYP_PAGE_SIZE, xsavec_buf_len;
+
+    /* allocate and populate compacted buffer */
+    xsavec_buf = qemu_memalign(page, page);
+    xsavec_buf_len = page;
+
+    /* save registers to standard format buffer */
+    x86_cpu_xsave_all_areas(x86cpu, env->xsave_buf, env->xsave_buf_len);
+
+    /* store compacted version of xsave area in xsavec_buf */
+    compact_xsave_area(env, xsavec_buf, xsavec_buf_len);
+
+    /* debug debug debug start */
+    if (false) {
+        uint64_t *dbg_xcomp_bv = xsavec_buf + XSAVE_XCOMP_BV_OFFSET;
+        uint64_t *dbg_xstate_bv = xsavec_buf + XSAVE_XSTATE_BV_OFFSET;
+
+        error_report("mgns: set_xsave_state() env->xcr0=0x%lx", env->xcr0);
+
+        error_report("mgns: SET xcomp_bv=0x%lx xstate_bv=0x%lx size=%zu "
+                     "env->xcr0=0x%lx",
+                     *dbg_xcomp_bv, *dbg_xstate_bv, xsavec_buf_len, env->xcr0);
+
+        error_report("mgns: compacted xsave area size: %zu bytes",
+                     xsavec_buf_len);
+    }
+    /* debug debug debug end */
 
     struct mshv_get_set_vp_state args = {
         .type = MSHV_VP_STATE_XSAVE,
-        .buf_sz = env->xsave_buf_len,
-        .buf_ptr = (uintptr_t)env->xsave_buf,
+        .buf_sz = xsavec_buf_len,
+        .buf_ptr = (uintptr_t)xsavec_buf,
     };
 
     ret = ioctl(cpu_fd, MSHV_SET_VP_STATE, &args);
+    g_free(xsavec_buf);
     if (ret < 0) {
         error_report("failed to set xsave state: %s", strerror(errno));
         return -errno;
@@ -626,6 +709,16 @@ static int load_regs(CPUState *cpu)
     return 0;
 }
 
+static int update_hflags(CPUState *cpu)
+{
+    X86CPU *x86cpu = X86_CPU(cpu);
+    CPUX86State *env = &x86cpu->env;
+
+    x86_update_hflags(env);
+
+    return 0;
+}
+
 int mshv_arch_load_vcpu_state(CPUState *cpu) {
     int ret;
 
@@ -663,6 +756,8 @@ int mshv_arch_load_vcpu_state(CPUState *cpu) {
     if (ret < 0) {
         return ret;
     }
+
+    update_hflags(cpu);
 
     return 0;
 }
@@ -1757,7 +1852,7 @@ void mshv_arch_init_vcpu(CPUState *cpu)
     X86CPU *x86_cpu = X86_CPU(cpu);
     CPUX86State *env = &x86_cpu->env;
     AccelCPUState *state = cpu->accel;
-    size_t page = HV_HYP_PAGE_SIZE;
+    size_t page = HV_HYP_PAGE_SIZE, xsave_len;
     void *mem = qemu_memalign(page, 2 * page);
     int ret;
     X86XSaveHeader *header;
@@ -1778,8 +1873,10 @@ void mshv_arch_init_vcpu(CPUState *cpu)
     env->features[FEAT_1_ECX] |= CPUID_EXT_X2APIC;
 
     /* Initialize XSAVE buffer page-aligned */
-    env->xsave_buf = qemu_memalign(HV_HYP_PAGE_SIZE, HV_HYP_PAGE_SIZE * 1);
-    env->xsave_buf_len = HV_HYP_PAGE_SIZE;
+    /* TODO: pick proper size based on CPUID */
+    xsave_len = page;
+    env->xsave_buf = qemu_memalign(page, xsave_len);
+    env->xsave_buf_len = xsave_len;
     memset(env->xsave_buf, 0, env->xsave_buf_len);
 
     /* we need to set the compacted format bit in xsave header for mshv */

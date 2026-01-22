@@ -1193,19 +1193,29 @@ static int set_msrs(const CPUState *cpu)
     assocs = g_new0(struct hv_register_assoc, n_assocs);
     mshv_msr_load_from_env(cpu, assocs, n_assocs);
 
-    /* Filter out partition-wide MSRs */
-    if (cpu->cpu_index != 0) {
-        for (i = 0, j = 0; i < n_assocs; i++) {
-            if (assocs[i].name == HV_X64_REGISTER_HYPERCALL) {
-                continue;
-            }
-            if (j != i) {
-                assocs[j] = assocs[i];
-            }
-            j++;
+    /* Filter out MSRs that cannot be written at boot */
+    X86CPU *x86cpu = X86_CPU(cpu);
+    bool synic_enabled = x86cpu->env.msr_hv_synic_control & 1;
+    for (i = 0, j = 0; i < n_assocs; i++) {
+        uint32_t name = assocs[i].name;
+
+        /* Partition-wide MSR: only write on vCPU 0 */
+        if (cpu->cpu_index != 0 && name == HV_X64_REGISTER_HYPERCALL) {
+            continue;
         }
-        n_assocs = j;
+
+        /* SINT MSRs: only write if SynIC is enabled */
+        if (name >= HV_REGISTER_SINT0 && name <= HV_REGISTER_SINT15 &&
+            !synic_enabled) {
+            continue;
+        }
+
+        if (j != i) {
+            assocs[j] = assocs[i];
+        }
+        j++;
     }
+    n_assocs = j;
 
     ret = set_generic_regs(cpu, assocs, n_assocs);
     g_free(assocs);

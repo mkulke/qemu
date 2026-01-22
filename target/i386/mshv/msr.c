@@ -84,6 +84,9 @@ static const MshvMsrEnvMap msr_env_map[] = {
       offsetof(CPUX86State, msr_hv_synic_evt_page), MSHV_MSR_WIDTH_64 },
     { HV_X64_MSR_SIMP,      HV_REGISTER_SIMP,
       offsetof(CPUX86State, msr_hv_synic_msg_page), MSHV_MSR_WIDTH_64 },
+    { HV_X64_MSR_EOM,       HV_REGISTER_EOM,
+      offsetof(CPUX86State, msr_hv_eom),            MSHV_MSR_WIDTH_64 },
+
 
     /* Other */
     /* { IA32_MSR_MISC_ENABLE,  HV_X64_REGISTER_MSR_IA32_MISC_ENABLE, */

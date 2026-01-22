@@ -1188,9 +1188,24 @@ static int set_msrs(const CPUState *cpu)
     int ret = 0;
     size_t n_assocs = mshv_msr_mappable_reg_count();
     struct hv_register_assoc *assocs;
+    size_t i, j;
 
     assocs = g_new0(struct hv_register_assoc, n_assocs);
     mshv_msr_load_from_env(cpu, assocs, n_assocs);
+
+    /* Filter out partition-wide MSRs */
+    if (cpu->cpu_index != 0) {
+        for (i = 0, j = 0; i < n_assocs; i++) {
+            if (assocs[i].name == HV_X64_REGISTER_HYPERCALL) {
+                continue;
+            }
+            if (j != i) {
+                assocs[j] = assocs[i];
+            }
+            j++;
+        }
+        n_assocs = j;
+    }
 
     ret = set_generic_regs(cpu, assocs, n_assocs);
     g_free(assocs);

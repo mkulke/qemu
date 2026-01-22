@@ -87,6 +87,9 @@ static const MshvMsrEnvMap msr_env_map[] = {
     { HV_X64_MSR_EOM,       HV_REGISTER_EOM,
       offsetof(CPUX86State, msr_hv_eom),            MSHV_MSR_WIDTH_64 },
 
+    /* MTRR default type */
+    { IA32_MSR_MTRR_DEF_TYPE, HV_X64_REGISTER_MSR_MTRR_DEF_TYPE,
+      offsetof(CPUX86State, mtrr_deftype), MSHV_MSR_WIDTH_64 },
 
     /* Other */
     /* { IA32_MSR_MISC_ENABLE,  HV_X64_REGISTER_MSR_IA32_MISC_ENABLE, */

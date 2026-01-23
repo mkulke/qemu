@@ -38,6 +38,8 @@
 #include "system/mshv.h"
 #include "system/mshv_int.h"
 #include "system/reset.h"
+#include "migration/qemu-file-types.h"
+#include "migration/register.h"
 #include "trace.h"
 #include <err.h>
 #include <stdint.h>
@@ -46,6 +48,9 @@
 bool mshv_allowed;
 
 MshvState *mshv_state;
+
+static int pause_vm(int vm_fd);
+static int resume_vm(int vm_fd);
 
 static int init_mshv(int *mshv_fd)
 {
@@ -79,6 +84,139 @@ static int set_time_freeze(int vm_fd, int freeze)
 
     return 0;
 }
+
+static int get_reference_time(int vm_fd, uint64_t *ref_time)
+{
+    int ret;
+    struct hv_input_get_partition_property in = {0};
+    struct hv_output_get_partition_property out = {0};
+    struct mshv_root_hvcall args = {0};
+
+    in.property_code = HV_PARTITION_PROPERTY_REFERENCE_TIME;
+
+    args.code = HVCALL_GET_PARTITION_PROPERTY;
+    args.in_sz = sizeof(in);
+    args.in_ptr = (uint64_t)&in;
+    args.out_sz = sizeof(out);
+    args.out_ptr = (uint64_t)&out;
+
+    ret = mshv_hvcall(vm_fd, &args);
+    if (ret < 0) {
+        error_report("Failed to get reference time");
+        return -1;
+    }
+
+    *ref_time = out.property_value;
+    return 0;
+}
+
+static int set_reference_time(int vm_fd, uint64_t ref_time)
+{
+    int ret;
+    struct hv_input_set_partition_property in = {0};
+    struct mshv_root_hvcall args = {0};
+
+    in.property_code = HV_PARTITION_PROPERTY_REFERENCE_TIME;
+    in.property_value = ref_time;
+
+    args.code = HVCALL_SET_PARTITION_PROPERTY;
+    args.in_sz = sizeof(in);
+    args.in_ptr = (uint64_t)&in;
+
+    ret = mshv_hvcall(vm_fd, &args);
+    if (ret < 0) {
+        error_report("Failed to set reference time");
+        return -1;
+    }
+
+    return 0;
+}
+
+static void mshv_ref_time_save(QEMUFile *f, void *opaque)
+{
+    MshvState *s = opaque;
+    uint64_t ref_time;
+    int ret;
+
+    ret = get_reference_time(s->vm, &ref_time);
+    if (ret < 0) {
+        error_report("Failed to get reference time for migration");
+        abort();
+    }
+
+    qemu_put_be64(f, ref_time);
+}
+
+static int mshv_save_prepare(void *opaque, Error **errp)
+{
+    MshvState *s = opaque;
+    int ret;
+
+    ret = pause_vm(s->vm);
+    if (ret < 0) {
+        error_setg(errp, "Failed to pause VM for migration");
+        return -1;
+    }
+
+    return 0;
+}
+
+static void mshv_save_cleanup(void *opaque)
+{
+    MshvState *s = opaque;
+
+    resume_vm(s->vm);
+}
+
+static int mshv_load_setup(QEMUFile *f, void *opaque, Error **errp)
+{
+    MshvState *s = opaque;
+    int ret;
+
+    ret = pause_vm(s->vm);
+    if (ret < 0) {
+        error_setg(errp, "Failed to pause VM for migration restore");
+        return -1;
+    }
+
+    return 0;
+}
+
+static int mshv_load_cleanup(void *opaque)
+{
+    MshvState *s = opaque;
+
+    resume_vm(s->vm);
+
+    return 0;
+}
+
+static int mshv_ref_time_load(QEMUFile *f, void *opaque, int version_id)
+{
+    MshvState *s = opaque;
+    uint64_t ref_time;
+    int ret;
+
+    ref_time = qemu_get_be64(f);
+
+    ret = set_reference_time(s->vm, ref_time);
+    if (ret < 0) {
+        error_report("Failed to set reference time after migration");
+        resume_vm(s->vm);
+        return -1;
+    }
+
+    return 0;
+}
+
+static SaveVMHandlers savevm_mshv_ref_time = {
+    .save_prepare = mshv_save_prepare,
+    .save_state = mshv_ref_time_save,
+    .save_cleanup = mshv_save_cleanup,
+    .load_setup = mshv_load_setup,
+    .load_state = mshv_ref_time_load,
+    .load_cleanup = mshv_load_cleanup,
+};
 
 static int pause_vm(int vm_fd)
 {
@@ -470,6 +608,9 @@ static int mshv_init(AccelState *as, MachineState *ms)
     register_mshv_memory_listener(s, &s->memory_listener, &address_space_memory,
                                   0, "mshv-memory");
     memory_listener_register(&mshv_io_listener, &address_space_io);
+
+    /* register reference time handlers for migration */
+    register_savevm_live("mshv-ref-time", 0, 1, &savevm_mshv_ref_time, s);
 
     return 0;
 }

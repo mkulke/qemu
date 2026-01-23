@@ -91,6 +91,8 @@ int mshv_get_simp(int cpu_fd, uint8_t *page);
 int mshv_set_simp(int cpu_fd, const uint8_t *page);
 int mshv_get_siefp(int cpu_fd, uint8_t *page);
 int mshv_set_siefp(int cpu_fd, const uint8_t *page);
+int mshv_get_synthetic_timers(int cpu_fd, uint8_t *state);
+int mshv_set_synthetic_timers(int cpu_fd, const uint8_t *state);
 
 #if defined COMPILING_PER_TARGET && defined CONFIG_MSHV_IS_POSSIBLE
 int mshv_hvcall(int fd, const struct mshv_root_hvcall *args);

@@ -269,6 +269,12 @@ static int get_synic_state(CPUState *cpu)
     int cpu_fd = mshv_vcpufd(cpu);
     int ret;
 
+    ret = mshv_get_synthetic_timers(cpu_fd, env->hv_synthetic_timers_state);
+    if (ret < 0) {
+        error_report("failed to get synthetic timers");
+        return -1;
+    }
+
     ret = mshv_get_simp(cpu_fd, env->hv_simp_page);
     if (ret < 0) {
         error_report("failed to get simp state");
@@ -1278,6 +1284,12 @@ static int set_synic_state(const CPUState *cpu)
     CPUX86State *env = &x86cpu->env;
     int cpu_fd = mshv_vcpufd(cpu);
     int ret;
+
+    ret = mshv_set_synthetic_timers(cpu_fd, env->hv_synthetic_timers_state);
+    if (ret < 0) {
+        error_report("failed to set synthetic timers state");
+        return -1;
+    }
 
     ret = mshv_set_simp(cpu_fd, env->hv_simp_page);
     if (ret < 0) {

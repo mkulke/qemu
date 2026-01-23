@@ -53,6 +53,8 @@ struct MshvState {
     int nr_allocated_irq_routes;
     unsigned long *used_gsi_bitmap;
     unsigned int gsi_count;
+    /* reference time for migration */
+    uint64_t reference_time;
 };
 
 typedef struct MshvMsiControl {

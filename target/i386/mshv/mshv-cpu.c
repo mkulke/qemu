@@ -275,6 +275,11 @@ static int get_synic_state(CPUState *cpu)
         return -1;
     }
 
+    /* SIMP/SIEFP can only be read when SynIC is enabled */
+    if (!(env->msr_hv_synic_control & 1)) {
+        return 0;
+    }
+
     ret = mshv_get_simp(cpu_fd, env->hv_simp_page);
     if (ret < 0) {
         error_report("failed to get simp state");
@@ -1289,6 +1294,11 @@ static int set_synic_state(const CPUState *cpu)
     if (ret < 0) {
         error_report("failed to set synthetic timers state");
         return -1;
+    }
+
+    /* SIMP/SIEFP can only be written when SynIC is enabled */
+    if (!(env->msr_hv_synic_control & 1)) {
+        return 0;
     }
 
     ret = mshv_set_simp(cpu_fd, env->hv_simp_page);

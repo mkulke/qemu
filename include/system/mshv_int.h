@@ -85,6 +85,10 @@ int mshv_set_lapic(int cpu_fd,
                    const struct hv_local_interrupt_controller_state *state);
 int mshv_get_lapic(int cpu_fd,
                    struct hv_local_interrupt_controller_state *state);
+int mshv_get_simp(int cpu_fd, uint8_t *page);
+int mshv_set_simp(int cpu_fd, const uint8_t *page);
+int mshv_get_siefp(int cpu_fd, uint8_t *page);
+int mshv_set_siefp(int cpu_fd, const uint8_t *page);
 
 #if defined COMPILING_PER_TARGET && defined CONFIG_MSHV_IS_POSSIBLE
 int mshv_hvcall(int fd, const struct mshv_root_hvcall *args);

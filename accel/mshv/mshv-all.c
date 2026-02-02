@@ -499,6 +499,12 @@ static int mshv_cpu_exec(CPUState *cpu)
             cpu->accel->dirty = false;
         }
 
+        /* Check if we should exit (e.g., reset requested) */
+        if (qatomic_load_acquire(&cpu->exit_request)) {
+            ret = EXCP_INTERRUPT;
+            break;
+        }
+
         ret = mshv_run_vcpu(mshv_state->vm, cpu, &mshv_msg, &exit_reason);
         if (ret < 0) {
             error_report("Failed to run on vcpu %d", cpu->cpu_index);

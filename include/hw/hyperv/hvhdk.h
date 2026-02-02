@@ -246,4 +246,8 @@ typedef struct hv_input_register_intercept_result {
     union hv_register_intercept_result_parameters parameters;
 } hv_input_register_intercept_result;
 
+typedef struct hv_input_scrub_partition {
+    uint64_t partition_id;
+} hv_input_scrub_partition;
+
 #endif /* HW_HYPERV_HVHDK_H */

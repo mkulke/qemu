@@ -29,6 +29,7 @@
 #include "hvf/hvf-i386.h"
 #include "kvm/kvm_i386.h"
 #include "kvm/tdx.h"
+#include "system/mshv.h"
 #include "sev.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"

@@ -20,6 +20,7 @@
 #include "qemu/module.h"
 #include "qemu/main-loop.h"
 #include "hw/core/boards.h"
+#include "hw/core/cpu.h"
 
 #include "hw/hyperv/hvhdk.h"
 #include "hw/hyperv/hvhdk_mini.h"
@@ -59,6 +60,25 @@ static int init_mshv(int *mshv_fd)
         return -1;
     }
     *mshv_fd = fd;
+    return 0;
+}
+
+static int scrub_partition(int vm_fd)
+{
+    int ret;
+    struct hv_input_scrub_partition in = {0};
+    struct mshv_root_hvcall args = {0};
+
+    args.code = HVCALL_SCRUB_PARTITION;
+    args.in_sz = sizeof(in);
+    args.in_ptr = (uint64_t)&in;
+
+    ret = mshv_hvcall(vm_fd, &args);
+    if (ret < 0) {
+        error_report("Failed to scrub partition");
+        return -1;
+    }
+
     return 0;
 }
 
@@ -632,13 +652,26 @@ static void mshv_cpu_synchronize_post_init(CPUState *cpu)
 
 static void mshv_cpu_synchronize_post_reset(CPUState *cpu)
 {
-    int ret = mshv_arch_put_registers(cpu);
-    if (ret) {
+    int ret;
+    bool is_bsp = (cpu == first_cpu);
+
+    if (is_bsp) {
+        ret = scrub_partition(mshv_state->vm);
+        if (ret < 0) {
+            error_report("Failed to scrub partition during reset: %s",
+                         strerror(-ret));
+            abort();
+        }
+    }
+
+    ret = mshv_arch_put_registers(cpu);
+    if (ret < 0) {
         error_report("Failed to put registers after reset: %s",
                      strerror(-ret));
         cpu_dump_state(cpu, stderr, CPU_DUMP_CODE);
         vm_stop(RUN_STATE_INTERNAL_ERROR);
     }
+
     cpu->accel->dirty = false;
 }
 

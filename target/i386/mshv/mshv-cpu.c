@@ -1033,6 +1033,13 @@ static int put_msrs(const CPUState *cpu)
         { MSR_IA32_SMBASE,         env->smbase },
         { MSR_IA32_SPEC_CTRL,      env->spec_ctrl },
         { MSR_VIRT_SSBD,           env->virt_ssbd },
+        /*
+         * Clear Guest OS ID explicitly (it's != 0 when rebooting a VM). As a
+         * side effect this will reset the state of hypervisor enlightenments,
+         * (e.g. SynIC, timers, hypercall page), allowing the guest to
+         * reinitialize after reboot.
+         */
+        { HV_X64_MSR_GUEST_OS_ID,  0 },
     };
 
     if (ARRAY_SIZE(pairs) > MSHV_MSR_ENTRIES_COUNT) {

@@ -1237,8 +1237,11 @@ static int set_msrs(const CPUState *cpu)
     for (i = 0, j = 0; i < n_assocs; i++) {
         uint32_t name = assocs[i].name;
 
-        /* Partition-wide MSR: only write on vCPU 0 */
-        if (cpu->cpu_index != 0 && name == HV_X64_REGISTER_HYPERCALL) {
+        /* Partition-wide MSRs: only write on vCPU 0 */
+        if (cpu->cpu_index != 0 &&
+            (name == HV_X64_REGISTER_HYPERCALL ||
+             name == HV_REGISTER_GUEST_OS_ID ||
+             name == HV_REGISTER_REFERENCE_TSC)) {
             continue;
         }
 

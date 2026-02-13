@@ -1366,6 +1366,21 @@ int mshv_arch_store_vcpu_state(const CPUState *cpu)
     return 0;
 }
 
+int mshv_arch_clear_internal_activity_state(const CPUState *cpu)
+{
+    /*
+     * - startup_suspend
+     * - halt_suspend
+     * - idle_suspend
+     */
+    struct hv_register_assoc assoc = {
+        .name = HV_REGISTER_INTERNAL_ACTIVITY_STATE,
+        .value.reg64 = 0,
+    };
+
+    return set_generic_regs(cpu, &assoc, 1);
+}
+
 void mshv_arch_amend_proc_features(
     union hv_partition_synthetic_processor_features *features)
 {

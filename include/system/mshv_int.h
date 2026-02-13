@@ -78,12 +78,8 @@ void mshv_remove_vcpu(int vm_fd, int cpu_fd);
 int mshv_run_vcpu(int vm_fd, CPUState *cpu, hv_message *msg, MshvVmExit *exit);
 int mshv_arch_store_vcpu_state(const CPUState *cpu);
 int mshv_arch_load_vcpu_state(CPUState *cpu);
-<<<<<<< Updated upstream
-int mshv_arch_clear_internal_activity_state(const CPUState *cpu)
-=======
 int mshv_arch_clear_internal_activity_state(const CPUState *cpu);
 int mshv_arch_set_partition_msrs(const CPUState *cpu);
->>>>>>> Stashed changes
 void mshv_arch_init_vcpu(CPUState *cpu);
 void mshv_arch_destroy_vcpu(CPUState *cpu);
 void mshv_arch_amend_proc_features(

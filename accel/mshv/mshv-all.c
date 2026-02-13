@@ -185,6 +185,17 @@ static int mshv_load_setup(QEMUFile *f, void *opaque, Error **errp)
 static int mshv_load_cleanup(void *opaque)
 {
     MshvState *s = opaque;
+    CPUState *cpu;
+    int ret;
+
+    CPU_FOREACH(cpu) {
+        ret = mshv_arch_clear_internal_activity_state(cpu);
+        if (ret < 0) {
+            error_report("Failed to clear internal activity state for vCPU %d:"
+                         "%s", cpu->cpu_index, strerror(-ret));
+            return -1;
+        }
+    }
 
     resume_vm(s->vm);
 

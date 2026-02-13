@@ -110,13 +110,45 @@ static int resume_vm(int vm_fd)
     return 0;
 }
 
+static int get_host_partition_property(int mshv_fd, uint32_t feature_bank,
+                                       uint64_t *value)
+{
+    int ret;
+    struct hv_input_get_partition_property in = {0};
+    struct hv_output_get_partition_property out = {0};
+    struct mshv_root_hvcall args = {0};
+
+    in.property_code = feature_bank;
+
+    args.code    = HVCALL_GET_PARTITION_PROPERTY;
+    args.in_sz   = sizeof(in);
+    args.in_ptr  = (uint64_t)&in;
+    args.out_sz  = sizeof(out);
+    args.out_ptr = (uint64_t)&out;
+
+    ret = ioctl(mshv_fd, MSHV_ROOT_HVCALL, &args);
+    if (ret < 0) {
+        error_report("Failed to get host partition property bank: %s",
+                     strerror(errno));
+        return -1;
+    }
+
+    *value = out.property_value;
+    return 0;
+}
+
 static int create_partition(int mshv_fd, int *vm_fd)
 {
-    int ret, i;
-    uint64_t pt_flags;
+    int ret;
+    uint64_t pt_flags, host_proc_features;
     union hv_partition_processor_xsave_features disabled_xsave_features;
-    union hv_partition_processor_features disabled_processor_features;
     struct mshv_create_partition_v2 args = {0};
+    uint32_t feature_banks[] = {
+        HV_PARTITION_PROPERTY_PROCESSOR_FEATURES0,
+        HV_PARTITION_PROPERTY_PROCESSOR_FEATURES1,
+    };
+
+    QEMU_BUILD_BUG_ON(ARRAY_SIZE(feature_banks) > MSHV_NUM_CPU_FEATURES_BANKS);
 
     /* Initialize pt_flags with the desired features */
     pt_flags = (1ULL << MSHV_PT_BIT_LAPIC) |
@@ -127,23 +159,33 @@ static int create_partition(int mshv_fd, int *vm_fd)
     /* enable all */
     disabled_xsave_features.as_uint64 = 0;
 
-    /* Enable all proc features by default */
-    for (i = 0; i < MSHV_NUM_CPU_FEATURES_BANKS; i++) {
-        disabled_processor_features.as_uint64[i] = 0;
+    /*
+     * query host for supported processor features and disable unsupported
+     * features: (0 means supported, 1 means disabled, hence the negation)
+     */
+    ret = get_host_partition_property(mshv_fd,
+                                      HV_PARTITION_PROPERTY_PROCESSOR_FEATURES0,
+                                      &host_proc_features);
+    if (ret < 0) {
+        error_report("Failed to get host processor feature bank 0");
+        return -1;
     }
-    disabled_processor_features.reserved_bank0 = 1;
-    for (i = 0; i < MSHV_NUM_CPU_FEATURES_BANKS; i++) {
-        disabled_processor_features.as_uint64[i] = 0;
+    args.pt_cpu_fbanks[0] = ~host_proc_features;
+
+    ret = get_host_partition_property(mshv_fd,
+                                      HV_PARTITION_PROPERTY_PROCESSOR_FEATURES1,
+                                      &host_proc_features);
+    if (ret < 0) {
+        error_report("Failed to get host processor feature bank 1");
+        return -1;
     }
+    args.pt_cpu_fbanks[1] = ~host_proc_features;
 
     /* populate args structure */
     args.pt_flags = pt_flags;
     args.pt_isolation = MSHV_PT_ISOLATION_NONE;
     args.pt_disabled_xsave = disabled_xsave_features.as_uint64;
     args.pt_num_cpu_fbanks = MSHV_NUM_CPU_FEATURES_BANKS;
-    for (i = 0; i < MSHV_NUM_CPU_FEATURES_BANKS; i++) {
-        args.pt_cpu_fbanks[i] = disabled_processor_features.as_uint64[i];
-    }
 
     ret = ioctl(mshv_fd, MSHV_CREATE_PARTITION, &args);
     if (ret < 0) {

@@ -16,6 +16,8 @@
 
 #define MSHV_MSR_ENTRIES_COUNT 64
 
+#define MSHV_DIRTY_PAGES_BATCH_SIZE 0x10000
+
 typedef struct hyperv_message hv_message;
 
 typedef struct MshvHvCallArgs {

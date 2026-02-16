@@ -144,7 +144,7 @@ static int set_memory(const MshvMemoryRegion *mshv_mr, bool add)
  * Calculate and align the start address and the size of the section.
  * Return the size. If the size is 0, the aligned section is empty.
  */
-static hwaddr align_section(MemoryRegionSection *section, hwaddr *start)
+hwaddr mshv_align_section(const MemoryRegionSection *section, hwaddr *start)
 {
     hwaddr size = int128_get64(section->size);
     hwaddr delta, aligned;
@@ -175,7 +175,7 @@ void mshv_set_phys_mem(MshvMemoryListener *mml, MemoryRegionSection *section,
     void *ram;
     MshvMemoryRegion mshv_mr = {0};
 
-    size = align_section(section, &start_addr);
+    size = mshv_align_section(section, &start_addr);
     trace_mshv_set_phys_mem(add, section->mr->name, start_addr);
 
     /*

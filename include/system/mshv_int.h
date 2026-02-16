@@ -113,6 +113,7 @@ int mshv_guest_mem_write(uint64_t gpa, const uint8_t *data, uintptr_t size,
                          bool is_secure_mode);
 void mshv_set_phys_mem(MshvMemoryListener *mml, MemoryRegionSection *section,
                        bool add);
+hwaddr mshv_align_section(const MemoryRegionSection *section, hwaddr *start);
 
 /* msr */
 void mshv_msr_store_in_env(CPUState *cpu,

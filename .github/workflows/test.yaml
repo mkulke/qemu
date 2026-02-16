@@ -56,6 +56,9 @@ jobs:
       IMAGE_DIR: /tmp/images
     strategy:
       matrix:
+        cpu_model:
+        - host
+        - ""
         firmware:
         - seabios
         # - ovmf
@@ -69,7 +72,7 @@ jobs:
         - ubuntu
         # - fedora
         machine:
-        # - q35
+        - q35
         - pc
         iothreads:
         - enabled
@@ -147,6 +150,7 @@ jobs:
           MACHINE: ${{ matrix.machine }}
           IOTHREADS: ${{ matrix.iothreads == 'enabled' && 'io0' || '' }}
           OS_URL: ${{ matrix.distribution == 'ubuntu' && env.UBUNTU_URL || env.FEDORA_URL }}
+          CPU_MODEL: ${{ matrix.cpu_model }}
         run: |
           chmod +x "$QEMU_BIN"
           cmd=("$QEMU_BIN"
@@ -164,6 +168,9 @@ jobs:
                -rtc       "clock=vm"
                -daemonize
                -pidfile   "$PID_FILE")
+          if [[ -n "$CPU_MODEL" ]]; then
+            cmd+=(-cpu   "$CPU_MODEL")
+          fi
           if [[ -n "$IOTHREADS" ]]; then
             cmd+=(-object   "iothread,id=${IOTHREADS}")
           fi

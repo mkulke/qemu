@@ -201,7 +201,8 @@ jobs:
           kill -9 "$(cat "$PID_FILE")"
           timeout 5 tail --pid="$(cat "$PID_FILE")" -f /dev/null
 
-  migration:
+  migration-bytecode:
+    if: false
     needs: build
     runs-on:
     - "mshv"
@@ -254,7 +255,8 @@ jobs:
           fi
           "${cmd[@]}"
 
-  migration-direct-boot:
+  migration-kernel:
+    if: false
     needs: build
     runs-on:
     - "mshv"
@@ -303,3 +305,99 @@ jobs:
             --smp ${{ matrix.smp }} \
             --kernel "$KERNEL" \
             --initrd "$INITRD"
+
+  migration-ubuntu:
+    needs: build
+    runs-on:
+    - "mshv"
+    - "6.6.116"
+    env:
+      UBUNTU_URL: https://cloud-images.ubuntu.com/minimal/releases/noble/release/ubuntu-24.04-minimal-cloudimg-amd64.img
+      IMAGE_DIR: /tmp/images
+      GUEST_IP: 192.168.100.2
+      BRIDGE_IP: 192.168.100.1
+    strategy:
+      matrix:
+        machine:
+        - q35
+        - pc
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: qemu-build
+          path: .
+
+      - name: Download Ubuntu image
+        run: |
+          mkdir -p "$IMAGE_DIR"
+          wget -N -P "$IMAGE_DIR" "$UBUNTU_URL"
+          echo "DISK_IMG=$IMAGE_DIR/$(basename "$UBUNTU_URL")" >> "$GITHUB_ENV"
+
+      - name: Create SSH keypair
+        run: ssh-keygen -t rsa -b 4096 -f qemu_ssh -N ""
+
+      - name: Create cloud-init ISO
+        run: |
+          mkdir -p cidata
+          cd cidata
+          cat <<EOF> user-data
+          #cloud-config
+          users:
+          - name: cloud
+            sudo: ALL=(ALL) NOPASSWD:ALL
+            lock_passwd: false
+            ssh-authorized-keys:
+            - $(ssh-keygen -y -f ../qemu_ssh)
+          EOF
+          cat <<EOF> network-config
+          version: 2
+          ethernets:
+            eth0:
+              match:
+                macaddress: 00:10:20:30:40:50
+              addresses:
+              - ${GUEST_IP}/24
+              gateway4: ${BRIDGE_IP}
+          EOF
+          cat <<EOF> meta-data
+          instance-id: qemu-ci
+          local-hostname: qemu-ci
+          EOF
+          genisoimage -output "$IMAGE_DIR/cidata.raw" -volid cidata -joliet -rock \
+            user-data meta-data network-config
+          cd ..
+          echo "CI_IMG=$IMAGE_DIR/cidata.raw" >> "$GITHUB_ENV"
+
+      - name: Set up bridge and tap devices
+        run: |
+          sudo ip link add br0 type bridge
+          sudo ip addr add ${BRIDGE_IP}/24 dev br0
+          sudo ip link set br0 up
+          for tap in tap0 tap1; do
+            sudo ip tuntap add $tap mode tap user $(whoami)
+            sudo ip link set $tap master br0
+            sudo ip link set $tap up
+          done
+
+      - name: Run Ubuntu migration test
+        env:
+          QEMU_BIN: install/bin/qemu-system-x86_64
+        run: |
+          chmod +x "$QEMU_BIN"
+          python3 tests/mshv/test_migration_ubuntu.py "$QEMU_BIN" \
+            --disk "$DISK_IMG" \
+            --ci-img "$CI_IMG" \
+            --ssh-key qemu_ssh \
+            --guest-ip "$GUEST_IP" \
+            --machine ${{ matrix.machine }}
+
+      - name: Tear down network
+        if: always()
+        run: |
+          for tap in tap0 tap1; do
+            sudo ip link del $tap 2>/dev/null || true
+          done
+          sudo ip link del br0 2>/dev/null || true

@@ -211,6 +211,24 @@ jobs:
         machine:
         - q35
         - pc
+        smp:
+        - 1
+        - 2
+        - 4
+        cpu_model:
+        - ""
+        - host
+        roundtrip:
+        - false
+        - true
+        exclude:
+        # keep matrix manageable: only roundtrip with default cpu, smp=2
+        - roundtrip: true
+          smp: 1
+        - roundtrip: true
+          smp: 4
+        - roundtrip: true
+          cpu_model: host
     steps:
       - uses: actions/checkout@v4
 
@@ -225,5 +243,13 @@ jobs:
           QEMU_BIN: install/bin/qemu-system-x86_64
         run: |
           chmod +x "$QEMU_BIN"
-          python3 tests/mshv/test_migration.py "$QEMU_BIN" \
-            --machine ${{ matrix.machine }}
+          cmd=(python3 tests/mshv/test_migration.py "$QEMU_BIN"
+               --machine ${{ matrix.machine }}
+               --smp ${{ matrix.smp }})
+          if [[ -n "${{ matrix.cpu_model }}" ]]; then
+            cmd+=(--cpu ${{ matrix.cpu_model }})
+          fi
+          if [[ "${{ matrix.roundtrip }}" == "true" ]]; then
+            cmd+=(--roundtrip)
+          fi
+          "${cmd[@]}"

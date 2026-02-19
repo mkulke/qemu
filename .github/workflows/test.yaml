@@ -253,3 +253,53 @@ jobs:
             cmd+=(--roundtrip)
           fi
           "${cmd[@]}"
+
+  migration-direct-boot:
+    needs: build
+    runs-on:
+    - "mshv"
+    - "6.6.116"
+    env:
+      ALPINE_URL: https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/x86_64/alpine-netboot-3.23.3-x86_64.tar.gz
+      ALPINE_DIR: /tmp/images/alpine
+    strategy:
+      matrix:
+        machine:
+        - q35
+        - pc
+        smp:
+        - 1
+        - 2
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: qemu-build
+          path: .
+
+      - name: Download Alpine kernel
+        run: |
+          mkdir -p "$ALPINE_DIR"
+          TARBALL="$ALPINE_DIR/$(basename "$ALPINE_URL")"
+          wget -N -P "$ALPINE_DIR" "$ALPINE_URL"
+          tar xzf "$TARBALL" -C "$ALPINE_DIR"
+          echo "KERNEL=$ALPINE_DIR/boot/vmlinuz-lts" >> "$GITHUB_ENV"
+
+      - name: Build init and initrd
+        run: |
+          gcc -static -o /tmp/init tests/mshv/init.c
+          tests/mshv/mk-initrd.sh /tmp/initrd.img /tmp/init
+          echo "INITRD=/tmp/initrd.img" >> "$GITHUB_ENV"
+
+      - name: Run direct boot migration test
+        env:
+          QEMU_BIN: install/bin/qemu-system-x86_64
+        run: |
+          chmod +x "$QEMU_BIN"
+          python3 tests/mshv/test_migration.py "$QEMU_BIN" \
+            --machine ${{ matrix.machine }} \
+            --smp ${{ matrix.smp }} \
+            --kernel "$KERNEL" \
+            --initrd "$INITRD"

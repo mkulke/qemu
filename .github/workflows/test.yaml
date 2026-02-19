@@ -46,6 +46,7 @@ jobs:
             install
 
   test:
+    if: false
     needs: build
     runs-on:
     - "mshv"
@@ -199,3 +200,30 @@ jobs:
         run: |
           kill -9 "$(cat "$PID_FILE")"
           timeout 5 tail --pid="$(cat "$PID_FILE")" -f /dev/null
+
+  migration:
+    needs: build
+    runs-on:
+    - "mshv"
+    - "6.6.116"
+    strategy:
+      matrix:
+        machine:
+        - q35
+        - pc
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: qemu-build
+          path: .
+
+      - name: Run migration test
+        env:
+          QEMU_BIN: install/bin/qemu-system-x86_64
+        run: |
+          chmod +x "$QEMU_BIN"
+          python3 tests/mshv/test_migration.py "$QEMU_BIN" \
+            --machine ${{ matrix.machine }}

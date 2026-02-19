@@ -88,8 +88,6 @@ def wait_for_migration(vm, timeout=MIGRATION_TIMEOUT):
 def make_vm(qemu_bin, name, tmpdir, extra_args=None, incoming=None):
     args = [
         '-accel', 'mshv',
-        '-machine', 'q35',
-        '-m', '256M',
         '-nodefaults',
         '-serial', 'file:%s/%s-serial.log' % (tmpdir, name),
     ]
@@ -103,15 +101,33 @@ def make_vm(qemu_bin, name, tmpdir, extra_args=None, incoming=None):
     return vm
 
 
-def run_migration_test(qemu_bin, machine='q35', memory='256M'):
+def do_migrate(src, dst, migrate_uri):
+    """Migrate src→dst and verify completion."""
+    src.qmp('migrate', uri=migrate_uri)
+
+    src_mig = wait_for_migration(src)
+    assert src_mig == 'completed', \
+        'source migration failed: %s' % src_mig
+
+    dst_mig = wait_for_migration(dst)
+    assert dst_mig == 'completed', \
+        'destination migration failed: %s' % dst_mig
+
+    dst_status = dst.cmd('query-status')['status']
+    assert dst_status == 'running', \
+        'destination not running after migration: %s' % dst_status
+    src_status = src.cmd('query-status')['status']
+    assert src_status == 'postmigrate', \
+        'source not in postmigrate state: %s' % src_status
+
+
+def run_migration_test(qemu_bin, machine='q35', memory='256M',
+                       smp='1', cpu_model=None, roundtrip=False):
     with tempfile.TemporaryDirectory(prefix='mshv_mig_') as tmpdir:
         # write bootblock to disk image
         bootfile = os.path.join(tmpdir, 'bootsect')
         with open(bootfile, 'wb') as f:
             f.write(X86_BOOTSECT)
-
-        sock_path = os.path.join(tmpdir, 'migrate.sock')
-        migrate_uri = 'unix:%s' % sock_path
 
         drive_args = [
             '-drive', 'if=none,id=d0,file=%s,format=raw' % bootfile,
@@ -120,7 +136,13 @@ def run_migration_test(qemu_bin, machine='q35', memory='256M'):
         common_args = [
             '-machine', machine,
             '-m', memory,
+            '-smp', smp,
         ]
+        if cpu_model:
+            common_args += ['-cpu', cpu_model]
+
+        sock_path = os.path.join(tmpdir, 'migrate.sock')
+        migrate_uri = 'unix:%s' % sock_path
 
         # launch destination (waiting for incoming migration)
         dst = make_vm(qemu_bin, 'dst', tmpdir,
@@ -136,10 +158,10 @@ def run_migration_test(qemu_bin, machine='q35', memory='256M'):
         print('  source launched')
 
         # verify both VMs are using the mshv accelerator
-        for name, vm in [('source', src), ('destination', dst)]:
+        for label, vm in [('source', src), ('destination', dst)]:
             accel = vm.cmd('query-accelerators')['enabled']
             assert accel == 'mshv', \
-                '%s using %s accelerator, expected mshv' % (name, accel)
+                '%s using %s accelerator, expected mshv' % (label, accel)
         print('  both VMs confirmed using mshv accelerator')
 
         # let the bootblock run a bit to generate dirty pages
@@ -160,30 +182,10 @@ def run_migration_test(qemu_bin, machine='q35', memory='256M'):
                 print('  guest bootblock active (serial: %r)' %
                       serial[:20])
 
-        # initiate migration
-        print('  starting migration to %s' % migrate_uri)
-        src.qmp('migrate', uri=migrate_uri)
-
-        # wait for migration to complete on source
-        src_mig = wait_for_migration(src)
-        assert src_mig == 'completed', \
-            'source migration failed: %s' % src_mig
-        print('  source migration completed')
-
-        # wait for migration to complete on destination
-        dst_mig = wait_for_migration(dst)
-        assert dst_mig == 'completed', \
-            'destination migration failed: %s' % dst_mig
-        print('  destination migration completed')
-
-        # verify post-migration state
-        dst_status = dst.cmd('query-status')['status']
-        assert dst_status == 'running', \
-            'destination not running after migration: %s' % dst_status
-        src_status = src.cmd('query-status')['status']
-        assert src_status == 'postmigrate', \
-            'source not in postmigrate state: %s' % src_status
-        print('  post-migration state verified')
+        # migrate source → destination
+        print('  migrating source -> destination')
+        do_migrate(src, dst, migrate_uri)
+        print('  migration completed')
 
         # let destination run briefly to confirm guest is alive
         time.sleep(2)
@@ -201,9 +203,34 @@ def run_migration_test(qemu_bin, machine='q35', memory='256M'):
                 print('  guest resumed on destination (serial: %r)' %
                       serial[:20])
 
-        # clean shutdown
-        dst.shutdown()
-        src.shutdown()
+        if roundtrip:
+            # migrate back: destination → source
+            print('  round-trip: migrating destination -> source')
+            sock_path2 = os.path.join(tmpdir, 'migrate2.sock')
+            migrate_uri2 = 'unix:%s' % sock_path2
+
+            # set up source to accept incoming migration
+            src.shutdown()
+            src = make_vm(qemu_bin, 'src2', tmpdir,
+                          extra_args=drive_args + common_args,
+                          incoming=migrate_uri2)
+            src.launch()
+
+            do_migrate(dst, src, migrate_uri2)
+            print('  round-trip migration completed')
+
+            time.sleep(2)
+            src_status = src.cmd('query-status')['status']
+            assert src_status == 'running', \
+                'source not running after round-trip: %s' % src_status
+            print('  guest still running after round-trip')
+
+            src.shutdown()
+            dst.shutdown()
+        else:
+            dst.shutdown()
+            src.shutdown()
+
         print('  VMs shut down')
 
 
@@ -216,14 +243,24 @@ def main():
                         help='machine type (default: q35)')
     parser.add_argument('--memory', default='256M',
                         help='guest memory (default: 256M)')
+    parser.add_argument('--smp', default='1',
+                        help='number of vCPUs (default: 1)')
+    parser.add_argument('--cpu', default=None,
+                        help='CPU model (default: QEMU default)')
+    parser.add_argument('--roundtrip', action='store_true',
+                        help='migrate back to source after first migration')
     args = parser.parse_args()
 
     print('MSHV migration test')
     print('  binary: %s' % args.qemu_bin)
     print('  machine: %s' % args.machine)
     print('  memory: %s' % args.memory)
+    print('  smp: %s' % args.smp)
+    print('  cpu: %s' % (args.cpu or '(default)'))
+    print('  roundtrip: %s' % args.roundtrip)
 
-    run_migration_test(args.qemu_bin, args.machine, args.memory)
+    run_migration_test(args.qemu_bin, args.machine, args.memory,
+                       args.smp, args.cpu, args.roundtrip)
     print('PASS')
 
 

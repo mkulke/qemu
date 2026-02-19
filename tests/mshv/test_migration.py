@@ -20,6 +20,9 @@ import sys
 import tempfile
 import time
 
+# flush stdout on every print so CI shows output immediately
+sys.stdout.reconfigure(line_buffering=True)
+
 # Allow importing qemu.machine from the source tree
 qemu_python = os.path.join(os.path.dirname(__file__), '..', '..', 'python')
 sys.path.insert(0, qemu_python)
@@ -234,6 +237,86 @@ def run_migration_test(qemu_bin, machine='q35', memory='256M',
         print('  VMs shut down')
 
 
+def run_direct_boot_migration_test(qemu_bin, kernel, initrd,
+                                   machine='q35', memory='256M',
+                                   smp='1', cpu_model=None):
+    """Migration test using Linux direct boot (-kernel/-initrd)."""
+    with tempfile.TemporaryDirectory(prefix='mshv_mig_dk_') as tmpdir:
+        sock_path = os.path.join(tmpdir, 'migrate.sock')
+        migrate_uri = 'unix:%s' % sock_path
+
+        common_args = [
+            '-machine', machine,
+            '-m', memory,
+            '-smp', smp,
+            '-kernel', kernel,
+            '-initrd', initrd,
+            '-append', 'console=ttyS0 panic=-1',
+        ]
+        if cpu_model:
+            common_args += ['-cpu', cpu_model]
+
+        # launch destination (waiting for incoming migration)
+        dst = make_vm(qemu_bin, 'dst', tmpdir,
+                      extra_args=common_args,
+                      incoming=migrate_uri)
+        dst.launch()
+        print('  destination launched')
+
+        # launch source
+        src = make_vm(qemu_bin, 'src', tmpdir,
+                      extra_args=common_args)
+        src.launch()
+        print('  source launched')
+
+        # verify accelerator
+        for label, vm in [('source', src), ('destination', dst)]:
+            accel = vm.cmd('query-accelerators')['enabled']
+            assert accel == 'mshv', \
+                '%s using %s accelerator, expected mshv' % (label, accel)
+        print('  both VMs confirmed using mshv accelerator')
+
+        # let guest boot and run
+        time.sleep(5)
+
+        src_status = src.cmd('query-status')['status']
+        assert src_status == 'running', \
+            'source not running: %s' % src_status
+        print('  source confirmed running')
+
+        # check serial for init output
+        serial_log = os.path.join(tmpdir, 'src-serial.log')
+        if os.path.exists(serial_log):
+            with open(serial_log, 'r') as f:
+                serial = f.read()
+            if 'A' in serial:
+                print('  init active on source (serial: %r)' %
+                      serial[-40:])
+
+        # migrate
+        print('  migrating source -> destination')
+        do_migrate(src, dst, migrate_uri)
+        print('  migration completed')
+
+        # verify destination alive after migration
+        time.sleep(3)
+        dst_status = dst.cmd('query-status')['status']
+        assert dst_status == 'running', \
+            'destination not running after migration: %s' % dst_status
+        print('  destination still running after 3s')
+
+        # check destination serial for continued activity
+        dst_serial = os.path.join(tmpdir, 'dst-serial.log')
+        if os.path.exists(dst_serial):
+            with open(dst_serial, 'r') as f:
+                serial = f.read()
+            if 'B' in serial:
+                print('  init resumed on destination (serial: %r)' %
+                      serial[-40:])
+
+        dst.kill()
+        src.kill()
+        print('  VMs shut down')
 def main():
     parser = argparse.ArgumentParser(
         description='MSHV live migration test')
@@ -249,6 +332,10 @@ def main():
                         help='CPU model (default: QEMU default)')
     parser.add_argument('--roundtrip', action='store_true',
                         help='migrate back to source after first migration')
+    parser.add_argument('--kernel', default=None,
+                        help='kernel for direct boot migration test')
+    parser.add_argument('--initrd', default=None,
+                        help='initrd for direct boot migration test')
     args = parser.parse_args()
 
     print('MSHV migration test')
@@ -259,8 +346,18 @@ def main():
     print('  cpu: %s' % (args.cpu or '(default)'))
     print('  roundtrip: %s' % args.roundtrip)
 
-    run_migration_test(args.qemu_bin, args.machine, args.memory,
-                       args.smp, args.cpu, args.roundtrip)
+    if args.kernel:
+        assert args.initrd, '--initrd required with --kernel'
+        print('  kernel: %s' % args.kernel)
+        print('  initrd: %s' % args.initrd)
+        print()
+        run_direct_boot_migration_test(
+            args.qemu_bin, args.kernel, args.initrd,
+            args.machine, args.memory, args.smp, args.cpu)
+    else:
+        print()
+        run_migration_test(args.qemu_bin, args.machine, args.memory,
+                           args.smp, args.cpu, args.roundtrip)
     print('PASS')
 
 

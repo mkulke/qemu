@@ -45,7 +45,7 @@ jobs:
             non-existing-file-to-keep-directory-structure.😑
             install
 
-  test:
+  test-smoke:
     if: false
     needs: build
     runs-on:
@@ -201,8 +201,7 @@ jobs:
           kill -9 "$(cat "$PID_FILE")"
           timeout 5 tail --pid="$(cat "$PID_FILE")" -f /dev/null
 
-  migration-bytecode:
-    if: false
+  migration-bootblock:
     needs: build
     runs-on:
     - "mshv"
@@ -256,7 +255,6 @@ jobs:
           "${cmd[@]}"
 
   migration-kernel:
-    if: false
     needs: build
     runs-on:
     - "mshv"

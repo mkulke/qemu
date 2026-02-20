@@ -44,6 +44,28 @@ def wait_for_migration(vm, timeout=MIGRATION_TIMEOUT):
     return 'timeout'
 
 
+def print_migration_stats(vm):
+    """Print key migration statistics from QMP."""
+    info = vm.cmd('query-migrate')
+    ram = info.get('ram', {})
+    total_ms = info.get('total-time', 0)
+    down_ms = info.get('downtime', 0)
+    setup_ms = info.get('setup-time', 0)
+    transferred = ram.get('transferred', 0)
+    total_ram = ram.get('total', 0)
+    normal = ram.get('normal', 0)
+    zero = ram.get('duplicate', 0)
+    dirty_syncs = ram.get('dirty-sync-count', 0)
+    mbps = ram.get('mbps', 0)
+    print('  migration stats:')
+    print('    total=%dms  setup=%dms  downtime=%dms' %
+          (total_ms, setup_ms, down_ms))
+    print('    transferred=%dMiB / %dMiB  throughput=%.0fMbps' %
+          (transferred // (1024 * 1024), total_ram // (1024 * 1024), mbps))
+    print('    pages: normal=%d  zero=%d  dirty_syncs=%d' %
+          (normal, zero, dirty_syncs))
+
+
 def do_migrate(src, dst, migrate_uri):
     """Migrate src->dst and verify completion."""
     src.qmp('migrate', uri=migrate_uri)
@@ -62,6 +84,7 @@ def do_migrate(src, dst, migrate_uri):
     src_status = src.cmd('query-status')['status']
     assert src_status == 'postmigrate', \
         'source not in postmigrate state: %s' % src_status
+    print_migration_stats(src)
 
 
 GUEST_MAC = '00:10:20:30:40:50'
@@ -148,7 +171,7 @@ def make_vm(qemu_bin, name, tmpdir, extra_args=None, incoming=None):
 
 def run_test(qemu_bin, disk_img, ci_img, ssh_key,
              guest_ip, src_tap, dst_tap,
-             machine='q35', memory='2048M', smp='2'):
+             machine='q35', memory='2048M', smp='2', stress=False):
     with tempfile.TemporaryDirectory(prefix='mshv_mig_ubuntu_') as tmpdir:
         sock_path = os.path.join(tmpdir, 'migrate.sock')
         migrate_uri = 'unix:%s' % sock_path
@@ -207,14 +230,29 @@ def run_test(qemu_bin, disk_img, ci_img, ssh_key,
         kernel_before = out
         print('  source kernel: %s' % kernel_before)
 
-        # migrate
+        # optionally start stress-ng to dirty RAM and exercise disk
+        if stress:
+            rc, _ = ssh_cmd(guest_ip, ssh_key,
+                            'sudo apt-get update -qq && '
+                            'sudo apt-get install -y -qq stress-ng',
+                            timeout=60, control_path=ctl_path)
+            assert rc == 0, 'failed to install stress-ng'
+            print('  stress-ng installed')
+            rc, _ = ssh_cmd(guest_ip, ssh_key,
+                            'nohup stress-ng --vm 2 --vm-bytes 256M --hdd 1 '
+                            '--timeout 120 >/dev/null 2>&1 &',
+                            timeout=10, control_path=ctl_path)
+            assert rc == 0, 'failed to start stress-ng'
+            time.sleep(2)
+            rc, out = ssh_cmd(guest_ip, ssh_key, 'pgrep -c stress-ng',
+                              timeout=30, control_path=ctl_path)
+            assert rc == 0 and int(out) > 0, 'stress-ng not running'
+            print('  stress-ng running (%s processes)' % out.strip())
+
+        # migrate under load
         print('  migrating source -> destination')
         do_migrate(src, dst, migrate_uri)
         print('  migration completed')
-
-        # kill source so there's no ambiguity about who answers SSH
-        src.kill()
-        print('  source killed')
 
         # verify SSH still works over the SAME persistent connection
         rc, out = ssh_cmd(guest_ip, ssh_key, 'uname -r', timeout=30,
@@ -225,10 +263,19 @@ def run_test(qemu_bin, disk_img, ci_img, ssh_key,
         assert kernel_before == kernel_after, \
             'kernel mismatch: %s vs %s' % (kernel_before, kernel_after)
 
+        # verify stress-ng survived migration
+        if stress:
+            rc, out = ssh_cmd(guest_ip, ssh_key, 'pgrep -c stress-ng',
+                              timeout=30, control_path=ctl_path)
+            assert rc == 0 and int(out) > 0, \
+                'stress-ng not running after migration'
+            print('  stress-ng still running (%s processes)' % out.strip())
+
         # clean up
         ssh_control_close(ctl_path)
         ctl_proc.wait(timeout=5)
         dst.kill()
+        src.kill()
         print('  VMs shut down')
 
 
@@ -255,6 +302,8 @@ def main():
                         help='guest memory (default: 2048M)')
     parser.add_argument('--smp', default='2',
                         help='number of vCPUs (default: 2)')
+    parser.add_argument('--stress', action='store_true',
+                        help='run stress-ng during migration')
     args = parser.parse_args()
 
     print('MSHV Ubuntu migration test')
@@ -263,13 +312,14 @@ def main():
     print('  machine: %s' % args.machine)
     print('  memory: %s' % args.memory)
     print('  smp: %s' % args.smp)
+    print('  stress: %s' % args.stress)
     print('  guest-ip: %s' % args.guest_ip)
     print('  taps: %s (src), %s (dst)' % (args.src_tap, args.dst_tap))
     print()
 
     run_test(args.qemu_bin, args.disk, args.ci_img, args.ssh_key,
              args.guest_ip, args.src_tap, args.dst_tap,
-             args.machine, args.memory, args.smp)
+             args.machine, args.memory, args.smp, args.stress)
     print('PASS')
 
 

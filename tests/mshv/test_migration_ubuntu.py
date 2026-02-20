@@ -44,30 +44,38 @@ def wait_for_migration(vm, timeout=MIGRATION_TIMEOUT):
     return 'timeout'
 
 
-def print_migration_stats(vm):
-    """Print key migration statistics from QMP."""
+def get_migration_stats(vm):
+    """Return key migration statistics from QMP as a dict."""
     info = vm.cmd('query-migrate')
     ram = info.get('ram', {})
-    total_ms = info.get('total-time', 0)
-    down_ms = info.get('downtime', 0)
-    setup_ms = info.get('setup-time', 0)
-    transferred = ram.get('transferred', 0)
-    total_ram = ram.get('total', 0)
-    normal = ram.get('normal', 0)
-    zero = ram.get('duplicate', 0)
-    dirty_syncs = ram.get('dirty-sync-count', 0)
-    mbps = ram.get('mbps', 0)
+    return {
+        'total_ms': info.get('total-time', 0),
+        'downtime_ms': info.get('downtime', 0),
+        'setup_ms': info.get('setup-time', 0),
+        'transferred': ram.get('transferred', 0),
+        'total_ram': ram.get('total', 0),
+        'normal': ram.get('normal', 0),
+        'zero': ram.get('duplicate', 0),
+        'dirty_syncs': ram.get('dirty-sync-count', 0),
+        'mbps': ram.get('mbps', 0),
+    }
+
+
+def print_migration_stats(vm):
+    """Print key migration statistics from QMP."""
+    s = get_migration_stats(vm)
     print('  migration stats:')
     print('    total=%dms  setup=%dms  downtime=%dms' %
-          (total_ms, setup_ms, down_ms))
+          (s['total_ms'], s['setup_ms'], s['downtime_ms']))
     print('    transferred=%dMiB / %dMiB  throughput=%.0fMbps' %
-          (transferred // (1024 * 1024), total_ram // (1024 * 1024), mbps))
+          (s['transferred'] // (1024 * 1024),
+           s['total_ram'] // (1024 * 1024), s['mbps']))
     print('    pages: normal=%d  zero=%d  dirty_syncs=%d' %
-          (normal, zero, dirty_syncs))
+          (s['normal'], s['zero'], s['dirty_syncs']))
 
 
 def do_migrate(src, dst, migrate_uri):
-    """Migrate src->dst and verify completion."""
+    """Migrate src->dst and verify completion. Returns total migration time in seconds."""
     src.qmp('migrate', uri=migrate_uri)
 
     src_mig = wait_for_migration(src)
@@ -84,7 +92,9 @@ def do_migrate(src, dst, migrate_uri):
     src_status = src.cmd('query-status')['status']
     assert src_status == 'postmigrate', \
         'source not in postmigrate state: %s' % src_status
+    stats = get_migration_stats(src)
     print_migration_stats(src)
+    return stats['total_ms'] / 1000.0
 
 
 GUEST_MAC = '00:10:20:30:40:50'
@@ -230,6 +240,13 @@ def run_test(qemu_bin, disk_img, ci_img, ssh_key,
         kernel_before = out
         print('  source kernel: %s' % kernel_before)
 
+        # record guest time before migration
+        rc, time_before = ssh_cmd(guest_ip, ssh_key,
+                                  'date +%s.%N',
+                                  timeout=30, control_path=ctl_path)
+        assert rc == 0, 'date failed on source'
+        host_before = time.time()
+
         # optionally start stress-ng to dirty RAM and exercise disk
         if stress:
             rc, _ = ssh_cmd(guest_ip, ssh_key,
@@ -240,7 +257,7 @@ def run_test(qemu_bin, disk_img, ci_img, ssh_key,
             print('  stress-ng installed')
             rc, _ = ssh_cmd(guest_ip, ssh_key,
                             'nohup stress-ng --vm 2 --vm-bytes 256M --hdd 1 '
-                            '--timeout 120 >/dev/null 2>&1 &',
+                            '--cpu %s --timeout 120 >/dev/null 2>&1 &' % smp,
                             timeout=10, control_path=ctl_path)
             assert rc == 0, 'failed to start stress-ng'
             time.sleep(2)
@@ -251,7 +268,7 @@ def run_test(qemu_bin, disk_img, ci_img, ssh_key,
 
         # migrate under load
         print('  migrating source -> destination')
-        do_migrate(src, dst, migrate_uri)
+        mig_time_s = do_migrate(src, dst, migrate_uri)
         print('  migration completed')
 
         # verify SSH still works over the SAME persistent connection
@@ -263,7 +280,22 @@ def run_test(qemu_bin, disk_img, ci_img, ssh_key,
         assert kernel_before == kernel_after, \
             'kernel mismatch: %s vs %s' % (kernel_before, kernel_after)
 
-        # verify stress-ng survived migration
+        # verify guest clock hasn't drifted excessively
+        # with -rtc clock=vm, guest time stops for the migration duration
+        rc, time_after = ssh_cmd(guest_ip, ssh_key,
+                                 'date +%s.%N',
+                                 timeout=30, control_path=ctl_path)
+        assert rc == 0, 'date failed on destination'
+        host_after = time.time()
+        guest_elapsed = float(time_after) - float(time_before)
+        host_elapsed = host_after - host_before
+        drift = abs(guest_elapsed - (host_elapsed - mig_time_s))
+        print('  clock drift: %.2fs (guest=%.2fs host=%.2fs mig=%.2fs)' %
+              (drift, guest_elapsed, host_elapsed, mig_time_s))
+        assert drift < 3.0, \
+            'guest clock drifted %.2fs from host (adjusted for migration)' % drift
+
+        # verify stress-ng survived migration (tests APIC/IPI state on SMP)
         if stress:
             rc, out = ssh_cmd(guest_ip, ssh_key, 'pgrep -c stress-ng',
                               timeout=30, control_path=ctl_path)

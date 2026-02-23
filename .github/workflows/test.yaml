@@ -178,6 +178,22 @@ jobs:
         stress:
         - false
         - true
+        cpu:
+        - ""
+        - host
+        avx2:
+        - false
+        - true
+        exclude:
+        # only stress with default cpu to keep matrix manageable
+        - stress: true
+          cpu: host
+        # avx2 only makes sense with -cpu host
+        - avx2: true
+          cpu: ""
+        # don't combine avx2 and stress
+        - avx2: true
+          stress: true
     steps:
       - uses: actions/checkout@v4
 
@@ -247,9 +263,17 @@ jobs:
           sudo iptables -A FORWARD -i br0 -j ACCEPT
           sudo iptables -A FORWARD -o br0 -m state --state RELATED,ESTABLISHED -j ACCEPT
 
+      - name: Build AVX2 test
+        if: matrix.avx2
+        run: gcc -mavx2 -o tests/mshv/test-avx2 tests/mshv/test-avx2.c
+
       - name: Run Ubuntu migration test
         env:
           QEMU_BIN: install/bin/qemu-system-x86_64
+          CPU: ${{ matrix.cpu }}
+          STRESS: ${{ matrix.stress == true && '--stress' || '' }}
+          AVX2: ${{ matrix.avx2 == true && '--avx2' || '' }}
+          SMP: ${{ matrix.smp }}
         run: |
           chmod +x "$QEMU_BIN"
           python3 tests/mshv/test_migration_ubuntu.py "$QEMU_BIN" \
@@ -257,9 +281,12 @@ jobs:
             --ci-img "$CI_IMG" \
             --ssh-key qemu_ssh \
             --guest-ip "$GUEST_IP" \
-            --smp ${{ matrix.smp }} \
-            --machine ${{ matrix.machine }}
-            ${{ matrix.stress == true && '--stress' || '' }}
+            --machine ${{ matrix.machine }} \
+            --smp "$SMP" \
+            ${CPU:+--cpu "$CPU"} \
+            ${STRESS} \
+            ${AVX2}
+
 
       - name: Tear down network
         if: always()

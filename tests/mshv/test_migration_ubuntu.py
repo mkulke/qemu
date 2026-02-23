@@ -152,6 +152,19 @@ def ssh_control_close(control_path):
         capture_output=True, timeout=5)
 
 
+def scp_to_guest(host, key_file, local_path, remote_path, control_path=None):
+    """Copy a file to the guest via SCP."""
+    opts = list(SSH_COMMON_OPTS)
+    if control_path:
+        opts += ['-o', 'ControlPath=%s' % control_path]
+    result = subprocess.run(
+        ['scp'] + opts + ['-i', key_file,
+         local_path, 'cloud@%s:%s' % (host, remote_path)],
+        capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, \
+        'scp failed: %s' % result.stderr
+
+
 def make_vm(qemu_bin, name, tmpdir, extra_args=None, incoming=None):
     args = [
         '-accel', 'mshv',
@@ -171,14 +184,15 @@ def make_vm(qemu_bin, name, tmpdir, extra_args=None, incoming=None):
 
 def run_test(qemu_bin, disk_img, ci_img, ssh_key,
              guest_ip, src_tap, dst_tap,
-             machine='q35', memory='2048M', smp='2', stress=False):
+             machine='q35', memory='2048M', smp='2', stress=False,
+             cpu=None, avx2=False):
     with tempfile.TemporaryDirectory(prefix='mshv_mig_ubuntu_') as tmpdir:
         sock_path = os.path.join(tmpdir, 'migrate.sock')
         migrate_uri = 'unix:%s' % sock_path
         ctl_path = os.path.join(tmpdir, 'ssh_ctl')
 
         def vm_args(tap):
-            return [
+            args = [
                 '-machine', machine,
                 '-m', memory,
                 '-smp', smp,
@@ -192,6 +206,9 @@ def run_test(qemu_bin, disk_img, ci_img, ssh_key,
                 '-device', 'virtio-net,mac=%s,'
                            'netdev=net0' % GUEST_MAC,
             ]
+            if cpu:
+                args += ['-cpu', cpu]
+            return args
 
         # launch destination (waiting for incoming migration)
         dst = make_vm(qemu_bin, 'dst', tmpdir,
@@ -271,6 +288,21 @@ def run_test(qemu_bin, disk_img, ci_img, ssh_key,
                 'stress-ng not running after migration'
             print('  stress-ng still running (%s processes)' % out.strip())
 
+        # verify AVX2/XSAVE state survived migration
+        if avx2:
+            test_dir = os.path.dirname(os.path.abspath(__file__))
+            avx2_bin = os.path.join(test_dir, 'test-avx2')
+            assert os.path.isfile(avx2_bin), \
+                'AVX2 test binary not found: %s' % avx2_bin
+            scp_to_guest(guest_ip, ssh_key, avx2_bin, '/tmp/test-avx2',
+                         control_path=ctl_path)
+            rc, out = ssh_cmd(guest_ip, ssh_key,
+                              'chmod +x /tmp/test-avx2 && /tmp/test-avx2',
+                              timeout=10, control_path=ctl_path)
+            assert rc == 0, \
+                'AVX2 test failed on destination: %s' % out
+            print('  AVX2/XSAVE test passed on destination')
+
         # clean up
         ssh_control_close(ctl_path)
         ctl_proc.wait(timeout=5)
@@ -304,6 +336,10 @@ def main():
                         help='number of vCPUs (default: 2)')
     parser.add_argument('--stress', action='store_true',
                         help='run stress-ng during migration')
+    parser.add_argument('--cpu', default=None,
+                        help='CPU model (e.g. host)')
+    parser.add_argument('--avx2', action='store_true',
+                        help='run AVX2/XSAVE test on destination')
     args = parser.parse_args()
 
     print('MSHV Ubuntu migration test')
@@ -312,14 +348,17 @@ def main():
     print('  machine: %s' % args.machine)
     print('  memory: %s' % args.memory)
     print('  smp: %s' % args.smp)
+    print('  cpu: %s' % (args.cpu or '(default)'))
     print('  stress: %s' % args.stress)
+    print('  avx2: %s' % args.avx2)
     print('  guest-ip: %s' % args.guest_ip)
     print('  taps: %s (src), %s (dst)' % (args.src_tap, args.dst_tap))
     print()
 
     run_test(args.qemu_bin, args.disk, args.ci_img, args.ssh_key,
              args.guest_ip, args.src_tap, args.dst_tap,
-             args.machine, args.memory, args.smp, args.stress)
+             args.machine, args.memory, args.smp, args.stress,
+             args.cpu, args.avx2)
     print('PASS')
 
 

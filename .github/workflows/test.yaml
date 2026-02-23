@@ -203,9 +203,6 @@ jobs:
 
   migration-bootblock:
     needs: build
-    runs-on:
-    - "mshv"
-    - "6.6.116"
     strategy:
       matrix:
         machine:
@@ -221,6 +218,9 @@ jobs:
         roundtrip:
         - false
         - true
+        vendor:
+        - amd
+        - intel
         exclude:
         # keep matrix manageable: only roundtrip with default cpu, smp=2
         - roundtrip: true
@@ -229,6 +229,10 @@ jobs:
           smp: 4
         - roundtrip: true
           cpu_model: host
+    runs-on:
+    - "mshv"
+    - "6.6.116"
+    - ${{ matrix.vendor }}
     steps:
       - uses: actions/checkout@v4
 
@@ -256,9 +260,6 @@ jobs:
 
   migration-kernel:
     needs: build
-    runs-on:
-    - "mshv"
-    - "6.6.116"
     env:
       ALPINE_URL: https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/x86_64/alpine-netboot-3.23.3-x86_64.tar.gz
       ALPINE_DIR: /tmp/images/alpine
@@ -270,6 +271,13 @@ jobs:
         smp:
         - 1
         - 2
+        vendor:
+        - amd
+        - intel
+    runs-on:
+    - "mshv"
+    - "6.6.116"
+    - ${{ matrix.vendor }}
     steps:
       - uses: actions/checkout@v4
 
@@ -306,9 +314,6 @@ jobs:
 
   migration-ubuntu:
     needs: build
-    runs-on:
-    - "mshv"
-    - "6.6.116"
     env:
       UBUNTU_URL: https://cloud-images.ubuntu.com/minimal/releases/noble/release/ubuntu-24.04-minimal-cloudimg-amd64.img
       IMAGE_DIR: /tmp/images
@@ -328,6 +333,9 @@ jobs:
         avx2:
         - false
         - true
+        vendor:
+        - amd
+        - intel
         exclude:
         # only stress with default cpu to keep matrix manageable
         - stress: true
@@ -338,6 +346,10 @@ jobs:
         # don't combine avx2 and stress
         - avx2: true
           stress: true
+    runs-on:
+    - "mshv"
+    - "6.6.116"
+    - ${{ matrix.vendor }}
     steps:
       - uses: actions/checkout@v4
 

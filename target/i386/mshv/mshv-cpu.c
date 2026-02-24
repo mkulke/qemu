@@ -299,9 +299,27 @@ static int get_msrs(CPUState *cpu)
     int ret = 0;
     size_t n_assocs = mshv_msr_mappable_reg_count();
     struct hv_register_assoc *assocs;
+    size_t i, j;
+    X86CPU *x86cpu = X86_CPU(cpu);
+    bool spec_ctrl_supported = x86cpu->env.features[FEAT_7_0_EDX]
+                               & CPUID_7_0_EDX_SPEC_CTRL;
 
     assocs = g_new0(struct hv_register_assoc, n_assocs);
     mshv_msr_set_hv_name_in_assocs(assocs, n_assocs);
+
+    for (i = 0, j = 0; i < n_assocs; i++) {
+        uint32_t name = assocs[i].name;
+
+        if (name == HV_X64_REGISTER_SPEC_CTRL && !spec_ctrl_supported) {
+            continue;
+        }
+
+        if (j != i) {
+            assocs[j] = assocs[i];
+        }
+        j++;
+    }
+    n_assocs = j;
 
     ret = get_generic_regs(cpu, assocs, n_assocs);
     if (ret < 0) {
@@ -1397,6 +1415,9 @@ static int set_msrs(const CPUState *cpu)
     /* Filter out MSRs that cannot be written at boot */
     X86CPU *x86cpu = X86_CPU(cpu);
     bool synic_enabled = x86cpu->env.msr_hv_synic_control & 1;
+    bool spec_ctrl_supported = x86cpu->env.features[FEAT_7_0_EDX]
+                               & CPUID_7_0_EDX_SPEC_CTRL;
+
     for (i = 0, j = 0; i < n_assocs; i++) {
         uint32_t name = assocs[i].name;
 
@@ -1411,6 +1432,10 @@ static int set_msrs(const CPUState *cpu)
         /* SINT MSRs: only write if SynIC is enabled */
         if (name >= HV_REGISTER_SINT0 && name <= HV_REGISTER_SINT15 &&
             !synic_enabled) {
+            continue;
+        }
+
+        if (name == HV_X64_REGISTER_SPEC_CTRL && !spec_ctrl_supported) {
             continue;
         }
 

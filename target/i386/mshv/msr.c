@@ -227,37 +227,41 @@ static void msr_load_from_env_mtrr_phys(const CPUState *cpu,
     }
 }
 
-/*
- * Note: this function requires that assocs are in the same order and length
- * as they appear in msr_env_map.
- */
+/* assocs have to be in the same order as they appear in msr_env_map */
 void mshv_msr_store_in_env(CPUState *cpu,
                            const struct hv_register_assoc *assocs,
                            size_t n_assocs)
 {
     X86CPU *x86_cpu = X86_CPU(cpu);
     CPUX86State *env = &x86_cpu->env;
-    size_t i;
+    size_t i, j;
     const MshvMsrEnvMap *mapping;
     union hv_register_value hv_value;
     ptrdiff_t offset;
-    size_t mtrr_offset;
+    size_t mtrr_index;
+    uint32_t hv_name;
 
-    assert(n_assocs == (ARRAY_SIZE(msr_env_map) + MTRR_MSR_COUNT));
+    assert(n_assocs <= (ARRAY_SIZE(msr_env_map) + MTRR_MSR_COUNT));
 
-    for (i = 0; i < ARRAY_SIZE(msr_env_map); i++) {
+    for (i = 0, j = 0; i < ARRAY_SIZE(msr_env_map); i++) {
+        hv_name = assocs[j].name;
         mapping = &msr_env_map[i];
-        offset = mapping->env_offset;
-        hv_value = assocs[i].value;
-        if (mapping->width == MSHV_MSR_WIDTH_32) {
-            MSHV_ENV_FIELD_32(env, offset) = hv_value.reg32;
+        if (hv_name != mapping->hv_name) {
             continue;
         }
-        MSHV_ENV_FIELD_64(env, offset) = hv_value.reg64;
+
+        hv_value = assocs[j].value;
+        offset = mapping->env_offset;
+        if (mapping->width == MSHV_MSR_WIDTH_32) {
+            MSHV_ENV_FIELD_32(env, offset) = hv_value.reg32;
+        } else {
+            MSHV_ENV_FIELD_64(env, offset) = hv_value.reg64;
+        }
+        j++;
     }
 
-    mtrr_offset = ARRAY_SIZE(msr_env_map);
-    msr_store_in_env_mtrr_phys(cpu, &assocs[mtrr_offset], MTRR_MSR_COUNT);
+    mtrr_index = j;
+    msr_store_in_env_mtrr_phys(cpu, &assocs[mtrr_index], MTRR_MSR_COUNT);
 }
 
 void mshv_msr_load_from_env(const CPUState *cpu,

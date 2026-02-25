@@ -118,7 +118,8 @@ static int create_partition(int mshv_fd, int *vm_fd)
     /* Initialize pt_flags with the desired features */
     uint64_t pt_flags = (1ULL << MSHV_PT_BIT_LAPIC) |
                         (1ULL << MSHV_PT_BIT_X2APIC) |
-                        (1ULL << MSHV_PT_BIT_GPA_SUPER_PAGES);
+                        (1ULL << MSHV_PT_BIT_GPA_SUPER_PAGES) |
+                        (1ULL << MSHV_PT_BIT_SMT_ENABLED_GUEST);
 
     /* Set default isolation type */
     uint64_t pt_isolation = MSHV_PT_ISOLATION_NONE;

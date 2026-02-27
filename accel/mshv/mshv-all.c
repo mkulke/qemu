@@ -114,12 +114,20 @@ static int create_partition(int mshv_fd, int *vm_fd)
 {
     int ret;
     struct mshv_create_partition args = {0};
+    MachineState *ms;
+    bool smt_enabled;
 
     /* Initialize pt_flags with the desired features */
     uint64_t pt_flags = (1ULL << MSHV_PT_BIT_LAPIC) |
                         (1ULL << MSHV_PT_BIT_X2APIC) |
-                        (1ULL << MSHV_PT_BIT_GPA_SUPER_PAGES) |
-                        (1ULL << MSHV_PT_BIT_SMT_ENABLED_GUEST);
+                        (1ULL << MSHV_PT_BIT_GPA_SUPER_PAGES);
+
+   ms = MACHINE(qdev_get_machine());
+   smt_enabled = ms->smp.threads > 1;
+
+   if (smt_enabled) {
+       pt_flags |= (1ULL << MSHV_PT_BIT_SMT_ENABLED_GUEST);
+   }
 
     /* Set default isolation type */
     uint64_t pt_isolation = MSHV_PT_ISOLATION_NONE;

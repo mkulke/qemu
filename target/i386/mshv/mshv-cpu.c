@@ -294,23 +294,38 @@ static int get_synic_state(CPUState *cpu)
     return 0;
 }
 
+static bool msr_supported(uint32_t name)
+{
+    /*
+     * This check is not done comprehensively, it's meant to avoid hvcall
+     * failures for certain MSRs on architectures that don't support them.
+     */
+
+    switch (name) {
+    case HV_X64_REGISTER_SPEC_CTRL:
+        return mshv_state->processor_features.ibrs_support;
+    case HV_X64_REGISTER_TSC_ADJUST:
+        return mshv_state->processor_features.tsc_adjust_support;
+    }
+
+    return true;
+}
+
 static int get_msrs(CPUState *cpu)
 {
     int ret = 0;
     size_t n_assocs = mshv_msr_mappable_reg_count();
     struct hv_register_assoc *assocs;
     size_t i, j;
-    X86CPU *x86cpu = X86_CPU(cpu);
-    bool spec_ctrl_supported = x86cpu->env.features[FEAT_7_0_EDX]
-                               & CPUID_7_0_EDX_SPEC_CTRL;
+    uint32_t name;
 
     assocs = g_new0(struct hv_register_assoc, n_assocs);
     mshv_msr_set_hv_name_in_assocs(assocs, n_assocs);
 
     for (i = 0, j = 0; i < n_assocs; i++) {
-        uint32_t name = assocs[i].name;
+        name = assocs[i].name;
 
-        if (name == HV_X64_REGISTER_SPEC_CTRL && !spec_ctrl_supported) {
+        if (!msr_supported(name)) {
             continue;
         }
 
@@ -1415,8 +1430,6 @@ static int set_msrs(const CPUState *cpu)
     /* Filter out MSRs that cannot be written at boot */
     X86CPU *x86cpu = X86_CPU(cpu);
     bool synic_enabled = x86cpu->env.msr_hv_synic_control & 1;
-    bool spec_ctrl_supported = x86cpu->env.features[FEAT_7_0_EDX]
-                               & CPUID_7_0_EDX_SPEC_CTRL;
 
     for (i = 0, j = 0; i < n_assocs; i++) {
         uint32_t name = assocs[i].name;
@@ -1435,7 +1448,7 @@ static int set_msrs(const CPUState *cpu)
             continue;
         }
 
-        if (name == HV_X64_REGISTER_SPEC_CTRL && !spec_ctrl_supported) {
+        if (!msr_supported(name)) {
             continue;
         }
 

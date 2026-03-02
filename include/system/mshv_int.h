@@ -14,6 +14,7 @@
 #ifndef QEMU_MSHV_INT_H
 #define QEMU_MSHV_INT_H
 
+#include "hw/hyperv/hvhdk.h"
 #define MSHV_MSR_ENTRIES_COUNT 64
 
 #define MSHV_DIRTY_PAGES_BATCH_SIZE 0x10000
@@ -70,6 +71,7 @@ struct MshvState {
     unsigned int gsi_count;
     /* reference time for migration */
     uint64_t reference_time;
+    union hv_partition_processor_features processor_features;
 };
 
 typedef struct MshvMsiControl {

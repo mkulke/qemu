@@ -242,6 +242,9 @@ jobs:
           name: qemu-build
           path: .
 
+      - name: Install qemu.qmp
+        run: pip3 install --user qemu.qmp
+
       - name: Run migration test
         env:
           QEMU_BIN: install/bin/qemu-system-x86_64
@@ -300,6 +303,9 @@ jobs:
           gcc -static -o /tmp/init tests/mshv/init.c
           tests/mshv/mk-initrd.sh /tmp/initrd.img /tmp/init
           echo "INITRD=/tmp/initrd.img" >> "$GITHUB_ENV"
+
+      - name: Install qemu.qmp
+        run: pip3 install --user qemu.qmp
 
       - name: Run direct boot migration test
         env:
@@ -422,6 +428,9 @@ jobs:
       - name: Build AVX2 test
         if: matrix.avx2
         run: gcc -mavx2 -o tests/mshv/test-avx2 tests/mshv/test-avx2.c
+
+      - name: Install qemu.qmp
+        run: pip3 install --user qemu.qmp
 
       - name: Run Ubuntu migration test
         env:

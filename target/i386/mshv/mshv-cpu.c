@@ -2216,6 +2216,12 @@ uint32_t mshv_get_supported_cpuid(uint32_t func, uint32_t idx, int reg)
      */
     if (func == 0x07 && idx == 0 && reg == R_ECX) {
         ret &= ~CPUID_7_0_ECX_CET_SHSTK;
+       /*
+         * LA57 (5-level paging) causes incorrect GVA=>GPA translations
+         * in the instruction decoder/emulator. Disable until page table
+         * walk in x86_mmu.c works w/ 5-level paging.
+         */
+        ret &= ~CPUID_7_0_ECX_LA57;
     }
     if (func == 0x07 && idx == 0 && reg == R_EDX) {
         ret &= ~CPUID_7_0_EDX_CET_IBT;

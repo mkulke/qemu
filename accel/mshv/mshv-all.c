@@ -142,6 +142,8 @@ static int create_partition(int mshv_fd, int *vm_fd)
     int ret;
     uint64_t pt_flags, host_proc_features;
     union hv_partition_processor_xsave_features disabled_xsave_features;
+    union hv_partition_processor_features disabled_proc_features = {0};
+
     struct mshv_create_partition_v2 args = {0};
     uint32_t feature_banks[] = {
         HV_PARTITION_PROPERTY_PROCESSOR_FEATURES0,
@@ -180,6 +182,11 @@ static int create_partition(int mshv_fd, int *vm_fd)
         return -1;
     }
     args.pt_cpu_fbanks[1] = ~host_proc_features;
+
+    /* features we disable regardless of host support */
+    disabled_proc_features.la57_support = 1;
+    args.pt_cpu_fbanks[0] |= disabled_proc_features.as_uint64[0];
+    args.pt_cpu_fbanks[1] |= disabled_proc_features.as_uint64[1];
 
     /* populate args structure */
     args.pt_flags = pt_flags;

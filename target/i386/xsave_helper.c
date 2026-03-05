@@ -332,7 +332,7 @@ int decompact_xsave_area(const void *buf, size_t buflen, CPUX86State *env)
     uint32_t eax, ebx, ecx, edx;
     uint32_t size, dst_off;
     bool align64;
-    uint64_t host_xcr0, *xstate_bv;
+    uint64_t guest_xcr0, *xstate_bv;
 
     compacted_xstate_bv = *(uint64_t *)(buf + XSAVE_XSTATE_BV_OFFSET);
     compacted_xcomp_bv  = *(uint64_t *)(buf + XSAVE_XCOMP_BV_OFFSET);
@@ -352,20 +352,20 @@ int decompact_xsave_area(const void *buf, size_t buflen, CPUX86State *env)
      * (supervisor) components. IA32_XSS includes features like CET (Control-flow
      * Enforcement Technology) shadow stack state in bits 11-12.
      *
-     * We mask XSTATE_BV with only XCR0 (from CPUID 0xD.0), not XCR0|IA32_XSS,
-     * because:
+     * We mask XSTATE_BV with the guest's supported XCR0 because:
      * 1. QEMU doesn't currently support CET - no XSTATE_CET_* definitions or
      *    entries in x86_ext_save_areas[], so we can't store/restore CET state
      * 2. Supervisor state (IA32_XSS) is hypervisor-managed; if the guest doesn't
      *    have CET exposed via CPUID, it doesn't need this state for migration
+     * 3. Features disabled at partition creation (e.g. AMX) must be excluded
      *
      * If CET guest support is added in the future, this should be updated to
-     * use (XCR0 | IA32_XSS) from CPUID 0xD.0 and 0xD.1 respectively.
+     * also include IA32_XSS from CPUID 0xD.1.
      */
-    host_cpuid(0xD, 0, &eax, &ebx, &ecx, &edx);
-    host_xcr0 = ((uint64_t)edx << 32) | eax;
+    guest_xcr0 = ((uint64_t)env->features[FEAT_XSAVE_XCR0_HI] << 32) |
+                 env->features[FEAT_XSAVE_XCR0_LO];
     xstate_bv = (uint64_t *)(env->xsave_buf + XSAVE_XSTATE_BV_OFFSET);
-    *xstate_bv &= host_xcr0;
+    *xstate_bv &= guest_xcr0;
 
     /* Clear bit 63 - output is standard format, not compacted */
     xcomp_bv = (uint64_t *)(env->xsave_buf + XSAVE_XCOMP_BV_OFFSET);
@@ -477,7 +477,7 @@ int compact_xsave_area(CPUX86State *env, void *buf, size_t buflen)
     uint32_t size, src_off;
     bool align64;
     size_t compact_offset;
-    uint64_t host_xcr0_mask;
+    uint64_t host_xcr0_mask, guest_xcr0;
 
     /* Zero out buffer, then copy legacy region (FP + SSE) and header as-is */
     memset(buf, 0, buflen);
@@ -491,16 +491,23 @@ int compact_xsave_area(CPUX86State *env, void *buf, size_t buflen)
      * produces standard format with XCOMP_BV=0 (buffer is zeroed and only
      * XSTATE_BV is set in the header).
      *
-     * XCOMP_BV must reflect the host's XSAVE capability (from CPUID 0xD.0),
-     * not the guest's XCR0 (env->xcr0). These differ b/c:
+     * XCOMP_BV must reflect the partition's XSAVE capability, not the
+     * guest's current XCR0 (env->xcr0). These differ b/c:
      * - A guest's XCR0 is what the guest OS has enabled via XSETBV
-     * - The host's XCR0 mask is the hypervisor's save/restore capability
+     * - The partition's XCR0 mask is the hypervisor's save/restore capability
      *
      * The hypervisor uses XSAVES which saves based on its capability, so the
      * XCOMP_BV value in the buffer we send back must match that capability.
+     *
+     * We intersect the host XCR0 with the guest's supported XCR0 features
+     * (FEAT_XSAVE_XCR0_*) so that features disabled at partition creation
+     * (e.g. AMX) are excluded from the compacted layout.
      */
     host_cpuid(0xD, 0, &eax, &ebx, &ecx, &edx);
     host_xcr0_mask = ((uint64_t)edx << 32) | eax;
+    guest_xcr0 = ((uint64_t)env->features[FEAT_XSAVE_XCR0_HI] << 32) |
+                 env->features[FEAT_XSAVE_XCR0_LO];
+    host_xcr0_mask &= guest_xcr0;
     xcomp_bv = buf + XSAVE_XCOMP_BV_OFFSET;
     *xcomp_bv = host_xcr0_mask | (1ULL << 63);
 

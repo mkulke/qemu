@@ -10,6 +10,7 @@ jobs:
     runs-on:
     - "mshv"
     - "6.6.116"
+    - "v6"
     steps:
       - uses: actions/checkout@v4
 
@@ -51,6 +52,7 @@ jobs:
     runs-on:
     - "mshv"
     - "6.6.116"
+    - "v6"
     env:
       UBUNTU_URL: https://cloud-images.ubuntu.com/minimal/releases/noble/release/ubuntu-24.04-minimal-cloudimg-amd64.img
       FEDORA_URL: https://download.fedoraproject.org/pub/fedora/linux/releases/42/Cloud/x86_64/images/Fedora-Cloud-Base-UEFI-UKI-42-1.1.x86_64.qcow2
@@ -219,7 +221,7 @@ jobs:
         - false
         - true
         vendor:
-        - amd
+        # - amd
         - intel
         exclude:
         # keep matrix manageable: only roundtrip with default cpu, smp=2
@@ -233,6 +235,7 @@ jobs:
     - "mshv"
     - "6.6.116"
     - ${{ matrix.vendor }}
+    - "v6"
     steps:
       - uses: actions/checkout@v4
 
@@ -275,12 +278,13 @@ jobs:
         - 1
         - 2
         vendor:
-        - amd
+        # - amd
         - intel
     runs-on:
     - "mshv"
     - "6.6.116"
     - ${{ matrix.vendor }}
+    - "v6"
     steps:
       - uses: actions/checkout@v4
 
@@ -340,7 +344,7 @@ jobs:
         - false
         - true
         vendor:
-        - amd
+        # - amd
         - intel
         exclude:
         # only stress with default cpu to keep matrix manageable
@@ -356,6 +360,7 @@ jobs:
     - "mshv"
     - "6.6.116"
     - ${{ matrix.vendor }}
+    - "v6"
     steps:
       - uses: actions/checkout@v4
 

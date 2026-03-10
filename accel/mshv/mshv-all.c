@@ -68,6 +68,16 @@ static int scrub_partition(int vm_fd)
     int ret;
     struct hv_input_scrub_partition in = {0};
     struct mshv_root_hvcall args = {0};
+    CPUState *cpu_state;
+    /* mirrors hv_input_set_vp_registers, inlined here because of FAM */
+    struct {
+        uint64_t partition_id;
+        uint32_t vp_index;
+        union hv_input_vtl input_vtl;
+        uint8_t  rsvd_z8;
+        uint16_t rsvd_z16;
+        struct hv_register_assoc elements[1];
+    } QEMU_PACKED in_set_vp = {0};
 
     args.code = HVCALL_SCRUB_PARTITION;
     args.in_sz = sizeof(in);
@@ -77,6 +87,31 @@ static int scrub_partition(int vm_fd)
     if (ret < 0) {
         error_report("Failed to scrub partition");
         return -1;
+    }
+
+    /*
+     * Scrub leaves VPs in explicit_suspend == 1, when using the core
+     * scheduler the mshv driver will have a stale intercept_suspended flag
+     * that causes a vcpu to be stuck. So we clear it for every vcpu after
+     * a scrub.
+     */
+    in_set_vp.elements[0].name = HV_REGISTER_EXPLICIT_SUSPEND;
+    in_set_vp.elements[0].value.reg64 = 0;
+
+    CPU_FOREACH(cpu_state) {
+        in_set_vp.vp_index = cpu_state->cpu_index;
+
+        args.code = HVCALL_SET_VP_REGISTERS;
+        args.reps = 1;
+        args.in_sz = sizeof(in_set_vp);
+        args.in_ptr = (uint64_t)&in_set_vp;
+
+        ret = mshv_hvcall(vm_fd, &args);
+        if (ret < 0) {
+            error_report("Failed to clear explicit_suspend for vcpu %u",
+                         cpu_state->cpu_index);
+            return -1;
+        }
     }
 
     return 0;

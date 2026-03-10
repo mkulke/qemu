@@ -10,6 +10,10 @@
 #define MSHV_IOCTL  0xB8
 
 typedef enum hv_register_name {
+    /* Suspend Registers */
+    HV_REGISTER_EXPLICIT_SUSPEND = 0x00000000,
+    HV_REGISTER_INTERCEPT_SUSPEND = 0x00000001,
+
     /* Pending Interruption Register */
     HV_REGISTER_PENDING_INTERRUPTION = 0x00010002,
 

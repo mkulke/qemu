@@ -691,6 +691,12 @@ static void mshv_cpu_synchronize_post_reset(CPUState *cpu)
     bool is_bsp = (cpu == first_cpu);
 
     if (is_bsp) {
+        ret = pause_vm(mshv_state->vm);
+        if (ret < 0) {
+            error_report("Failed to pause VM before reset");
+            vm_stop(RUN_STATE_INTERNAL_ERROR);
+        }
+
         ret = scrub_partition(mshv_state->vm);
         if (ret < 0) {
             error_report("Failed to scrub partition during reset: %s",
@@ -705,6 +711,14 @@ static void mshv_cpu_synchronize_post_reset(CPUState *cpu)
                      strerror(-ret));
         cpu_dump_state(cpu, stderr, CPU_DUMP_CODE);
         vm_stop(RUN_STATE_INTERNAL_ERROR);
+    }
+
+    if (is_bsp) {
+        ret = resume_vm(mshv_state->vm);
+        if (ret < 0) {
+            error_report("Failed to resume VM after reset");
+            vm_stop(RUN_STATE_INTERNAL_ERROR);
+        }
     }
 
     cpu->accel->dirty = false;

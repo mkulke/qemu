@@ -660,7 +660,7 @@ static void mshv_cpu_synchronize_post_reset(CPUState *cpu)
         if (ret < 0) {
             error_report("Failed to scrub partition during reset: %s",
                          strerror(-ret));
-            abort();
+            vm_stop(RUN_STATE_INTERNAL_ERROR);
         }
     }
 

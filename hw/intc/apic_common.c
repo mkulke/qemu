@@ -351,6 +351,30 @@ static const VMStateDescription vmstate_apic_common_sipi = {
     }
 };
 
+#ifdef CONFIG_MSHV
+static bool apic_common_mshv_needed(void *opaque)
+{
+    return true;
+}
+
+static const VMStateDescription vmstate_apic_common_mshv = {
+    .name = "apic/mshv",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .needed = apic_common_mshv_needed,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT32(mshv_apic_version, APICCommonState),
+        VMSTATE_UINT32(mshv_apic_lvt_lint0, APICCommonState),
+        VMSTATE_UINT32(mshv_apic_lvt_lint1, APICCommonState),
+        VMSTATE_UINT32(mshv_apic_lvt_cmci, APICCommonState),
+        VMSTATE_UINT32(mshv_apic_error_status, APICCommonState),
+        VMSTATE_UINT32(mshv_apic_counter_value, APICCommonState),
+        VMSTATE_UINT32(mshv_apic_remote_read, APICCommonState),
+        VMSTATE_END_OF_LIST()
+    }
+};
+#endif
+
 static const VMStateDescription vmstate_apic_common = {
     .name = "apic",
     .version_id = 3,
@@ -384,6 +408,9 @@ static const VMStateDescription vmstate_apic_common = {
     },
     .subsections = (const VMStateDescription * const []) {
         &vmstate_apic_common_sipi,
+#ifdef CONFIG_MSHV
+        &vmstate_apic_common_mshv,
+#endif
         NULL
     }
 };

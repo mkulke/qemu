@@ -15,6 +15,7 @@
 #include "system/hw_accel.h"
 #include "system/kvm.h"
 #include "system/xen.h"
+#include "system/mshv.h"
 #include "system/address-spaces.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/i386/apic_internal.h"
@@ -35,6 +36,8 @@ APICCommonClass *apic_get_class(Error **errp)
         apic_type = "xen-apic";
     } else if (whpx_irqchip_in_kernel()) {
         apic_type = "whpx-apic";
+    } else if (mshv_enabled()) {
+        apic_type = "mshv-apic";
     }
 
     return APIC_COMMON_CLASS(object_class_by_name(apic_type));

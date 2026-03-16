@@ -188,6 +188,17 @@ struct APICCommonState {
     DeviceState *vapic;
     hwaddr vapic_paddr; /* note: persistence via kvmvapic */
     uint32_t extended_log_dest;
+
+#ifdef CONFIG_MSHV
+    /* MSHV LAPIC state — fields with no generic APICCommonState equivalent */
+    uint32_t mshv_apic_version;
+    uint32_t mshv_apic_lvt_lint0;
+    uint32_t mshv_apic_lvt_lint1;
+    uint32_t mshv_apic_lvt_cmci;
+    uint32_t mshv_apic_error_status;
+    uint32_t mshv_apic_counter_value;
+    uint32_t mshv_apic_remote_read;
+#endif
 };
 
 typedef struct VAPICState {

@@ -48,6 +48,7 @@ struct AccelCPUState {
 
 typedef struct MshvMemoryListener {
     MemoryListener listener;
+    GHashTable *mapped_regions;
     int as_id;
 } MshvMemoryListener;
 

@@ -2004,11 +2004,67 @@ static int handle_pio(CPUState *cpu, const struct hyperv_message *msg)
     return handle_pio_non_str(cpu, &info);
 }
 
+static int request_pic_interrupt_window(CPUState *cpu)
+{
+    union hv_x64_deliverability_notifications_register notifications = {
+        .interrupt_notification = 1,
+    };
+    hv_register_assoc assoc = {
+        .name = HV_X64_REGISTER_DELIVERABILITY_NOTIFICATIONS,
+        .value.reg64 = notifications.as_uint64,
+    };
+
+    trace_mshv_pic_interrupt_window(cpu->cpu_index);
+
+    return mshv_set_generic_regs(cpu, &assoc, 1);
+}
+
+static int handle_interrupt_deliverable(
+    CPUState *cpu, const struct hyperv_message *msg)
+{
+    struct hv_x64_interruption_deliverable_message info;
+    union hv_x64_pending_ext_int_event event = {
+        .event_pending = 1,
+        .event_type = HV_X64_PENDING_EVENT_EXT_INT,
+    };
+    hv_register_assoc assoc = {
+        .name = HV_REGISTER_PENDING_EVENT0,
+    };
+    int vector;
+
+    memcpy(&info, msg->payload, sizeof(info));
+    if (info.deliverable_type != MSHV_HV_INTERRUPTION_TYPE_EXT_INT) {
+        error_report("unexpected deliverable interruption type %u",
+                     info.deliverable_type);
+        return -1;
+    }
+
+    cpu_reset_interrupt(cpu, CPU_INTERRUPT_HARD);
+    vector = cpu_get_pic_interrupt(&X86_CPU(cpu)->env);
+    if (vector < 0) {
+        return 0;
+    }
+
+    event.vector = vector;
+    assoc.value.pending_ext_int_event = event;
+    trace_mshv_pic_interrupt(cpu->cpu_index, vector);
+
+    return mshv_set_generic_regs(cpu, &assoc, 1);
+}
+
 int mshv_run_vcpu(int vm_fd, CPUState *cpu, hv_message *msg, MshvVmExit *exit)
 {
     int ret;
     enum MshvVmExit exit_reason;
     int cpu_fd = mshv_vcpufd(cpu);
+
+    if (cpu_test_interrupt(cpu, CPU_INTERRUPT_HARD)) {
+        ret = request_pic_interrupt_window(cpu);
+        if (ret < 0) {
+            error_report("failed to request PIC interrupt window");
+            return -1;
+        }
+    }
 
     ret = ioctl(cpu_fd, MSHV_RUN_VP, msg);
     if (ret < 0) {
@@ -2028,6 +2084,12 @@ int mshv_run_vcpu(int vm_fd, CPUState *cpu, hv_message *msg, MshvVmExit *exit)
         return exit_reason;
     case HVMSG_X64_IO_PORT_INTERCEPT:
         ret = handle_pio(cpu, msg);
+        if (ret < 0) {
+            return MshvVmExitSpecial;
+        }
+        return MshvVmExitIgnore;
+    case HVMSG_X64_INTERRUPTION_DELIVERABLE:
+        ret = handle_interrupt_deliverable(cpu, msg);
         if (ret < 0) {
             return MshvVmExitSpecial;
         }

@@ -12,6 +12,7 @@
 
 #include "qemu/osdep.h"
 #include "qemu/error-report.h"
+#include "qemu/main-loop.h"
 #include "qemu/memalign.h"
 
 #include "system/mshv.h"
@@ -809,6 +810,7 @@ static int get_vcpu_events(CPUState *cpu)
     union hv_x64_pending_interruption_register pending_int;
     union hv_x64_interrupt_state_register int_state;
     union hv_x64_pending_exception_event pending_exc;
+    union hv_x64_pending_ext_int_event pending_ext_int;
     int ret;
 
     ret = mshv_get_generic_regs(cpu, assocs, ARRAY_SIZE(assocs));
@@ -820,6 +822,7 @@ static int get_vcpu_events(CPUState *cpu)
     pending_int.as_uint64 = assocs[0].value.reg64;
     int_state.as_uint64 = assocs[1].value.reg64;
     pending_exc = assocs[2].value.pending_exception_event;
+    pending_ext_int = assocs[2].value.pending_ext_int_event;
 
     /* Clear previous state. injected ints/excs are blanked w/ -1 */
     env->interrupt_injected    = -1;
@@ -879,14 +882,25 @@ static int get_vcpu_events(CPUState *cpu)
         env->hflags2 &= ~HF2_NMI_MASK;
     }
 
-    /* HV_REGISTER_PENDING_EVENT0: pending exception not yet injected */
+    /* HV_REGISTER_PENDING_EVENT0: event not yet injected */
     if (pending_exc.event_pending) {
-        env->exception_pending     = 1;
-        env->exception_nr          = pending_exc.vector;
-        env->has_error_code        = pending_exc.deliver_error_code;
-        env->error_code            = pending_exc.error_code;
-        env->exception_has_payload = (pending_exc.exception_parameter != 0);
-        env->exception_payload     = pending_exc.exception_parameter;
+        switch (pending_exc.event_type) {
+        case HV_X64_PENDING_EVENT_EXCEPTION:
+            env->exception_pending     = 1;
+            env->exception_nr          = pending_exc.vector;
+            env->has_error_code        = pending_exc.deliver_error_code;
+            env->error_code            = pending_exc.error_code;
+            env->exception_has_payload = pending_exc.exception_parameter != 0;
+            env->exception_payload     = pending_exc.exception_parameter;
+            break;
+        case HV_X64_PENDING_EVENT_EXT_INT:
+            env->interrupt_injected = pending_ext_int.vector;
+            break;
+        default:
+            error_report("unknown pending event type %u",
+                         pending_exc.event_type);
+            return -EINVAL;
+        }
     }
 
     /*
@@ -2004,10 +2018,131 @@ static int handle_pio(CPUState *cpu, const struct hyperv_message *msg)
     return handle_pio_non_str(cpu, &info);
 }
 
+static int set_pic_interrupt_window(CPUState *cpu, bool enabled)
+{
+    union hv_x64_deliverability_notifications_register notifications = { 0 };
+    struct hv_register_assoc assoc = { 0 };
+    AccelCPUState *cpu_state = cpu->accel;
+    int ret;
+
+    notifications.interrupt_notification = enabled;
+
+    assoc.name        = HV_REGISTER_DELIVERABILITY_NOTIFICATIONS;
+    assoc.value.reg64 = notifications.as_uint64;
+
+    /* we are already waiting for a PIC interrupt window */
+    if (cpu_state->pic_interrupt_window == enabled) {
+        return 0;
+    }
+
+    trace_mshv_set_pic_interrupt_window(cpu->cpu_index, enabled);
+
+    ret = mshv_set_generic_regs(cpu, &assoc, 1);
+    if (ret < 0) {
+        error_report("failed to set deliverability notifications register");
+        return ret;
+    }
+
+    cpu_state->pic_interrupt_window = enabled;
+    return 0;
+}
+
+static inline int request_pic_interrupt_window(CPUState *cpu)
+{
+    return set_pic_interrupt_window(cpu, true);
+}
+
+static inline int clear_pic_interrupt_window(CPUState *cpu)
+{
+    return set_pic_interrupt_window(cpu, false);
+}
+
+static int handle_interrupt_deliverable(CPUState *cpu,
+                                        const struct hyperv_message *msg)
+{
+    CPUX86State *env = &X86_CPU(cpu)->env;
+    struct hv_x64_interruption_deliverable_message info;
+    union hv_x64_pending_ext_int_event event = { 0 };
+    struct hv_register_assoc assocs[2] = { 0 };
+    struct hv_register_assoc *event_assoc = &assocs[0],
+                             *activity_assoc = &assocs[1];
+    union hv_internal_activity_register activity;
+    bool is_suspended;
+    int ret, vector;
+
+    memcpy(&info, msg->payload, sizeof(info));
+    if (info.deliverable_type != MSHV_HV_INTERRUPTION_TYPE_EXT_INT) {
+        error_report("unexpected deliverable interruption type %u",
+                     info.deliverable_type);
+        return -1;
+    }
+
+    ret = clear_pic_interrupt_window(cpu);
+    if (ret < 0) {
+        error_report("failed to clear PIC interrupt window");
+        return -1;
+    }
+
+    bql_lock();
+    cpu_reset_interrupt(cpu, CPU_INTERRUPT_HARD);
+    vector = cpu_get_pic_interrupt(env);
+    bql_unlock();
+
+    /* vector == -1 means the PIC has no longer a pending interrupt */
+    if (vector < 0) {
+        return 0;
+    }
+
+    trace_mshv_pic_interrupt(cpu->cpu_index, vector);
+
+    /* we check whether the vcpu is halted first */
+    activity_assoc->name = HV_REGISTER_INTERNAL_ACTIVITY_STATE;
+    ret = mshv_get_generic_regs(cpu, activity_assoc, 1);
+    if (ret < 0) {
+        error_report("failed to read activity state before PIC delivery");
+        return -1;
+    }
+
+    event.event_pending = 1;
+    event.event_type    = HV_X64_PENDING_EVENT_EXT_INT;
+    event.vector        = vector;
+
+    event_assoc->name                        = HV_REGISTER_PENDING_EVENT0;
+    event_assoc->value.pending_ext_int_event = event;
+
+    /*
+     * If the vcpu was hlt suspended we clear the suspend bit, otherwise we
+     * only set the pending event.
+     */
+    activity = activity_assoc->value.internal_activity;
+    is_suspended = activity.halt_suspend;
+    if (is_suspended) {
+        activity.halt_suspend = 0;
+        activity_assoc->value.internal_activity = activity;
+    }
+
+    ret = mshv_set_generic_regs(cpu, assocs, is_suspended ? 2 : 1);
+    if (ret < 0) {
+        error_report("failed to set pending event%s",
+                     is_suspended ? " and activity state" : "");
+        return ret;
+    }
+
+    return 0;
+}
+
 int mshv_run_vcpu(int vm_fd, CPUState *cpu, hv_message *msg, MshvVmExit *exit)
 {
     int ret;
     int cpu_fd = mshv_vcpufd(cpu);
+
+    if (cpu_test_interrupt(cpu, CPU_INTERRUPT_HARD)) {
+        ret = request_pic_interrupt_window(cpu);
+        if (ret < 0) {
+            error_report("failed to request PIC interrupt window");
+            return -1;
+        }
+    }
 
     ret = ioctl(cpu_fd, MSHV_RUN_VP, msg);
     if (ret < 0) {
@@ -2035,6 +2170,13 @@ int mshv_run_vcpu(int vm_fd, CPUState *cpu, hv_message *msg, MshvVmExit *exit)
         ret = handle_pio(cpu, msg);
         if (ret < 0) {
             error_report("failed to handle PIO");
+            return ret;
+        }
+        *exit = MshvVmExitIgnore;
+        return 0;
+    case HVMSG_X64_INTERRUPTION_DELIVERABLE:
+        ret = handle_interrupt_deliverable(cpu, msg);
+        if (ret < 0) {
             return ret;
         }
         *exit = MshvVmExitIgnore;

@@ -621,14 +621,15 @@ static int mshv_cpu_exec(CPUState *cpu)
 
         ret = mshv_run_vcpu(mshv_state->vm, cpu, &mshv_msg, &exit_reason);
         if (ret < 0) {
-            error_report("Failed to run on vcpu %d", cpu->cpu_index);
-            abort();
+            error_report("Failed to run on vCPU %d", cpu->cpu_index);
+            break;
         }
 
         switch (exit_reason) {
         case MshvVmExitIgnore:
             break;
-        default:
+        case MshvVmExitSpecial:
+        case MshvVmExitShutdown:
             ret = EXCP_INTERRUPT;
             break;
         }

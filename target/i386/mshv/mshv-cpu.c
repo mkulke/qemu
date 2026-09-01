@@ -2007,31 +2007,38 @@ static int handle_pio(CPUState *cpu, const struct hyperv_message *msg)
 int mshv_run_vcpu(int vm_fd, CPUState *cpu, hv_message *msg, MshvVmExit *exit)
 {
     int ret;
-    enum MshvVmExit exit_reason;
     int cpu_fd = mshv_vcpufd(cpu);
 
     ret = ioctl(cpu_fd, MSHV_RUN_VP, msg);
     if (ret < 0) {
-        return MshvVmExitShutdown;
+        if (errno == EINTR) {
+            *exit = MshvVmExitSpecial;
+            return 0;
+        }
+        error_report("failed to run vCPU: %s", strerror(errno));
+        return -errno;
     }
 
     switch (msg->header.message_type) {
     case HVMSG_UNRECOVERABLE_EXCEPTION:
-        return MshvVmExitShutdown;
+        *exit = MshvVmExitShutdown;
+        return 0;
     case HVMSG_UNMAPPED_GPA:
     case HVMSG_GPA_INTERCEPT:
-        ret = handle_mmio(cpu, msg, &exit_reason);
+        ret = handle_mmio(cpu, msg, exit);
         if (ret < 0) {
-            error_report("failed to handle mmio");
-            return -1;
+            error_report("failed to handle MMIO");
+            return ret;
         }
-        return exit_reason;
+        return 0;
     case HVMSG_X64_IO_PORT_INTERCEPT:
         ret = handle_pio(cpu, msg);
         if (ret < 0) {
-            return MshvVmExitSpecial;
+            error_report("failed to handle PIO");
+            return ret;
         }
-        return MshvVmExitIgnore;
+        *exit = MshvVmExitIgnore;
+        return 0;
     default:
         break;
     }

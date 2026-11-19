@@ -60,30 +60,6 @@ static int init_mshv(int *mshv_fd)
     return 0;
 }
 
-static int mshv_load_cleanup(void *opaque)
-{
-    CPUState *cpu;
-    int ret;
-
-    ret = mshv_arch_set_partition_msrs(first_cpu);
-    if (ret < 0) {
-        error_report("Failed to set partition MSRs: %s", strerror(-ret));
-        return -1;
-    }
-
-    CPU_FOREACH(cpu) {
-        ret = mshv_arch_set_mp_state(cpu);
-        if (ret < 0) {
-            error_report("Failed to set mp state for vCPU %d: %s",
-                         cpu->cpu_index, strerror(-ret));
-            return -1;
-        }
-    }
-
-    return 0;
-}
-
-
 static int get_host_partition_property(int mshv_fd, uint32_t property_code,
                                        uint64_t *value)
 {
@@ -166,8 +142,10 @@ static int create_partition(int mshv_fd, int *vm_fd)
 {
     int ret;
     uint64_t pt_flags, host_proc_features;
-    union hv_partition_processor_xsave_features disabled_xsave_features;
     union hv_partition_processor_features disabled_partition_features = {0};
+#if defined(__x86_64__)
+    union hv_partition_processor_xsave_features disabled_xsave_features;
+#endif
 
     struct mshv_create_partition_v2 args = {0};
 
@@ -179,7 +157,8 @@ static int create_partition(int mshv_fd, int *vm_fd)
                (1ULL << MSHV_PT_BIT_GPA_SUPER_PAGES) |
                (1ULL << MSHV_PT_BIT_CPU_AND_XSAVE_FEATURES);
 
-    /* enable all */
+#if defined(__x86_64__)
+    /* enable all xsave features (0 = enabled) */
     disabled_xsave_features.as_uint64 = 0;
     /*
      * AMX TILE XSAVE state (XTILE_DATA) is 8KB, which exceeds the
@@ -189,6 +168,7 @@ static int create_partition(int mshv_fd, int *vm_fd)
     disabled_xsave_features.amx_bf16_support = 1;
     disabled_xsave_features.amx_int8_support = 1;
     disabled_xsave_features.amx_fp16_support = 1;
+#endif
 
     /*
      * query host for supported processor features and disable unsupported
@@ -220,7 +200,9 @@ static int create_partition(int mshv_fd, int *vm_fd)
     /* populate args structure */
     args.pt_flags = pt_flags;
     args.pt_isolation = MSHV_PT_ISOLATION_NONE;
+#if defined(__x86_64__)
     args.pt_disabled_xsave = disabled_xsave_features.as_uint64;
+#endif
     args.pt_num_cpu_fbanks = MSHV_NUM_CPU_FEATURES_BANKS;
 
     ret = ioctl(mshv_fd, MSHV_CREATE_PARTITION, &args);
@@ -253,6 +235,7 @@ static int set_synthetic_proc_features(int vm_fd)
     features.tb_flush_hypercalls = 1;
     features.synthetic_cluster_ipi = 1;
     features.direct_synthetic_timers = 1;
+    features.access_vp_regs = 1;
 
     mshv_arch_amend_proc_features(&features);
 
@@ -292,6 +275,11 @@ static int create_vm(int mshv_fd, int *vm_fd)
     }
 
     ret = set_synthetic_proc_features(*vm_fd);
+    if (ret < 0) {
+        return -1;
+    }
+
+    ret = mshv_arch_pre_init_vm(*vm_fd);
     if (ret < 0) {
         return -1;
     }
@@ -478,6 +466,7 @@ static void register_mshv_memory_listener(MshvState *s, MshvMemoryListener *mml,
 
     mml->listener = mshv_memory_listener;
     mml->listener.name = name;
+    mml->mapped_regions = g_hash_table_new(g_direct_hash, g_direct_equal);
     memory_listener_register(&mml->listener, as);
     for (i = 0; i < s->nr_as; ++i) {
         if (!s->as[i].as) {
@@ -519,10 +508,6 @@ static int mshv_init_vcpu(CPUState *cpu)
     return 0;
 }
 
-static SaveVMHandlers savevm_mshv = {
-    .load_cleanup = mshv_load_cleanup,
-};
-
 static int mshv_init(AccelState *as, MachineState *ms)
 {
     MshvState *s;
@@ -544,7 +529,10 @@ static int mshv_init(AccelState *as, MachineState *ms)
         return -1;
     }
 
-    mshv_init_mmio_emu();
+    ret = mshv_arch_accel_init(as, ms, mshv_fd);
+    if (ret < 0) {
+        return -1;
+    }
 
     ret = create_vm(mshv_fd, &vm_fd);
     if (ret < 0) {
@@ -571,9 +559,10 @@ static int mshv_init(AccelState *as, MachineState *ms)
                                   0, "mshv-memory");
     memory_listener_register(&mshv_io_listener, &address_space_io);
 
-    register_savevm_live("mshv", 0, 1, &savevm_mshv, s);
-
-    mshv_clock_init();
+    ret = mshv_arch_migration_init(s);
+    if (ret < 0) {
+        return ret;
+    }
 
     return 0;
 }

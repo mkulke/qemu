@@ -1,0 +1,585 @@
+/*
+ * QEMU MSHV support
+ *
+ * Copyright Microsoft, Corp. 2026
+ *
+ * Authors: Aastha Rawat          <aastharawat@linux.microsoft.com>
+ *          Anirudh Rayabharam    <anirudh@anirudhrb.com>
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
+
+#include "qemu/osdep.h"
+#include <sys/ioctl.h>
+
+#include "qemu/error-report.h"
+#include "qemu/memalign.h"
+#include "hw/arm/virt.h"
+
+#include "system/cpus.h"
+#include "target/arm/cpu.h"
+#include "target/arm/internals.h"
+#include "target/arm/mshv_arm.h"
+#include "target/arm/helper.h"
+
+#include "system/mshv.h"
+#include "system/mshv_int.h"
+#include "hw/hyperv/hvgdk_mini.h"
+#include "hw/hyperv/hvhdk_mini.h"
+
+typedef struct ARMHostCPUFeatures {
+    ARMISARegisters isar;
+    uint64_t features;
+    uint64_t midr;
+    uint32_t reset_sctlr;
+    const char *dtb_compatible;
+} ARMHostCPUFeatures;
+
+static ARMHostCPUFeatures arm_host_cpu_features;
+
+static const enum hv_register_name STANDARD_REGISTER_NAMES[32] = {
+    HV_ARM64_REGISTER_X0,
+    HV_ARM64_REGISTER_X1,
+    HV_ARM64_REGISTER_X2,
+    HV_ARM64_REGISTER_X3,
+    HV_ARM64_REGISTER_X4,
+    HV_ARM64_REGISTER_X5,
+    HV_ARM64_REGISTER_X6,
+    HV_ARM64_REGISTER_X7,
+    HV_ARM64_REGISTER_X8,
+    HV_ARM64_REGISTER_X9,
+    HV_ARM64_REGISTER_X10,
+    HV_ARM64_REGISTER_X11,
+    HV_ARM64_REGISTER_X12,
+    HV_ARM64_REGISTER_X13,
+    HV_ARM64_REGISTER_X14,
+    HV_ARM64_REGISTER_X15,
+    HV_ARM64_REGISTER_X16,
+    HV_ARM64_REGISTER_X17,
+    HV_ARM64_REGISTER_X18,
+    HV_ARM64_REGISTER_X19,
+    HV_ARM64_REGISTER_X20,
+    HV_ARM64_REGISTER_X21,
+    HV_ARM64_REGISTER_X22,
+    HV_ARM64_REGISTER_X23,
+    HV_ARM64_REGISTER_X24,
+    HV_ARM64_REGISTER_X25,
+    HV_ARM64_REGISTER_X26,
+    HV_ARM64_REGISTER_X27,
+    HV_ARM64_REGISTER_X28,
+    HV_ARM64_REGISTER_FP,
+    HV_ARM64_REGISTER_LR,
+    HV_ARM64_REGISTER_PC,
+};
+
+static int set_standard_regs(const CPUState *cpu)
+{
+    size_t n_regs = ARRAY_SIZE(STANDARD_REGISTER_NAMES);
+    struct hv_register_assoc assocs[ARRAY_SIZE(STANDARD_REGISTER_NAMES)] = {};
+    int ret;
+    ARMCPU *arm_cpu = ARM_CPU(cpu);
+    CPUARMState *env = &arm_cpu->env;
+
+    for (size_t i = 0; i < n_regs - 1; i++) {
+        assocs[i].name = STANDARD_REGISTER_NAMES[i];
+        assocs[i].value.reg64 = env->xregs[i];
+    }
+
+    /* Last register is the program counter */
+    assocs[n_regs - 1].name = STANDARD_REGISTER_NAMES[n_regs - 1];
+    assocs[n_regs - 1].value.reg64 = env->pc;
+
+    ret = mshv_set_generic_regs(cpu, assocs, n_regs);
+    if (ret < 0) {
+        error_report("failed to set standard registers");
+        return -1;
+    }
+
+    return 0;
+}
+
+static int get_standard_regs(CPUState *cpu)
+{
+    size_t n_regs = ARRAY_SIZE(STANDARD_REGISTER_NAMES);
+    struct hv_register_assoc assocs[ARRAY_SIZE(STANDARD_REGISTER_NAMES)] = {};
+    int ret;
+    ARMCPU *arm_cpu = ARM_CPU(cpu);
+    CPUARMState *env = &arm_cpu->env;
+
+    for (size_t i = 0; i < n_regs; i++) {
+        assocs[i].name = STANDARD_REGISTER_NAMES[i];
+    }
+    ret = mshv_get_generic_regs(cpu, assocs, n_regs);
+    if (ret < 0) {
+        error_report("failed to get standard registers");
+        return -1;
+    }
+
+    for (size_t i = 0; i < n_regs - 1; i++) {
+        env->xregs[i] = assocs[i].value.reg64;
+    }
+    env->pc = assocs[n_regs - 1].value.reg64;
+
+    return 0;
+}
+
+static int load_regs(CPUState *cpu)
+{
+    int ret;
+
+    ret = get_standard_regs(cpu);
+    if (ret < 0) {
+        error_report("Failed to load standard registers");
+        return -1;
+    }
+
+    return 0;
+}
+
+static int store_regs(const CPUState *cpu)
+{
+    int ret;
+
+    ret = set_standard_regs(cpu);
+    if (ret < 0) {
+        error_report("Failed to store standard registers");
+        return -1;
+    }
+
+    return 0;
+}
+
+int mshv_arch_load_vcpu_state(CPUState *cpu)
+{
+    return load_regs(cpu);
+}
+
+int mshv_arch_store_vcpu_state(const CPUState *cpu)
+{
+    return store_regs(cpu);
+}
+
+static int set_memory_info(const struct hyperv_message *msg,
+                           struct hv_arm64_memory_intercept_message *info)
+{
+    if (msg->header.message_type != HVMSG_GPA_INTERCEPT
+            && msg->header.message_type != HVMSG_UNMAPPED_GPA
+            && msg->header.message_type != HVMSG_UNACCEPTED_GPA) {
+        error_report("invalid message type");
+        return -1;
+    }
+    memcpy(info, msg->payload, sizeof(*info));
+
+    return 0;
+}
+
+static uint64_t mshv_mmio_get_reg(CPUState *cpu, int reg_index)
+{
+    ARMCPU *arm_cpu = ARM_CPU(cpu);
+    CPUARMState *env = &arm_cpu->env;
+    return reg_index < 31 ? env->xregs[reg_index] : 0ULL;
+}
+
+static void mshv_mmio_set_reg(CPUState *cpu, int reg_index, uint64_t val)
+{
+    ARMCPU *arm_cpu = ARM_CPU(cpu);
+    CPUARMState *env = &arm_cpu->env;
+    if (reg_index < 31) {
+        env->xregs[reg_index] = val;
+    }
+}
+
+static int handle_unmapped_mem(int vm_fd, CPUState *cpu,
+                               const struct hyperv_message *msg,
+                               MshvVmExit *exit_reason)
+{
+    ARMCPU *arm_cpu = ARM_CPU(cpu);
+    CPUARMState *env = &arm_cpu->env;
+    struct hv_arm64_memory_intercept_message info = { 0 };
+    int ret;
+    EsrEl2 syndrome;
+
+    ret = set_memory_info(msg, &info);
+    if (ret < 0) {
+        error_report("failed to convert message to memory info");
+        return -1;
+    }
+
+    syndrome.raw = info.syndrome;
+
+    ret = load_regs(cpu);
+    if (ret < 0) {
+        error_report("Failed to load registers");
+        return -1;
+    }
+
+    static const struct arm_emul_ops mshv_arm_emul_ops = {
+        .get_reg = mshv_mmio_get_reg,
+        .set_reg = mshv_mmio_set_reg,
+    };
+
+    ret = arm_emulate_mmio(cpu, syndrome, info.guest_physical_address,
+                           &mshv_arm_emul_ops);
+    if (ret < 0) {
+        error_report("Failed to emulate with syndrome");
+        return -1;
+    }
+
+    /* Advance PC past the faulting instruction */
+    env->pc += (syndrome.il == 1) ? 4 : 2;
+
+    ret = store_regs(cpu);
+    if (ret < 0) {
+        error_report("Failed to store registers");
+        return -1;
+    }
+
+    *exit_reason = MshvVmExitIgnore;
+
+    return 0;
+}
+
+int mshv_run_vcpu(int vm_fd, CPUState *cpu, hv_message *msg, MshvVmExit *exit)
+{
+    int ret;
+    int cpu_fd = mshv_vcpufd(cpu);
+
+    ret = ioctl(cpu_fd, MSHV_RUN_VP, msg);
+    if (ret < 0) {
+        *exit = MshvVmExitShutdown;
+        return ret;
+    }
+
+    switch (msg->header.message_type) {
+    case HVMSG_UNRECOVERABLE_EXCEPTION:
+        *exit = MshvVmExitShutdown;
+        break;
+    case HVMSG_GPA_INTERCEPT:
+    case HVMSG_UNMAPPED_GPA:
+        ret = handle_unmapped_mem(vm_fd, cpu, msg, exit);
+        if (ret < 0) {
+            error_report("failed to handle mmio");
+            return -1;
+        }
+        break;
+    default:
+        error_report("Unhandled message type: 0x%x", msg->header.message_type);
+        return -1;
+    }
+
+    return 0;
+}
+
+void mshv_arch_init_vcpu(CPUState *cpu)
+{
+    AccelCPUState *state = cpu->accel;
+
+    mshv_setup_hvcall_args(state);
+}
+
+void mshv_arch_destroy_vcpu(CPUState *cpu)
+{
+    AccelCPUState *state = cpu->accel;
+
+    if (state->hvcall_args.base) {
+        qemu_vfree(state->hvcall_args.base);
+    }
+
+    state->hvcall_args = (MshvHvCallArgs){0};
+}
+
+static int set_partition_prop(int vm_fd, uint32_t prop_code,
+                                uint64_t prop_value)
+{
+    int ret;
+    struct hv_input_set_partition_property in = {0};
+    in.property_code = prop_code;
+    in.property_value = prop_value;
+
+    struct mshv_root_hvcall args = {0};
+    args.code = HVCALL_SET_PARTITION_PROPERTY;
+    args.in_sz = sizeof(in);
+    args.in_ptr = (uint64_t)&in;
+
+    ret = mshv_hvcall(vm_fd, &args);
+    if (ret < 0) {
+        error_report("Failed to set partition property code %u", prop_code);
+        return -1;
+    }
+
+    return 0;
+}
+
+int mshv_arch_pre_init_vm(int vm_fd)
+{
+    int ret;
+    VirtMachineState *vms = VIRT_MACHINE(qdev_get_machine());
+
+    ret = set_partition_prop(vm_fd,
+                            HV_PARTITION_PROPERTY_GICD_BASE_ADDRESS,
+                            vms->memmap[VIRT_GIC_DIST].base);
+    if (ret < 0) {
+        return ret;
+    }
+
+    ret = set_partition_prop(vm_fd,
+                        HV_PARTITION_PROPERTY_GITS_TRANSLATER_BASE_ADDRESS,
+                        vms->memmap[VIRT_GIC_ITS].base);
+    if (ret < 0) {
+        return ret;
+    }
+
+    ret = set_partition_prop(vm_fd,
+                        HV_PARTITION_PROPERTY_GIC_LPI_INT_ID_BITS,
+                        0);
+    if (ret < 0) {
+        return ret;
+    }
+
+    ret = set_partition_prop(vm_fd,
+                        HV_PARTITION_PROPERTY_GIC_PPI_OVERFLOW_INTERRUPT_FROM_CNTV,
+                        ARCH_TIMER_VIRT_IRQ);
+    if (ret < 0) {
+        return ret;
+    }
+
+    ret = set_partition_prop(vm_fd,
+                        HV_PARTITION_PROPERTY_GIC_PPI_PERFORMANCE_MONITORS_INTERRUPT,
+                        VIRTUAL_PMU_IRQ);
+
+    return ret;
+}
+
+static uint32_t mshv_arm_get_ipa_bit_size(int mshv_fd)
+{
+    int ret;
+    struct hv_input_get_partition_property in = {0};
+    struct hv_output_get_partition_property out = {0};
+    struct mshv_root_hvcall args = {0};
+
+    in.property_code = HV_PARTITION_PROPERTY_PHYSICAL_ADDRESS_WIDTH;
+
+    args.code = HVCALL_GET_PARTITION_PROPERTY;
+    args.in_sz = sizeof(in);
+    args.in_ptr = (uint64_t)&in;
+    args.out_sz = sizeof(out);
+    args.out_ptr = (uint64_t)&out;
+
+    ret = mshv_hvcall(mshv_fd, &args);
+
+    if (ret < 0) {
+        error_report("Failed to get IPA size");
+        exit(1);
+    }
+
+    return out.property_value;
+}
+
+int mshv_arch_accel_init(AccelState *as, MachineState *ms, int mshv_fd)
+{
+    MachineClass *mc = MACHINE_GET_CLASS(ms);
+    int pa_range;
+    uint32_t ipa_size;
+
+    if (mc->get_physical_address_range) {
+        ipa_size = mshv_arm_get_ipa_bit_size(mshv_fd);
+        pa_range = mc->get_physical_address_range(ms, ipa_size, ipa_size);
+        if (pa_range < 0) {
+            return -EINVAL;
+        }
+    }
+
+    return 0;
+}
+
+void mshv_arch_amend_proc_features(
+    union hv_partition_synthetic_processor_features *features)
+{
+    /*
+     * TLB-flush hypercalls are an x86 enlightenment. ARM guests use
+     * broadcast TLBI instructions instead.
+     */
+    features->tb_flush_hypercalls = 0;
+}
+
+void mshv_arch_disable_partition_proc_features(
+    union hv_partition_processor_features *disabled_features)
+{
+    /* No processor features to disable on ARM */
+}
+
+int mshv_arch_post_init_vm(int vm_fd)
+{
+    return 0;
+}
+
+int mshv_arch_migration_init(MshvState *s)
+{
+    return 0;
+}
+
+static void clamp_id_aa64mmfr0_parange_to_ipa_size(int mshv_fd,
+                                                   ARMISARegisters *isar)
+{
+    uint32_t ipa_size = mshv_arm_get_ipa_bit_size(mshv_fd);
+    uint64_t id_aa64mmfr0;
+
+    /* Clamp down the PARange to the IPA size the kernel supports. */
+    uint8_t index = round_down_to_parange_index(ipa_size);
+    id_aa64mmfr0 = GET_IDREG(isar, ID_AA64MMFR0);
+    id_aa64mmfr0 = FIELD_DP64(id_aa64mmfr0, ID_AA64MMFR0, PARANGE, index);
+    SET_IDREG(isar, ID_AA64MMFR0, id_aa64mmfr0);
+}
+
+static int mshv_get_partition_regs(int vm_fd, hv_register_name *names,
+                             hv_register_value *values, size_t n_regs)
+{
+    int ret = 0;
+    size_t in_sz, names_sz, values_sz;
+    void *in_buffer = qemu_memalign(HV_HYP_PAGE_SIZE, HV_HYP_PAGE_SIZE);
+    void *out_buffer = qemu_memalign(HV_HYP_PAGE_SIZE, HV_HYP_PAGE_SIZE);
+    hv_input_get_vp_registers *in = in_buffer;
+
+    struct mshv_root_hvcall args = {0};
+
+    names_sz = n_regs * sizeof(hv_register_name);
+    in_sz = sizeof(hv_input_get_vp_registers) + names_sz;
+
+    memset(in, 0, HV_HYP_PAGE_SIZE);
+
+    in->vp_index = HV_ANY_VP;
+    in->input_vtl.target_vtl = HV_VTL_ALL;
+    in->input_vtl.use_target_vtl = 1;
+
+    for (int i = 0; i < n_regs; i++) {
+        in->names[i] = names[i];
+    }
+
+    values_sz = n_regs * sizeof(hv_register_value);
+
+    args.code = HVCALL_GET_VP_REGISTERS;
+    args.in_sz = in_sz;
+    args.in_ptr = (uintptr_t)in_buffer;
+    args.out_sz = values_sz;
+    args.out_ptr = (uintptr_t)out_buffer;
+    args.reps = n_regs;
+
+    ret = mshv_hvcall(vm_fd, &args);
+
+    if (ret == 0) {
+        memcpy(values, out_buffer, values_sz);
+    }
+
+    qemu_vfree(in_buffer);
+    qemu_vfree(out_buffer);
+
+    return ret;
+}
+
+static bool mshv_arm_get_host_cpu_features(ARMHostCPUFeatures *ahcf)
+{
+    int mshv_fd = mshv_state->fd;
+    int vm_fd = mshv_state->vm;
+    int i, ret;
+    bool success = true;
+    uint64_t pfr0, pfr1;
+    gchar *contents = NULL;
+
+    static const struct {
+        hv_register_name name;
+        int isar_idx;
+    } regs[] = {
+        { HV_ARM64_REGISTER_ID_AA64_PFR0_EL1,  ID_AA64PFR0_EL1_IDX },
+        { HV_ARM64_REGISTER_ID_AA64_PFR1_EL1,  ID_AA64PFR1_EL1_IDX },
+        { HV_ARM64_REGISTER_ID_AA64_ISAR0_EL1, ID_AA64ISAR0_EL1_IDX },
+        { HV_ARM64_REGISTER_ID_AA64_ISAR1_EL1, ID_AA64ISAR1_EL1_IDX },
+        { HV_ARM64_REGISTER_ID_AA64_ISAR2_EL1, ID_AA64ISAR2_EL1_IDX },
+        { HV_ARM64_REGISTER_ID_AA64_MMFR0_EL1, ID_AA64MMFR0_EL1_IDX },
+        { HV_ARM64_REGISTER_ID_AA64_MMFR1_EL1, ID_AA64MMFR1_EL1_IDX },
+        { HV_ARM64_REGISTER_ID_AA64_MMFR2_EL1, ID_AA64MMFR2_EL1_IDX },
+        { HV_ARM64_REGISTER_ID_AA64_DFR0_EL1,  ID_AA64DFR0_EL1_IDX },
+        { HV_ARM64_REGISTER_ID_AA64_DFR1_EL1,  ID_AA64DFR1_EL1_IDX },
+    };
+
+    size_t n_regs = ARRAY_SIZE(regs);
+    hv_register_name *reg_names = g_new(hv_register_name, n_regs);
+    hv_register_value *reg_values = g_new(hv_register_value, n_regs);
+
+    for (i = 0; i < n_regs; i++) {
+        reg_names[i] = regs[i].name;
+    }
+
+    ret = mshv_get_partition_regs(vm_fd, reg_names, reg_values, n_regs);
+
+    if (ret < 0) {
+        error_report("Failed to get host ID registers");
+        success = false;
+        goto out;
+    }
+
+    for (i = 0; i < n_regs; i++) {
+        ahcf->isar.idregs[regs[i].isar_idx] = reg_values[i].reg64;
+    }
+
+    /* Read MIDR_EL1 from sysfs */
+    if (g_file_get_contents(
+            "/sys/devices/system/cpu/cpu0/regs/identification/midr_el1",
+            &contents, NULL, NULL)) {
+        ahcf->midr = g_ascii_strtoull(contents, NULL, 0);
+    } else {
+        error_report("Failed to read MIDR_EL1 from sysfs");
+        success = false;
+        goto out;
+    }
+
+    ahcf->dtb_compatible = "arm,armv8";
+    ahcf->features = (1ULL << ARM_FEATURE_V8) |
+                     (1ULL << ARM_FEATURE_AARCH64) |
+                     (1ULL << ARM_FEATURE_PMU) |
+                     (1ULL << ARM_FEATURE_GENERIC_TIMER) |
+                     (1ULL << ARM_FEATURE_NEON);
+
+    clamp_id_aa64mmfr0_parange_to_ipa_size(mshv_fd, &ahcf->isar);
+
+    /*
+     * SVE (Scalable Vector Extension) and SME (Scalable Matrix Extension)
+     * require specific context switch logic in the accelerator.
+     * Mask them out for now to ensure stability.
+     */
+    /* Mask SVE in PFR0 */
+    pfr0 = GET_IDREG(&ahcf->isar, ID_AA64PFR0);
+    pfr0 &= ~R_ID_AA64PFR0_SVE_MASK;
+    SET_IDREG(&ahcf->isar, ID_AA64PFR0, pfr0);
+
+    /* Mask SME in PFR1 */
+    pfr1 = GET_IDREG(&ahcf->isar, ID_AA64PFR1);
+    pfr1 &= ~R_ID_AA64PFR1_SME_MASK;
+    SET_IDREG(&ahcf->isar, ID_AA64PFR1, pfr1);
+
+out:
+    g_free(contents);
+    g_free(reg_names);
+    g_free(reg_values);
+    return success;
+}
+
+void mshv_arm_set_cpu_features_from_host(ARMCPU *cpu)
+{
+    if (!arm_host_cpu_features.dtb_compatible) {
+        if (!mshv_enabled() ||
+            !mshv_arm_get_host_cpu_features(&arm_host_cpu_features)) {
+            /*
+             * We can't report this error yet, so flag that we need to
+             * in arm_cpu_realizefn().
+             */
+            cpu->host_cpu_probe_failed = true;
+            return;
+        }
+    }
+
+    cpu->dtb_compatible = arm_host_cpu_features.dtb_compatible;
+    cpu->isar = arm_host_cpu_features.isar;
+    cpu->env.features = arm_host_cpu_features.features;
+    cpu->midr = arm_host_cpu_features.midr;
+    cpu->reset_sctlr = arm_host_cpu_features.reset_sctlr;
+}

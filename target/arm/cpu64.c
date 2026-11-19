@@ -26,12 +26,14 @@
 #include "qemu/units.h"
 #include "system/kvm.h"
 #include "system/hvf.h"
+#include "system/mshv.h"
 #include "system/whpx.h"
 #include "system/hw_accel.h"
 #include "system/qtest.h"
 #include "system/tcg.h"
 #include "kvm_arm.h"
 #include "hvf_arm.h"
+#include "mshv_arm.h"
 #include "whpx_arm.h"
 #include "qapi/visitor.h"
 #include "hw/core/qdev-properties.h"
@@ -803,17 +805,21 @@ void aarch64_host_initfn(Object *obj)
     }
 #endif
 
+    if (mshv_enabled()) {
+        mshv_arm_set_cpu_features_from_host(cpu);
+    } else if (kvm_enabled()) {
 #if defined(CONFIG_KVM)
-    kvm_arm_set_cpreg_mig_tolerances(cpu);
-    kvm_arm_set_cpu_features_from_host(cpu);
-    aarch64_add_sve_properties(obj);
-#elif defined(CONFIG_HVF)
-    hvf_arm_set_cpu_features_from_host(cpu);
-#elif defined(CONFIG_WHPX)
-    whpx_arm_set_cpu_features_from_host(cpu);
-#else
-    g_assert_not_reached();
+        kvm_arm_set_cpreg_mig_tolerances(cpu);
 #endif
+        kvm_arm_set_cpu_features_from_host(cpu);
+        aarch64_add_sve_properties(obj);
+    } else if (hvf_enabled()) {
+        hvf_arm_set_cpu_features_from_host(cpu);
+    } else if (whpx_enabled()) {
+        whpx_arm_set_cpu_features_from_host(cpu);
+    } else {
+        g_assert_not_reached();
+    }
     if (arm_feature(&cpu->env, ARM_FEATURE_AARCH64)) {
         aarch64_add_pauth_properties(obj);
     }
@@ -822,7 +828,8 @@ void aarch64_host_initfn(Object *obj)
 static const ARMCPUInfo aarch64_cpus[] = {
     { .name = "cortex-a57",         .initfn = aarch64_a57_initfn },
     { .name = "cortex-a53",         .initfn = aarch64_a53_initfn },
-#if defined(CONFIG_KVM) || defined(CONFIG_HVF) || defined(CONFIG_WHPX)
+#if defined(CONFIG_KVM) || defined(CONFIG_HVF) || \
+    defined(CONFIG_WHPX) || defined(CONFIG_MSHV)
     { .name = "host",               .initfn = aarch64_host_initfn },
 #endif
 };

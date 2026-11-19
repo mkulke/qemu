@@ -48,6 +48,7 @@
 #include "system/kvm.h"
 #include "system/hvf.h"
 #include "system/whpx.h"
+#include "system/mshv.h"
 #include "system/qtest.h"
 #include "system/system.h"
 #include "hw/core/loader.h"
@@ -2710,7 +2711,7 @@ static void finalize_gic_version(VirtMachineState *vms)
         /* KVM w/o kernel irqchip can only deal with GICv2 */
         gics_supported |= VIRT_GIC_VERSION_2_MASK;
         accel_name = "KVM with kernel-irqchip=off";
-    } else if (whpx_enabled()) {
+    } else if (whpx_enabled() || mshv_enabled()) {
         gics_supported |= VIRT_GIC_VERSION_3_MASK;
     } else if (hvf_enabled()) {
         if (!hvf_irqchip_in_kernel()) {
@@ -2764,7 +2765,7 @@ static void finalize_msi_controller(VirtMachineState *vms)
     if (vms->msi_controller == VIRT_MSI_CTRL_AUTO) {
         if (vms->gic_version == VIRT_GIC_VERSION_2) {
             vms->msi_controller = VIRT_MSI_CTRL_GICV2M;
-        } else if (whpx_enabled()) {
+        } else if (whpx_enabled() || mshv_enabled()) {
             vms->msi_controller = VIRT_MSI_CTRL_GICV2M;
         }  else if (hvf_enabled() && hvf_irqchip_in_kernel()) {
             vms->msi_controller = VIRT_MSI_CTRL_GICV2M;
@@ -2792,6 +2793,10 @@ static void finalize_msi_controller(VirtMachineState *vms)
         }
         if (whpx_enabled()) {
             error_report("ITS not supported on WHPX.");
+            exit(1);
+        }
+        if (mshv_enabled()) {
+            error_report("ITS not supported on MSHV.");
             exit(1);
         }
         if (hvf_enabled() && hvf_irqchip_in_kernel()) {
@@ -4148,7 +4153,7 @@ static GPtrArray *virt_get_valid_cpu_types(const MachineState *ms)
     if (target_aarch64()) {
         g_ptr_array_add(vct, g_strdup(ARM_CPU_TYPE_NAME("cortex-a53")));
         g_ptr_array_add(vct, g_strdup(ARM_CPU_TYPE_NAME("cortex-a57")));
-        if (kvm_enabled() || hvf_enabled() || whpx_enabled()) {
+        if (kvm_enabled() || hvf_enabled() || whpx_enabled() || mshv_enabled()) {
             g_ptr_array_add(vct, g_strdup(ARM_CPU_TYPE_NAME("host")));
         }
     }

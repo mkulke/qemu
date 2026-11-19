@@ -357,103 +357,6 @@ static int translate_gva(const CPUState *cpu, uint64_t gva, uint64_t *gpa,
     return 0;
 }
 
-int mshv_set_generic_regs(const CPUState *cpu, const hv_register_assoc *assocs,
-                          size_t n_regs)
-{
-    int cpu_fd = mshv_vcpufd(cpu);
-    int vp_index = cpu->cpu_index;
-    size_t in_sz, assocs_sz;
-    hv_input_set_vp_registers *in = cpu->accel->hvcall_args.input_page;
-    struct mshv_root_hvcall args = {0};
-    int ret;
-
-    /* find out the size of the struct w/ a flexible array at the tail */
-    assocs_sz = n_regs * sizeof(hv_register_assoc);
-    in_sz = sizeof(hv_input_set_vp_registers) + assocs_sz;
-
-    /* fill the input struct */
-    memset(in, 0, sizeof(hv_input_set_vp_registers));
-    in->vp_index = vp_index;
-    memcpy(in->elements, assocs, assocs_sz);
-
-    /* create the hvcall envelope */
-    args.code = HVCALL_SET_VP_REGISTERS;
-    args.in_sz = in_sz;
-    args.in_ptr = (uint64_t) in;
-    args.reps = (uint16_t) n_regs;
-
-    /* perform the call */
-    ret = mshv_hvcall(cpu_fd, &args);
-    if (ret < 0) {
-        error_report("Failed to set registers");
-        return -1;
-    }
-
-    /* assert we set all registers */
-    if (args.reps != n_regs) {
-        error_report("Failed to set registers: expected %zu elements"
-                     ", got %u", n_regs, args.reps);
-        return -1;
-    }
-
-    return 0;
-}
-
-int mshv_get_generic_regs(CPUState *cpu, hv_register_assoc *assocs,
-                          size_t n_regs)
-{
-    int cpu_fd = mshv_vcpufd(cpu);
-    int vp_index = cpu->cpu_index;
-    hv_input_get_vp_registers *in = cpu->accel->hvcall_args.input_page;
-    hv_register_value *values = cpu->accel->hvcall_args.output_page;
-    size_t in_sz, names_sz, values_sz;
-    int i, ret;
-    struct mshv_root_hvcall args = {0};
-
-    /* find out the size of the struct w/ a flexible array at the tail */
-    names_sz = n_regs * sizeof(hv_register_name);
-    in_sz = sizeof(hv_input_get_vp_registers) + names_sz;
-
-    /* fill the input struct */
-    memset(in, 0, sizeof(hv_input_get_vp_registers));
-    in->vp_index = vp_index;
-    for (i = 0; i < n_regs; i++) {
-        in->names[i] = assocs[i].name;
-    }
-
-    /* determine size of value output buffer */
-    values_sz = n_regs * sizeof(union hv_register_value);
-
-    /* create the hvcall envelope */
-    args.code = HVCALL_GET_VP_REGISTERS;
-    args.in_sz = in_sz;
-    args.in_ptr = (uint64_t) in;
-    args.out_sz = values_sz;
-    args.out_ptr = (uint64_t) values;
-    args.reps = (uint16_t) n_regs;
-
-    /* perform the call */
-    ret = mshv_hvcall(cpu_fd, &args);
-    if (ret < 0) {
-        error_report("Failed to retrieve registers");
-        return -1;
-    }
-
-    /* assert we got all registers */
-    if (args.reps != n_regs) {
-        error_report("Failed to retrieve registers: expected %zu elements"
-                     ", got %u", n_regs, args.reps);
-        return -1;
-    }
-
-    /* copy values into assoc */
-    for (i = 0; i < n_regs; i++) {
-        assocs[i].value = values[i];
-    }
-
-    return 0;
-}
-
 static int set_standard_regs(const CPUState *cpu)
 {
     X86CPU *x86cpu = X86_CPU(cpu);
@@ -2040,29 +1943,6 @@ int mshv_run_vcpu(int vm_fd, CPUState *cpu, hv_message *msg, MshvVmExit *exit)
     return 0;
 }
 
-void mshv_remove_vcpu(int vm_fd, int cpu_fd)
-{
-    close(cpu_fd);
-}
-
-
-int mshv_create_vcpu(int vm_fd, uint8_t vp_index, int *cpu_fd)
-{
-    int ret;
-    struct mshv_create_vp vp_arg = {
-        .vp_index = vp_index,
-    };
-    ret = ioctl(vm_fd, MSHV_CREATE_VP, &vp_arg);
-    if (ret < 0) {
-        error_report("failed to create mshv vcpu: %s", strerror(errno));
-        return -1;
-    }
-
-    *cpu_fd = ret;
-
-    return 0;
-}
-
 static void read_segment_descriptor(CPUState *cpu,
                                     struct x86_segment_descriptor *desc,
                                     enum X86Seg seg_idx)
@@ -2121,7 +2001,6 @@ void mshv_arch_init_vcpu(CPUState *cpu)
     CPUX86State *env = &x86_cpu->env;
     AccelCPUState *state = cpu->accel;
     size_t page = HV_HYP_PAGE_SIZE, xsave_len;
-    void *mem = qemu_memalign(page, 2 * page);
     int ret;
     X86XSaveHeader *header;
 
@@ -2143,9 +2022,7 @@ void mshv_arch_init_vcpu(CPUState *cpu)
         env->regs_page = (struct hv_vp_register_page *) rp;
     }
 
-    state->hvcall_args.base = mem;
-    state->hvcall_args.input_page = mem;
-    state->hvcall_args.output_page = (uint8_t *)mem + page;
+    mshv_setup_hvcall_args(state);
 
     env->emu_mmio_buf = g_new(char, 4096);
 
@@ -2243,46 +2120,6 @@ uint32_t mshv_get_supported_cpuid(uint32_t func, uint32_t idx, int reg)
     }
     if (func == 0x07 && idx == 1 && reg == R_EDX) {
         ret &= ~CPUID_7_1_EDX_AMX_COMPLEX;
-    }
-
-    return ret;
-}
-
-/*
- * Default Microsoft Hypervisor behavior for unimplemented MSR is to send a
- * fault to the guest if it tries to access it. It is possible to override
- * this behavior with a more suitable option i.e., ignore writes from the guest
- * and return zero in attempt to read unimplemented.
- */
-static int set_unimplemented_msr_action(int vm_fd)
-{
-    struct hv_input_set_partition_property in = {0};
-    struct mshv_root_hvcall args = {0};
-
-    in.property_code  = HV_PARTITION_PROPERTY_UNIMPLEMENTED_MSR_ACTION;
-    in.property_value = HV_UNIMPLEMENTED_MSR_ACTION_IGNORE_WRITE_READ_ZERO;
-
-    args.code   = HVCALL_SET_PARTITION_PROPERTY;
-    args.in_sz  = sizeof(in);
-    args.in_ptr = (uint64_t)&in;
-
-    trace_mshv_hvcall_args("unimplemented_msr_action", args.code, args.in_sz);
-
-    int ret = mshv_hvcall(vm_fd, &args);
-    if (ret < 0) {
-        error_report("Failed to set unimplemented MSR action");
-        return -1;
-    }
-    return 0;
-}
-
-int mshv_arch_post_init_vm(int vm_fd)
-{
-    int ret;
-
-    ret = set_unimplemented_msr_action(vm_fd);
-    if (ret < 0) {
-        error_report("Failed to set unimplemented MSR action");
     }
 
     return ret;

@@ -1762,13 +1762,15 @@ static int handle_pio_non_str(CPUState *cpu,
         /* secure mode is set to false */
         ret = pio_write(port, conv.bytes, len, false);
         if (ret < 0) {
-            error_report("Failed to write to io port");
             return -1;
         }
     } else {
         uint8_t data[4] = { 0 };
         /* secure mode is set to false */
-        pio_read(info->port_number, data, len, false);
+        ret = pio_read(info->port_number, data, len, false);
+        if (ret < 0) {
+            return -1;
+        }
 
         /* Preserve high bits in EAX, but clear out high bits in RAX */
         val = *(uint32_t *)data;

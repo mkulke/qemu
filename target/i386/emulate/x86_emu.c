@@ -592,10 +592,14 @@ static bool exec_ins(CPUX86State *env, struct x86_decode *decode)
 
 static bool exec_outs_single(CPUX86State *env, struct x86_decode *decode)
 {
+    int ret;
     target_ulong addr = decode_linear_addr(env, decode, RSI(env), R_DS);
 
-    x86_read_mem(env_cpu(env), env->emu_mmio_buf, addr,
+    ret = x86_read_mem(env_cpu(env), env->emu_mmio_buf, addr,
                        decode->operand_size);
+    if (ret != 0) {
+        return 1;
+    }
     emul_ops->handle_io(env_cpu(env), DX(env), env->emu_mmio_buf, 1,
                         decode->operand_size, 1);
 
@@ -1409,8 +1413,7 @@ bool exec_instruction(CPUX86State *env, struct x86_decode *ins)
         return true;
     }
 
-    _cmd_handler[ins->cmd].handler(env, ins);
-    return true;
+    return !_cmd_handler[ins->cmd].handler(env, ins);
 }
 
 void init_emu(const struct x86_emul_ops *o)
